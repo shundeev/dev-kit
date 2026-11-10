@@ -3,17 +3,13 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: finish_issue_flow.sh [options]          # open the PR
-       finish_issue_flow.sh --merge [options]  # merge it after the owner approved
+Usage: finish_issue_flow.sh [options]
 
 Run from the issue branch (<number>-<slug>, made by start_issue_flow.sh).
 
-Default mode: commit what is staged (or the --add paths), push, open the pull request,
-set the board Status to "In review". Never merges.
-
---merge: squash-merge the branch's pull request, confirm it is MERGED, set Status to
-"Done", delete the branch locally and on GitHub, switch back to the base branch.
-A pull request that did not merge keeps its branch.
+Commits what is staged (or the --add paths), pushes, opens the pull request and sets the
+board Status to "In review". Never merges: merging is merge_issue_flow.sh, a separate
+command so that a permission rule can make it ask the owner.
 
 Subjects follow Conventional Commits with the issue in the scope:
   feat(GH-12): add landing page
@@ -34,7 +30,6 @@ Options:
   --base <branch>               Default: GHWF_DEFAULT_BASE or main
   --status-field <name>         Default: GHWF_STATUS_FIELD or Status
   --review-status <option>      Default: In review
-  --done-status <option>        Default: Done
   --help                        Show this help
 USAGE
 }
@@ -73,9 +68,7 @@ project_number="${GHWF_PROJECT_NUMBER:-}"
 base_branch="${GHWF_DEFAULT_BASE:-main}"
 status_field="${GHWF_STATUS_FIELD:-Status}"
 review_status="${GHWF_REVIEW_STATUS:-In review}"
-done_status="${GHWF_DONE_STATUS:-Done}"
 
-mode="open"
 issue_number=""
 commit_type="feat"
 summary=""
@@ -86,7 +79,6 @@ add_paths=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --merge) mode="merge"; shift ;;
     --issue) issue_number="$2"; shift 2 ;;
     --type) commit_type="$2"; shift 2 ;;
     --summary) summary="$2"; shift 2 ;;
@@ -100,7 +92,6 @@ while [[ $# -gt 0 ]]; do
     --base) base_branch="$2"; shift 2 ;;
     --status-field) status_field="$2"; shift 2 ;;
     --review-status) review_status="$2"; shift 2 ;;
-    --done-status) done_status="$2"; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) die "Unknown argument: $1" ;;
   esac
@@ -123,33 +114,6 @@ if [[ -z "$issue_number" && "$branch_name" =~ ^([0-9]+)- ]]; then
 fi
 [[ -n "$issue_number" ]] || die "No issue number: the branch is not <number>-<slug> and --issue was not given"
 
-# ---------------------------------------------------------------- merge
-if [[ "$mode" == "merge" ]]; then
-  pr_url="$(gh pr view "$branch_name" -R "$repo" --json url --jq '.url' 2>/dev/null || true)"
-  [[ -n "$pr_url" ]] || die "No pull request for branch '$branch_name'"
-
-  gh pr merge "$pr_url" --squash
-
-  # Only a confirmed merge may delete the branch: cleaning up after a failed merge closes
-  # the pull request with the work still in it.
-  pr_state="$(gh pr view "$pr_url" --json state --jq '.state')"
-  [[ "$pr_state" == "MERGED" ]] || die "Pull request is $pr_state, not MERGED; branch '$branch_name' kept"
-
-  set_status "$done_status"
-
-  git switch "$base_branch"
-  git pull --ff-only
-  git branch -D "$branch_name"
-  if git ls-remote --exit-code --heads origin "$branch_name" >/dev/null 2>&1; then
-    git push origin --delete "$branch_name"
-  fi
-
-  echo "Merged: $pr_url"
-  echo "Status: $done_status"
-  exit 0
-fi
-
-# ---------------------------------------------------------------- open
 issue_title="$(gh issue view "$issue_number" -R "$repo" --json title --jq '.title')"
 [[ -n "$summary" ]] || summary="$issue_title"
 subject="$commit_type(GH-$issue_number): $summary"

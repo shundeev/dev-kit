@@ -16,7 +16,8 @@ These rules apply to every agent working in this repository (Claude Code, Codex,
 - Priority is Urgent / High / Medium / Low. Judge it; never leave it empty.
 - Branches come from `gh issue develop` (the start script), named `<number>-<slug>`.
   Never `git checkout -b` / `git switch -c`.
-- Never push to `main`; it accepts pull requests only. Merge only when the owner says so.
+- Never push to `main`; it accepts pull requests only. Merge only when the owner says so
+  (`merge_issue_flow.sh` and `gh pr merge` ask for confirmation).
 - Not part of the flow: answering a question, reading or measuring, continuing an issue that is
   already active, or the owner saying to skip GitHub.
 - A refusal from a hook or a permission rule stops the work and goes to the owner: what you

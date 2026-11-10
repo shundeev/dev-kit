@@ -83,6 +83,7 @@
   [a b]
   (cond (and (map? a) (map? b)) (merge-with deep-merge a b)
         (and (sequential? a) (sequential? b)) (vec (distinct (concat a b)))
+        (nil? b) a
         :else b))
 
 
@@ -91,6 +92,11 @@
   (let [base (-> (slurp (str (fs/path kit-dir "claude" "settings.base.json")))
                  (str/replace "{{kit}}" mount)
                  (json/parse-string))
+        clj  (when (clojure? cfg)
+               {"permissions" {"allow" ["Bash(clj-kondo *)" "Bash(zprint *)"
+                                        (str "Bash(" mount "/clojure/zprint_check.sh *)")
+                                        (str "Bash(bb " mount "/clojure/single_caller.clj *)")
+                                        (str "Bash(bb " mount "/clojure/field_of_same_map.clj *)")]}})
         env  {"env" (into (sorted-map)
                           (remove (comp nil? val))
                           {"GHWF_OWNER"          (get-in cfg [:board :owner])
@@ -98,7 +104,7 @@
                            "GHWF_REPO"           (:repo cfg)
                            "GHWF_DEFAULT_BASE"   (:base cfg)
                            "GHWF_SHOWCASE"       (:showcase cfg)})}]
-    (str (json/generate-string (deep-merge (deep-merge base env)
+    (str (json/generate-string (deep-merge (deep-merge (deep-merge base clj) env)
                                            (json/parse-string (json/generate-string (:claude-settings cfg {}))))
                                {:pretty {:indentation 2
                                          :indent-arrays? true

@@ -62,6 +62,29 @@ grep -q "dev-kit:begin" AGENTS.md && grep -q "# This project" AGENTS.md && ok "A
 [ ! -e CLAUDE.md ] && ok "no CLAUDE.md" || bad "CLAUDE.md exists"
 [ ! -e README.md ] && ok "README not scaffolded without --scaffold" || bad "README scaffolded"
 
+echo "- permissions"
+perm() { jq -r --arg list "$1" '.permissions[$list][]' .claude/settings.json; }
+has() { perm "$1" | grep -qxF -- "$2"; }
+for rule in "Bash(git *)" "Bash(gh *)" "Bash(bb *)"; do
+  has allow "$rule" && bad "no blanket allow: $rule" || ok "no blanket allow: $rule"
+done
+for rule in "Bash(gh pr merge *)" "Bash(bash .claude/skills/gh-project-workflow/scripts/merge_issue_flow.sh *)" \
+            "Bash(gh api *)" "Bash(git reset --hard *)" "Bash(git clean *)" "Bash(git branch -D *)"; do
+  has ask "$rule" && ok "asks: $rule" || bad "asks: $rule"
+done
+for rule in "Bash(git push --force *)" "Bash(git push * --force *)" "Bash(git push -f *)" "Bash(gh repo delete *)"; do
+  has deny "$rule" && ok "denies: $rule" || bad "denies: $rule"
+done
+has allow "Bash(.shared/bin/kit *)" && ok "kit path substituted" || bad "kit path substituted"
+jq -e '.hooks.PreToolUse and .hooks.SessionStart' .claude/settings.json >/dev/null && ok "hooks survive the settings merge" || bad "hooks lost in the settings merge"
+perm allow | grep -q '{{kit}}' && bad "unsubstituted {{kit}}" || ok "no {{kit}} placeholder left"
+has allow "Bash(clj-kondo *)" && bad "clojure allows without the module" || ok "no clojure allows without the module"
+own="$KIT/.claude/settings.json"; base="$KIT/claude/settings.base.json"
+for list in ask deny; do
+  [ "$(jq -c ".permissions.$list" "$own")" = "$(jq -c ".permissions.$list" "$base")" ] \
+    && ok "dev-kit's own $list rules match the base" || bad "dev-kit's own $list rules drifted from the base"
+done
+
 echo "- idempotence"
 expect_exit 0 "second init succeeds" bb $kit init
 contains "second init changes nothing" "nothing to change" "$LAST"
@@ -100,6 +123,7 @@ expect_exit 0 "init adds the clojure setup" bb $kit init
 bb -e '(let [m (clojure.edn/read-string (slurp ".clj-kondo/config.edn"))] (assert (= ["../.shared/clojure/clj-kondo"] (:config-paths m))) (assert (:lint-as m)))' \
   && ok "clj-kondo config gains config-paths and keeps its own keys" || bad "clj-kondo config" "$(cat .clj-kondo/config.edn)"
 [ -f .claude/agents/smell-reviewer.md ] && ok "smell-reviewer added" || bad "smell-reviewer"
+jq -e '.permissions.allow | index("Bash(clj-kondo *)")' .claude/settings.json >/dev/null && ok "clojure module allows clj-kondo" || bad "clojure allows"
 grep -q "## Clojure design" AGENTS.md && ok "Clojure rules in the block" || bad "clojure rules"
 
 if command -v zprint >/dev/null 2>&1; then
@@ -143,6 +167,11 @@ expect_exit 1 "start refuses an issue without priority" bash .claude/skills/gh-p
 contains "start names the scale" "Urgent|High|Medium|Low" "$LAST"
 expect_exit 1 "start refuses an off-scale priority" bash .claude/skills/gh-project-workflow/scripts/start_issue_flow.sh --title x --priority Critical
 expect_exit 1 "finish refuses a non-conventional type" bash .claude/skills/gh-project-workflow/scripts/finish_issue_flow.sh --type update
+expect_exit 1 "finish has no merge mode" bash .claude/skills/gh-project-workflow/scripts/finish_issue_flow.sh --merge
+contains "finish rejects --merge" "Unknown argument: --merge" "$LAST"
+expect_exit 1 "merge refuses to run on main" bash .claude/skills/gh-project-workflow/scripts/merge_issue_flow.sh
+contains "merge explains" "Run from the issue branch" "$LAST"
+expect_exit 0 "merge has help" bash .claude/skills/gh-project-workflow/scripts/merge_issue_flow.sh --help
 expect_exit 1 "finish refuses to run on main" bash .claude/skills/gh-project-workflow/scripts/finish_issue_flow.sh
 contains "finish explains" "On the base branch" "$LAST"
 
