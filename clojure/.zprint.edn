@@ -1,0 +1,173 @@
+;; Shared zprint configuration (dev-kit). Projects link it as .zprint.edn.
+;; Rationale: the style guide of the project this came from (Sprecha, docs/process/code-style.md).
+;;
+;; Uses :respect-nl style to preserve intentional line breaks in code,
+;; but allows map key sorting.
+
+
+{;; Base community style with respect for existing newlines
+ :style   [:community :respect-nl]
+
+ ;; Line width
+ :width   120
+
+ ;; Two blank lines between top-level forms
+ ;; (3 newlines = 2 blank lines)
+ :parse   {:interpose "\n\n\n"}
+
+ ;; Map formatting
+ :map     {:comma?        false      ; No commas in maps (Clojure style)
+           ;; respect-nl? and :sort? are mutually exclusive
+           :respect-nl?   true       ; Disable respect-nl to allow sorting
+           ;; :sort? true          ; Sort keys alphabetically
+           :sort-in-code? false      ; Do not sort maps in code (e.g. destructuring)
+           :key-order     [:id :_id] ; Keep :id and :_id first
+           :justify?      true       ; Align map values
+           :justify       {:max-variance 15}} ; Disable alignment if key length varies >15
+
+;; Let binding formatting
+ :binding {:justify? true ; Align binding values
+           :justify  {:max-variance 15}} ; Disable if name length varies >15
+
+ ;; Pair formatting (cond, case, etc.)
+ :pair    {:justify? true
+           :justify  {:max-variance 15}}
+
+ ;; Reader conditionals - proper indentation when multiline
+ :reader-cond {:indent 0}
+
+ :comment  {:count? nil :wrap? nil}
+
+ ;; Hiccup — a vector led by a tag: a keyword with a class or an id (`[:div.card …]`), or a bare HTML or
+ ;; SVG element (`[:span …]`). Key paths, Malli schemas and `[:action/save …]` are no hiccup.
+ ;; Attributes and children, or written on several lines: the tag, the attributes and each child on a
+ ;; line of their own, under the tag. So does a lone child that is a vector or a form. Otherwise one line
+ ;; while it fits. The attribute map: a key per line.
+ ;; A `;; zprint: as written` comment right before a form leaves the vectors in it as written.
+ ;; docs/process/code-style.md, "Hiccup Layout".
+ :vector  {:option-fn
+           (fn [options _ elements]
+             (let [tag         (first elements)
+                   ;; A tag with a class or an id, or a bare HTML or SVG element: not a key path, not Malli.
+                   hiccup?     (and (keyword? tag)
+                                    (nil? (namespace tag))
+                                    (or (boolean (re-find (re-pattern "[.#]") (name tag)))
+                                        (contains? #{"a" "abbr" "article" "aside" "audio" "b" "body" "br" "button"
+                                                     "canvas" "circle" "code" "dd" "details" "dialog" "div" "dl" "dt"
+                                                     "ellipse" "em" "fieldset" "figure" "footer" "form" "g" "h1" "h2"
+                                                     "h3" "h4" "h5" "h6" "head" "header" "hr" "html" "i" "img" "input"
+                                                     "label" "legend" "li" "line" "link" "main" "meta" "nav" "ol"
+                                                     "option" "p" "path" "polygon" "polyline" "pre" "rect" "script"
+                                                     "section" "select" "small" "span" "strong" "style" "sub" "summary"
+                                                     "sup" "svg" "table" "tbody" "td" "textarea" "th" "thead" "title"
+                                                     "tr" "u" "ul" "use" "video"}
+                                                   (name tag))))
+                   attributes? (map? (second elements))
+                   ;; The marker before this vector or before any form around it.
+                   as-written? (loop [path (second (:zloc options))]
+                                 (cond
+                                   (not (map? path)) false
+                                   (= ";; zprint: as written"
+                                      (some-> (remove (fn [node] (clojure.string/blank? (str node))) (:l path))
+                                              last
+                                              str
+                                              clojure.string/trim))
+                                   true
+                                   :else (recur (:ppath path))))]
+               ;; What it returns holds for the nested vectors too: a vector that is no hiccup clears it.
+               (cond
+                 as-written?
+                 {:vector {:option-fn nil :fn-format nil :respect-nl? true}
+                  :map    {:force-nl? false}}
+
+                 hiccup?
+                 {:vector    {:fn-format (cond
+                                           (and attributes? (> (count elements) 2)) :flow
+                                           attributes? :none
+                                           (and (= 2 (count elements))
+                                                (or (vector? (second elements)) (seq? (second elements))))
+                                           :flow
+                                           (clojure.string/includes? (str (some-> (:zloc options) first)) "\n") :flow
+                                           :else :none)
+                              :respect-nl? false}
+                  :vector-fn {:hang? false :indent 1 :indent-arg 1 :respect-bl? true}
+                  ;; The attribute map, a key per line; the maps nested deeper as they were.
+                  :map        {:force-nl? false}
+                  :next-inner {:map {:force-nl? true}
+                               :next-inner-restore [[:map :force-nl?]]}}
+
+                 :else
+                 {:vector {:fn-format nil :respect-nl? true}
+                  :map    {:force-nl? false}})))}
+
+ ;; `if` and `if-not` — the test stays on the `if` line. A branch that is no plain value (a vector, a map, a
+ ;; call): each branch on a line of its own. Plain values — a string, a number, a keyword, a symbol, nil, a
+ ;; boolean, `@x`, an empty collection — stay on one line while they fit. `if-let` and `if-some` take
+ ;; :binding, which puts each branch on a line of its own anyway. A `;; zprint: as written` comment right
+ ;; before a form leaves it as written. docs/process/code-style.md, "If Layout".
+ :list    {:option-fn
+           (fn [options _ elements]
+             (when (and (contains? #{'if 'if-not} (first elements))
+                        (not (every? (fn [branch]
+                                       (or (not (coll? branch))
+                                           (empty? branch)
+                                           (and (seq? branch)
+                                                (= 'clojure.core/deref (first branch))
+                                                (not (coll? (second branch))))))
+                                     (drop 2 elements)))
+                        ;; The marker before this form or before any form around it.
+                        (not (loop [path (second (:zloc options))]
+                               (cond
+                                 (not (map? path)) false
+                                 (= ";; zprint: as written"
+                                    (some-> (remove (fn [node] (clojure.string/blank? (str node))) (:l path))
+                                            last
+                                            str
+                                            clojure.string/trim))
+                                 true
+                                 :else (recur (:ppath path))))))
+               {:fn-style :arg1-force-nl-body}))}
+
+ ;; Function-specific formatting
+ :fn-map  {;; Threading macros - keep short forms on one line
+           "->"            :none
+           "->>"           :none
+           ":import"       [:none {:list {:indent 1}}]
+           ":require"      [:none {:list {:indent 1}}]
+           "async"         :arg1-body
+           "async-testing" :arg1-body
+           "extend-protocol" :arg1-body
+           ;; Macros whose first argument is a binding vector indent like `let`
+           "jdbc/on-connection" :binding
+           "jdbc/on-connection+options" :binding
+           "jdbc/with-transaction" :binding
+           ;; Query fns: the connection stays on the first line, SQL indents by two
+           "jdbc/execute!" :arg1-body
+           "jdbc/execute-one!" :arg1-body
+           "on-connection" :binding
+           "p/catch"       :none-body
+           "p/do"          :none-body
+           "p/finally"     :none-body
+           "p/let"         :binding
+           "reify"         [:arg1-body
+                            {:next-inner
+                             {:fn-map {:default :arg1-body}
+                              :next-inner-restore [[:fn-map :default]]}}]
+           ;; Methods as in reify: the zprint default re-inserts the :interpose
+           ;; blank lines into each signature on every pass
+           "defprotocol"   [:arg1-body
+                            {:next-inner
+                             {:fn-map {:default :arg1-body}
+                              :next-inner-restore [[:fn-map :default]]}}]
+           "some->"        :none
+           "some->>"       :none
+           "with-couch-op" :arg1-body
+           "with-test-db"  :none-body
+           "with-mocked-env"           :arg1-body
+           ;; nexus.registry — first arg (keyword) stays on same line, handler indented 2
+           "nxr/register-action!"      :arg1-body
+           "nxr/register-effect!"      :arg1-body
+           "nxr/register-placeholder!" :arg1-body
+           "nxr/register-interceptor!" :arg1-body
+           ;; shadow.cljs.modern — the class name stays on the first line
+           "modern/defclass"           :arg1-body}}

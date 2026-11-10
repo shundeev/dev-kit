@@ -1,0 +1,45 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git *)",
+      "Bash(gh *)",
+      "Bash(bb *)",
+      "Bash(jq *)",
+      "Bash(bash .claude/skills/gh-project-workflow/scripts/*.sh *)",
+      "Bash(test/selftest.sh)",
+      "Bash(shellcheck *)",
+      "Bash(clj-kondo *)"
+    ],
+    "ask": [
+      "Bash(git checkout -b *)",
+      "Bash(git switch -c *)"
+    ],
+    "deny": [
+      "Bash(gh repo delete *)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/claude/hooks/delivery-guard.sh\"",
+            "timeout": 10,
+            "statusMessage": "Checking delivery flow..."
+          }
+        ]
+      }
+    ]
+  },
+  "env": {
+    "GHWF_DEFAULT_BASE": "main",
+    "GHWF_OWNER": "u473t8",
+    "GHWF_PROJECT_NUMBER": "3",
+    "GHWF_REPO": "u473t8/dev-kit",
+    "GHWF_SHOWCASE": "Process"
+  }
+}

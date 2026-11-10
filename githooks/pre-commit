@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Installed by `kit init` through `git config core.hooksPath .shared/githooks`.
+# Refuses a commit whose staged Clojure files zprint would reformat — the same check CI
+# runs. Projects without the clojure module have no .zprint.edn, and nothing is checked.
+# `git commit --no-verify` skips it.
+set -euo pipefail
+root="$(git rev-parse --show-toplevel)"
+[ -e "$root/.zprint.edn" ] || exit 0
+exec "$(dirname "${BASH_SOURCE[0]}")/../clojure/zprint_check.sh" --staged

@@ -1,0 +1,31 @@
+name: Selftest
+
+# No path filter: `selftest` is the required check of the main ruleset, so it must always report.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  selftest:
+    name: selftest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: DeLaGuardo/setup-clojure@13.7.0
+        with:
+          bb: 1.13.229
+          clj-kondo: 2026.10.26
+          zprint: 1.3.0
+
+      - name: Lint
+        run: |
+          shellcheck -S warning claude/hooks/*.sh claude/skills/gh-project-workflow/scripts/*.sh clojure/zprint_check.sh githooks/pre-commit test/selftest.sh
+          clj-kondo --fail-level error --lint bin/kit
+
+      - name: Selftest
+        run: test/selftest.sh

@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# End-to-end check of dev-kit on a throwaway project: init, doctor, repairs, modules,
+# the git and Claude Code hooks, and the offline guards of the flow scripts.
+#
+#   test/selftest.sh            uses the working tree of this dev-kit checkout
+#
+# Needs: git, bb, jq; zprint for the pre-commit case (skipped when absent).
+set -uo pipefail
+
+KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+pass=0
+fail=0
+ok()   { pass=$((pass + 1)); echo "  ok    $1"; }
+bad()  { fail=$((fail + 1)); echo "  FAIL  $1"; [ -n "${2:-}" ] && echo "$2" | sed 's/^/        /'; }
+expect_exit() { # expect_exit <code> <name> <cmd...>
+  local want="$1" name="$2"; shift 2
+  local out code
+  out="$("$@" 2>&1)"; code=$?
+  if [ "$code" -eq "$want" ]; then ok "$name"; else bad "$name (exit $code, want $want)" "$out"; fi
+  LAST="$out"
+}
+contains() { # contains <name> <needle> <haystack>
+  if grep -qF -- "$2" <<<"$3"; then ok "$1"; else bad "$1" "missing: $2"; fi
+}
+
+export GIT_AUTHOR_NAME=selftest GIT_AUTHOR_EMAIL=selftest@example.invalid
+export GIT_COMMITTER_NAME=selftest GIT_COMMITTER_EMAIL=selftest@example.invalid
+
+echo "dev-kit selftest ($KIT)"
+
+# A project with dev-kit mounted at .shared. The submodule is cloned from this checkout's
+# HEAD, then the working tree is laid over it so uncommitted changes are what gets tested.
+P="$WORK/project"
+git init -q -b main "$P"
+cd "$P" || exit 1
+git remote add origin https://github.com/u473t8/kit-selftest.git
+git -c protocol.file.allow=always submodule add -q "$KIT" .shared
+(cd "$KIT" && tar --exclude=.git -cf - .) | (cd .shared && tar -xf -)
+git commit -qm "chore: add dev-kit"
+kit=".shared/bin/kit"
+
+echo "- empty project"
+expect_exit 1 "doctor fails without kit.edn" bb $kit doctor
+contains "doctor names the missing kit.edn" "kit.edn is missing" "$LAST"
+
+echo "- init"
+expect_exit 0 "init succeeds" bb $kit init --showcase Site
+contains "init reports what it wrote" "wrote .claude/settings.json" "$LAST"
+grep -q ':repo     "u473t8/kit-selftest"' kit.edn && ok "kit.edn infers repo from origin" || bad "kit.edn repo" "$(cat kit.edn)"
+[ "$(jq -r .env.GHWF_REPO .claude/settings.json)" = "u473t8/kit-selftest" ] && ok "settings env carries the repo" || bad "settings env"
+[ "$(jq -r .env.GHWF_PROJECT_NUMBER .claude/settings.json)" = "3" ] && ok "settings env carries the board from defaults" || bad "board number"
+[ -f .claude/skills/repo-task-delivery/SKILL.md ] && ok "skill readable through its link" || bad "skill link"
+grep -q "Managed by dev-kit" .claude/agents/ops.md && ok "agent copied with the managed marker" || bad "agent copy"
+head -1 .claude/agents/ops.md | grep -qx -- '---' && ok "agent copy keeps frontmatter first" || bad "agent frontmatter"
+[ -f LICENSE ] && grep -q "MIT License" LICENSE && ok "LICENSE scaffolded" || bad "LICENSE"
+[ -f .github/workflows/ci.yml ] && ok "CI workflow written" || bad "ci.yml"
+[ "$(git config core.hooksPath)" = ".shared/githooks" ] && ok "hooksPath set" || bad "hooksPath"
+grep -q "dev-kit:begin" AGENTS.md && grep -q "# This project" AGENTS.md && ok "AGENTS.md has the block and the project part" || bad "AGENTS.md"
+[ ! -e CLAUDE.md ] && ok "no CLAUDE.md" || bad "CLAUDE.md exists"
+[ ! -e README.md ] && ok "README not scaffolded without --scaffold" || bad "README scaffolded"
+
+echo "- idempotence"
+expect_exit 0 "second init succeeds" bb $kit init
+contains "second init changes nothing" "nothing to change" "$LAST"
+expect_exit 0 "doctor passes" bb $kit doctor
+touch .shared/stray-file
+expect_exit 0 "local edits in dev-kit only warn" bb $kit doctor
+contains "doctor warns about local edits in .shared" "WARN  .shared has local changes" "$LAST"
+rm .shared/stray-file
+
+echo "- repairs"
+echo '{}' > .claude/settings.json
+expect_exit 1 "doctor catches an edited settings.json" bb $kit doctor
+contains "doctor names the file" ".claude/settings.json: differs" "$LAST"
+printf '\nProject note that must survive.\n' >> AGENTS.md
+sed -i 's/^# Working rules$/# Working rules (edited by hand)/' AGENTS.md
+expect_exit 1 "doctor catches an edited dev-kit block" bb $kit doctor
+rm .claude/skills/adr
+expect_exit 0 "init repairs everything" bb $kit init
+grep -q "Project note that must survive." AGENTS.md && ok "project text outside the block survives" || bad "project text lost"
+grep -q "^# Working rules$" AGENTS.md && ok "block restored" || bad "block not restored"
+[ -L .claude/skills/adr ] && ok "skill link restored" || bad "skill link"
+git config --unset core.hooksPath
+expect_exit 1 "doctor catches a missing hooksPath" bb $kit doctor
+expect_exit 0 "doctor --ci skips local git config" bb $kit doctor --ci
+bb $kit init >/dev/null
+
+echo "- clojure module"
+sed -i 's/:modules  #{}/:modules  #{:clojure}/' kit.edn
+expect_exit 0 "modules reports clojure" bb $kit modules
+contains "modules output" "clojure=true" "$LAST"
+expect_exit 1 "doctor wants the clojure setup" bb $kit doctor --ci
+mkdir -p .clj-kondo
+printf '{:lint-as {foo/defthing clojure.core/def}\n :linters {:unused-binding {:level :off}}}\n' > .clj-kondo/config.edn
+expect_exit 0 "init adds the clojure setup" bb $kit init
+[ -L .zprint.edn ] && [ -f .zprint.edn ] && ok ".zprint.edn linked" || bad ".zprint.edn"
+bb -e '(let [m (clojure.edn/read-string (slurp ".clj-kondo/config.edn"))] (assert (= ["../.shared/clojure/clj-kondo"] (:config-paths m))) (assert (:lint-as m)))' \
+  && ok "clj-kondo config gains config-paths and keeps its own keys" || bad "clj-kondo config" "$(cat .clj-kondo/config.edn)"
+[ -f .claude/agents/smell-reviewer.md ] && ok "smell-reviewer added" || bad "smell-reviewer"
+grep -q "## Clojure design" AGENTS.md && ok "Clojure rules in the block" || bad "clojure rules"
+
+if command -v zprint >/dev/null 2>&1; then
+  echo "- pre-commit"
+  mkdir -p src
+  printf '(ns demo)\n(defn f [x]     (inc x))\n' > src/demo.clj
+  git add -A
+  expect_exit 1 "pre-commit refuses unformatted Clojure" git commit -qm "feat: demo"
+  .shared/clojure/zprint_check.sh --write >/dev/null 2>&1
+  git add -A
+  expect_exit 0 "pre-commit accepts formatted Clojure" git commit -qm "feat: demo"
+else
+  echo "- pre-commit: skipped (zprint not installed)"
+fi
+
+sed -i 's/:modules  #{:clojure}/:modules  #{}/' kit.edn
+expect_exit 0 "init with the module switched off" bb $kit init
+[ ! -e .zprint.edn ] && [ ! -e .claude/agents/smell-reviewer.md ] && ok "module files removed as stale" || bad "stale files kept"
+contains "init reports removals" "removed, no longer managed" "$LAST"
+
+echo "- SessionStart hook"
+out="$(bash .shared/claude/hooks/session-start.sh)"
+[ -z "$(grep -v 'local changes' <<<"$out" | grep FAIL)" ] && ok "silent about FAIL when set up" || bad "session-start noisy" "$out"
+rm .claude/agents/ops.md
+out="$(bash .shared/claude/hooks/session-start.sh)"
+contains "reports a broken setup to the agent" ".claude/agents/ops.md: missing" "$out"
+bb $kit init >/dev/null
+
+echo "- delivery guard"
+guard() { jq -nc --arg c "$1" '{tool_input:{command:$c}}' | bash .shared/claude/hooks/delivery-guard.sh; }
+contains "denies raw gh issue create" '"permissionDecision":"deny"' "$(guard 'gh issue create --title x')"
+contains "denies gh pr create from main" '"permissionDecision":"deny"' "$(guard 'gh pr create --fill')"
+[ -z "$(guard 'gh pr create --head 12-landing --fill')" ] && ok "allows gh pr create from an issue branch" || bad "issue branch denied"
+[ -z "$(guard 'gh issue create --help')" ] && ok "allows --help" || bad "--help denied"
+contains "asks on DELIVERY_GUARD=off" '"permissionDecision":"ask"' "$(guard 'DELIVERY_GUARD=off gh issue create -t x')"
+[ -z "$(guard 'git status')" ] && ok "ignores unrelated commands" || bad "unrelated command judged"
+
+echo "- flow scripts, offline guards"
+export GHWF_OWNER=u473t8 GHWF_PROJECT_NUMBER=3 GHWF_REPO=u473t8/kit-selftest
+expect_exit 1 "start refuses an issue without priority" bash .claude/skills/gh-project-workflow/scripts/start_issue_flow.sh --title x
+contains "start names the scale" "Urgent|High|Medium|Low" "$LAST"
+expect_exit 1 "start refuses an off-scale priority" bash .claude/skills/gh-project-workflow/scripts/start_issue_flow.sh --title x --priority Critical
+expect_exit 1 "finish refuses a non-conventional type" bash .claude/skills/gh-project-workflow/scripts/finish_issue_flow.sh --type update
+expect_exit 1 "finish refuses to run on main" bash .claude/skills/gh-project-workflow/scripts/finish_issue_flow.sh
+contains "finish explains" "On the base branch" "$LAST"
+
+echo
+echo "passed $pass, failed $fail"
+[ "$fail" -eq 0 ]

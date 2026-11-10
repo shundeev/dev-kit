@@ -1,0 +1,3 @@
+;; Defaults under every project's kit.edn. A project overrides any key in its own kit.edn.
+{:board {:owner "u473t8" :number 3} ; github.com/users/u473t8/projects/3 "Portfolio"
+ :base  "main"}

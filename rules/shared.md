@@ -1,0 +1,68 @@
+# Working rules
+
+These rules apply to every agent working in this repository (Claude Code, Codex, OpenCode).
+
+- When reporting verification, say exactly what was proven and what was not.
+- Project structure and how to run things: README.md.
+
+## Delivery
+
+- Work that is likely to end in a committed edit runs the full flow: invoke the
+  `repo-task-delivery` skill and let it drive.
+  The flow: issue on the board → branch from that issue → implement → verify → PR → owner review → merge → Done.
+- Issues are filed by `bash .claude/skills/gh-project-workflow/scripts/start_issue_flow.sh`,
+  never by hand: it puts the issue on the board with Status, Priority and Showcase and creates
+  its branch. An issue that is not on the board does not exist.
+- Priority is Urgent / High / Medium / Low. Judge it; never leave it empty.
+- Branches come from `gh issue develop` (the start script), named `<number>-<slug>`.
+  Never `git checkout -b` / `git switch -c`.
+- Never push to `main`; it accepts pull requests only. Merge only when the owner says so.
+- Not part of the flow: answering a question, reading or measuring, continuing an issue that is
+  already active, or the owner saying to skip GitHub.
+- A refusal from a hook or a permission rule stops the work and goes to the owner: what you
+  were doing, what was refused, the refusal verbatim. Do not look for a way around it.
+  If the owner asks for a blocked command outright, prefix it with `DELIVERY_GUARD=off`;
+  never do that on your own judgement.
+
+## Decisions
+
+- A decision about what a person does or sees cannot be settled by the code. Name it before
+  the first artifact and ask the owner in one line with two named options. Until answered, it
+  is a line in the issue.
+- A choice between alternatives that are expensive to reverse is recorded as an ADR in the
+  same pull request (`adr` skill). Every PR body carries an `ADR:` line.
+- New screen or visual redesign: invoke `frontend-design:frontend-design` before building it.
+
+## Issues
+
+- The repository is public. Never put secrets or the state of a live system (what is broken,
+  what a password is not) into issues, PRs, commits or docs.
+- An issue exists only for work a pull request can close, a bug, or a decision worth recording.
+  Findings, measurements and notes are comments on the existing issue.
+- Search open issues before filing. One issue may host several PRs.
+- Dependencies use the native blocked-by relation. A chain deeper than A needs B needs C is
+  planning disguised as tracking — merge the nodes.
+
+## Commits
+
+PRs merge by squash; these rules govern the branch history the reviewer reads.
+
+- Subject: Conventional Commits with the issue in the scope — `feat(GH-12): add landing page`.
+  Types: feat, fix, docs, refactor, test, perf, build, ci, chore.
+- A branch carries as few commits as its changes need. Each is one self-contained change that
+  builds and passes on its own.
+- Unrelated changes never share a commit; one change is never split across several.
+- No fixup, typo, WIP or "address review" commits survive to the merge: fold them with
+  `git commit --fixup <sha>` + `GIT_SEQUENCE_EDITOR=: git rebase --autosquash main`.
+- Rewritten history is pushed with `git push --force-with-lease`, only to your own issue branch.
+
+## After the merge
+
+- A merged issue is closed. Follow-up work is a new task, except obvious closeout caused by
+  the merged change.
+
+## Token hygiene
+
+- `git diff --stat` before a full diff; then diff only the files you need. History: `git log --oneline -20`.
+- Hand subagents file paths, not pasted contents.
+- Long logs and CI output go to the `log-reader` agent; mechanical board/git chores to `ops`.

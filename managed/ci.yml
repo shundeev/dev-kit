@@ -1,0 +1,25 @@
+# Managed by dev-kit (.shared/bin/kit init). Do not edit: the checks live in
+# .shared/ci/action.yml and run at the dev-kit version this repository pins.
+# Project-specific jobs (tests, builds) go in a separate workflow file.
+#
+# The job name `checks` is the required status check of the main ruleset; it runs on
+# every pull request with no path filter, so it always reports.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: true
+      - uses: ./.shared/ci

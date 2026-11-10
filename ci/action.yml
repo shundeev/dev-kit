@@ -1,0 +1,40 @@
+name: dev-kit checks
+description: >
+  Checks shared by every project that mounts dev-kit at .shared. The project's
+  .github/workflows/ci.yml checks out with submodules and calls this action
+  (uses: ./.shared/ci), so the checks run at the dev-kit version the project pins.
+
+runs:
+  using: composite
+  steps:
+    - name: Install babashka
+      uses: DeLaGuardo/setup-clojure@13.7.0
+      with:
+        bb: 1.13.229
+
+    - name: dev-kit doctor
+      id: kit
+      shell: bash
+      run: |
+        bb "${{ github.action_path }}/../bin/kit" doctor --ci
+        bb "${{ github.action_path }}/../bin/kit" modules >> "$GITHUB_OUTPUT"
+
+    - name: Install clj-kondo and zprint
+      if: steps.kit.outputs.clojure == 'true'
+      uses: DeLaGuardo/setup-clojure@13.7.0
+      with:
+        clj-kondo: 2026.10.26
+        zprint: 1.3.0
+
+    - name: Lint (clj-kondo)
+      if: steps.kit.outputs.clojure == 'true'
+      shell: bash
+      run: |
+        mapfile -t files < <(git ls-files -- '*.clj' '*.cljs' '*.cljc' '*.bb' 'bb.edn')
+        if [ "${#files[@]}" -eq 0 ]; then echo "No Clojure files"; exit 0; fi
+        clj-kondo --parallel --fail-level error --lint "${files[@]}"
+
+    - name: Format (zprint)
+      if: steps.kit.outputs.clojure == 'true'
+      shell: bash
+      run: '"${{ github.action_path }}/../clojure/zprint_check.sh"'

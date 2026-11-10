@@ -1,0 +1,187 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: finish_issue_flow.sh [options]          # open the PR
+       finish_issue_flow.sh --merge [options]  # merge it after the owner approved
+
+Run from the issue branch (<number>-<slug>, made by start_issue_flow.sh).
+
+Default mode: commit what is staged (or the --add paths), push, open the pull request,
+set the board Status to "In review". Never merges.
+
+--merge: squash-merge the branch's pull request, confirm it is MERGED, set Status to
+"Done", delete the branch locally and on GitHub, switch back to the base branch.
+A pull request that did not merge keeps its branch.
+
+Subjects follow Conventional Commits with the issue in the scope:
+  feat(GH-12): add landing page
+GitHub appends the PR number on squash: "feat(GH-12): add landing page (#13)".
+
+Options:
+  --issue <number>              Issue number (default: from the branch name)
+  --type <type>                 feat|fix|docs|refactor|test|perf|build|ci|chore (default: feat)
+  --summary <text>              Subject text after "type(GH-n): " (default: the issue title)
+  --commit-message-file <path>  Full commit message (subject, body, trailers); overrides --summary for the commit
+  --pr-body-file <path>         PR description. Required when the PR is opened. Must contain a line
+                                "ADR: none" or "ADR: adr/NNNN-....md". "Closes #<issue>" is added if missing.
+  --add <path>                  Stage this path before committing (repeatable)
+  --no-commit                   Commit nothing; push and open the PR for commits already on the branch
+  --repo <owner/repo>           Default: GHWF_REPO, then the origin remote
+  --owner <login>               Board owner (default: GHWF_OWNER)
+  --project-number <number>     Board number (default: GHWF_PROJECT_NUMBER)
+  --base <branch>               Default: GHWF_DEFAULT_BASE or main
+  --status-field <name>         Default: GHWF_STATUS_FIELD or Status
+  --review-status <option>      Default: In review
+  --done-status <option>        Default: Done
+  --help                        Show this help
+USAGE
+}
+
+die() {
+  echo "Error: $*" >&2
+  exit 1
+}
+
+infer_repo_from_origin() {
+  local origin_url
+  origin_url="$(git remote get-url origin 2>/dev/null || true)"
+  if [[ "$origin_url" =~ github.com[:/]([^/]+/[^/.]+)(\.git)?$ ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+  fi
+}
+
+# gh resolves the field and its option by name; the project number is positional.
+set_status() {
+  local status="$1"
+  [[ -n "$owner" && -n "$project_number" && -n "$status" ]] || return 0
+
+  local issue_url output
+  issue_url="$(gh issue view "$issue_number" -R "$repo" --json url --jq '.url' 2>/dev/null || true)"
+  [[ -n "$issue_url" ]] || { echo "Warning: issue #$issue_number not found, Status not set" >&2; return 0; }
+
+  if ! output="$(gh project item-edit "$project_number" --owner "$owner" --url "$issue_url" \
+                   --field "$status_field" --value "$status" 2>&1)"; then
+    echo "Warning: failed to set $status_field to '$status' for #$issue_number: $output" >&2
+  fi
+}
+
+repo="${GHWF_REPO:-}"
+owner="${GHWF_OWNER:-}"
+project_number="${GHWF_PROJECT_NUMBER:-}"
+base_branch="${GHWF_DEFAULT_BASE:-main}"
+status_field="${GHWF_STATUS_FIELD:-Status}"
+review_status="${GHWF_REVIEW_STATUS:-In review}"
+done_status="${GHWF_DONE_STATUS:-Done}"
+
+mode="open"
+issue_number=""
+commit_type="feat"
+summary=""
+commit_message_file=""
+pr_body_file=""
+no_commit=0
+add_paths=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --merge) mode="merge"; shift ;;
+    --issue) issue_number="$2"; shift 2 ;;
+    --type) commit_type="$2"; shift 2 ;;
+    --summary) summary="$2"; shift 2 ;;
+    --commit-message-file) commit_message_file="$2"; shift 2 ;;
+    --pr-body-file) pr_body_file="$2"; shift 2 ;;
+    --add) add_paths+=("$2"); shift 2 ;;
+    --no-commit) no_commit=1; shift ;;
+    --repo) repo="$2"; shift 2 ;;
+    --owner) owner="$2"; shift 2 ;;
+    --project-number) project_number="$2"; shift 2 ;;
+    --base) base_branch="$2"; shift 2 ;;
+    --status-field) status_field="$2"; shift 2 ;;
+    --review-status) review_status="$2"; shift 2 ;;
+    --done-status) done_status="$2"; shift 2 ;;
+    --help|-h) usage; exit 0 ;;
+    *) die "Unknown argument: $1" ;;
+  esac
+done
+
+case "$commit_type" in
+  feat|fix|docs|refactor|test|perf|build|ci|chore) ;;
+  *) die "--type '$commit_type' is not a Conventional Commits type" ;;
+esac
+
+[[ -n "$repo" ]] || repo="$(infer_repo_from_origin)"
+[[ -n "$repo" ]] || die "--repo or GHWF_REPO is required"
+
+branch_name="$(git rev-parse --abbrev-ref HEAD)"
+[[ "$branch_name" != "HEAD" ]] || die "Detached HEAD is not supported"
+[[ "$branch_name" != "$base_branch" ]] || die "On the base branch '$base_branch': run from the issue branch"
+
+if [[ -z "$issue_number" && "$branch_name" =~ ^([0-9]+)- ]]; then
+  issue_number="${BASH_REMATCH[1]}"
+fi
+[[ -n "$issue_number" ]] || die "No issue number: the branch is not <number>-<slug> and --issue was not given"
+
+# ---------------------------------------------------------------- merge
+if [[ "$mode" == "merge" ]]; then
+  pr_url="$(gh pr view "$branch_name" -R "$repo" --json url --jq '.url' 2>/dev/null || true)"
+  [[ -n "$pr_url" ]] || die "No pull request for branch '$branch_name'"
+
+  gh pr merge "$pr_url" --squash
+
+  # Only a confirmed merge may delete the branch: cleaning up after a failed merge closes
+  # the pull request with the work still in it.
+  pr_state="$(gh pr view "$pr_url" --json state --jq '.state')"
+  [[ "$pr_state" == "MERGED" ]] || die "Pull request is $pr_state, not MERGED; branch '$branch_name' kept"
+
+  set_status "$done_status"
+
+  git switch "$base_branch"
+  git pull --ff-only
+  git branch -D "$branch_name"
+  if git ls-remote --exit-code --heads origin "$branch_name" >/dev/null 2>&1; then
+    git push origin --delete "$branch_name"
+  fi
+
+  echo "Merged: $pr_url"
+  echo "Status: $done_status"
+  exit 0
+fi
+
+# ---------------------------------------------------------------- open
+issue_title="$(gh issue view "$issue_number" -R "$repo" --json title --jq '.title')"
+[[ -n "$summary" ]] || summary="$issue_title"
+subject="$commit_type(GH-$issue_number): $summary"
+
+if [[ "$no_commit" -eq 0 ]]; then
+  [[ "${#add_paths[@]}" -eq 0 ]] || git add -- "${add_paths[@]}"
+  git diff --cached --quiet && die "Nothing staged to commit (use --add <path>, or --no-commit)"
+  if [[ -n "$commit_message_file" ]]; then
+    git commit -F "$commit_message_file"
+  else
+    git commit -m "$subject"
+  fi
+fi
+
+git push -u origin "$branch_name"
+
+pr_url="$(gh pr view "$branch_name" -R "$repo" --json url --jq '.url' 2>/dev/null || true)"
+if [[ -z "$pr_url" ]]; then
+  [[ -n "$pr_body_file" ]] || die "--pr-body-file is required to open the pull request"
+  grep -Eq '^ADR: ' "$pr_body_file" \
+    || die "The PR body needs an 'ADR: none' or 'ADR: adr/NNNN-....md' line (see the adr skill)"
+
+  body="$(cat "$pr_body_file")"
+  grep -Eqi "(close[sd]?|fix(e[sd])?|resolve[sd]?) #$issue_number\b" <<<"$body" \
+    || body="Closes #$issue_number"$'\n\n'"$body"
+
+  pr_url="$(gh pr create -R "$repo" --base "$base_branch" --head "$branch_name" \
+              --title "$subject" --body "$body" | tail -n1 | tr -d '\r')"
+fi
+
+set_status "$review_status"
+
+echo "Subject: $subject"
+echo "PR URL: $pr_url"
+echo "Status: $review_status"
