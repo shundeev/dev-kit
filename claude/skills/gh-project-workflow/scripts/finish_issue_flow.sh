@@ -173,6 +173,13 @@ if [[ -z "$pr_url" ]]; then
               --title "$subject" --body "$body" | tail -n1 | tr -d '\r')"
 fi
 
+# The owner's Approve is the word to merge: with auto-merge on, GitHub merges once the owner
+# approved the latest commit, the checks passed and the branch contains the latest base.
+if ! auto_out="$(gh pr merge "$pr_url" --auto --squash 2>&1)"; then
+  echo "Warning: auto-merge could not be turned on: $auto_out" >&2
+  echo "  Fix: the owner turns on Settings > General > 'Allow auto-merge' (dev-kit#37); until then merge_issue_flow.sh merges after the Approve." >&2
+fi
+
 set_status "$review_status"
 
 echo "Subject: $subject"

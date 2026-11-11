@@ -90,11 +90,13 @@ When the owner says the round is done, process every thread:
   An open thread blocks the merge by ruleset.
 - Report the split: resolved with commit / answered and open.
 
-## 7. Merge — only on the owner's word
+## 7. Merge — on the owner's Approve
 
-`merge_issue_flow.sh` (gh-project-workflow, "Merge after approval"); it asks the owner for
-confirmation. It deletes the branch only after GitHub reports `MERGED`; never delete a
-branch before that.
+The owner's Approve of the latest commit is the word to merge. Auto-merge (turned on by the
+finish script) merges once the checks pass and the branch is up to date with `main`; then run
+`merge_issue_flow.sh` (gh-project-workflow, "Merge after approval") for the closeout. It also
+updates a branch that fell behind. It deletes the branch only after GitHub reports `MERGED`.
+The agent never approves a pull request.
 
 ## 8. Close the task
 

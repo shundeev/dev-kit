@@ -2,17 +2,33 @@
 # A stand-in for gh in selftest: records every call in $FAKE_GH_LOG and answers from files
 # in $FAKE_GH_DIR, so the flow scripts run offline. Answers are what the real call prints
 # after its --jq filter.
-#   pr-list      output of `pr list … --jq .[0].url` (empty file: no open PR)
-#   pr-state     output of `pr view … --jq .state`
+#   pr-list         output of `pr list --state open … --jq .[0].url` (empty file: no open PR)
+#   pr-list-merged  the same for `--state merged`
+#   pr-state        output of `pr view … --jq .state`
+#   pr-review       output of `pr view --json reviewDecision,mergeStateStatus …`, e.g. "APPROVED CLEAN"
+#   no-auto-merge   when present, `pr merge --auto` fails as in a repository without auto-merge
 #   issue-title  output of `issue view … --json title`
 set -u
 printf '%s\n' "$*" >> "$FAKE_GH_LOG"
 answer() { cat "$FAKE_GH_DIR/$1" 2>/dev/null || true; }
 case "${1:-} ${2:-}" in
-  "pr list")   answer pr-list ;;
+  "pr list")
+    case "$*" in
+      *"--state merged"*) answer pr-list-merged ;;
+      *) answer pr-list ;;
+    esac ;;
+  "pr update-branch") exit 0 ;;
   "pr create") echo "https://github.com/u473t8/fake/pull/99" ;;
-  "pr merge")  exit 0 ;;
-  "pr view")   answer pr-state ;;
+  "pr merge")
+    if [[ "$*" == *--auto* && -e "$FAKE_GH_DIR/no-auto-merge" ]]; then
+      echo "GraphQL: Auto merge is not allowed for this repository (enablePullRequestAutoMerge)" >&2
+      exit 1
+    fi ;;
+  "pr view")
+    case "$*" in
+      *reviewDecision*) answer pr-review ;;
+      *) answer pr-state ;;
+    esac ;;
   "issue view")
     case "$*" in
       *title*) answer issue-title ;;
