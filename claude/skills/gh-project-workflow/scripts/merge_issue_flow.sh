@@ -63,8 +63,9 @@ branch_name="$(git rev-parse --abbrev-ref HEAD)"
 [[ "$branch_name" =~ ^([0-9]+)- ]] || die "Branch '$branch_name' is not <number>-<slug>"
 issue_number="${BASH_REMATCH[1]}"
 
-pr_url="$(gh pr view "$branch_name" -R "$repo" --json url --jq '.url' 2>/dev/null || true)"
-[[ -n "$pr_url" ]] || die "No pull request for branch '$branch_name'"
+# Only an open pull request counts: `gh pr view <branch>` also returns closed and merged ones.
+pr_url="$(gh pr list -R "$repo" --head "$branch_name" --state open --json url --jq '.[0].url // empty')"
+[[ -n "$pr_url" ]] || die "No open pull request for branch '$branch_name'"
 
 gh pr merge "$pr_url" --squash
 
@@ -80,8 +81,15 @@ if [[ -n "$owner" && -n "$project_number" ]]; then
     || echo "Warning: could not set $status_field to '$done_status' for #$issue_number" >&2
 fi
 
-git switch "$base_branch"
-git pull --ff-only
+# Leave the issue branch. When the base branch is checked out in another worktree, this one
+# cannot switch to it; it stays detached on the merged base instead.
+git fetch -q origin "$base_branch"
+if git worktree list --porcelain | grep -qx "branch refs/heads/$base_branch"; then
+  git switch -q --detach "origin/$base_branch"
+else
+  git switch -q "$base_branch"
+  git pull -q --ff-only
+fi
 git branch -D "$branch_name"
 if git ls-remote --exit-code --heads origin "$branch_name" >/dev/null 2>&1; then
   git push origin --delete "$branch_name"
