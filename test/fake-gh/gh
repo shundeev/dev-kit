@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# A stand-in for gh in selftest: records every call in $FAKE_GH_LOG and answers from files
+# in $FAKE_GH_DIR, so the flow scripts run offline. Answers are what the real call prints
+# after its --jq filter.
+#   pr-list      output of `pr list … --jq .[0].url` (empty file: no open PR)
+#   pr-state     output of `pr view … --jq .state`
+#   issue-title  output of `issue view … --json title`
+set -u
+printf '%s\n' "$*" >> "$FAKE_GH_LOG"
+answer() { cat "$FAKE_GH_DIR/$1" 2>/dev/null || true; }
+case "${1:-} ${2:-}" in
+  "pr list")   answer pr-list ;;
+  "pr create") echo "https://github.com/u473t8/fake/pull/99" ;;
+  "pr merge")  exit 0 ;;
+  "pr view")   answer pr-state ;;
+  "issue view")
+    case "$*" in
+      *title*) answer issue-title ;;
+      *) echo "https://github.com/u473t8/fake/issues/${3:-0}" ;;
+    esac ;;
+  *) exit 0 ;;
+esac

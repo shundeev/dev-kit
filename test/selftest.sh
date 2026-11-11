@@ -349,6 +349,55 @@ expect_exit 0 "merge has help" bash .claude/skills/gh-project-workflow/scripts/m
 expect_exit 1 "finish refuses to run on main" bash .claude/skills/gh-project-workflow/scripts/finish_issue_flow.sh
 contains "finish explains" "On the base branch" "$LAST"
 
+echo "- finish and merge scripts (fake gh)"
+FAKE="$WORK/fake"; mkdir -p "$FAKE"
+export FAKE_GH_DIR="$FAKE" FAKE_GH_LOG="$FAKE/log"
+SCR="$KIT/claude/skills/gh-project-workflow/scripts"
+REMOTE="$WORK/remote.git"; git init -q --bare -b main "$REMOTE"
+T="$WORK/flow"; git init -q -b main "$T"; cd "$T" || exit 1
+git remote add origin "$REMOTE"; echo base > f; git add f; git commit -qm "chore: base"; git push -q -u origin main
+git switch -q -c 12-landing
+flow() { local script="$1"; shift; PATH="$KIT/test/fake-gh:$PATH" GHWF_REPO=u473t8/fake GHWF_OWNER=u473t8 GHWF_PROJECT_NUMBER=3 bash "$SCR/$script" "$@"; }
+head_now() { git rev-parse HEAD; }
+
+: > "$FAKE/pr-list"; echo "Add Landing page" > "$FAKE/issue-title"
+echo change >> f; git add f; before=$(head_now)
+expect_exit 1 "finish: missing body file stops before the commit" flow finish_issue_flow.sh --pr-body-file "$WORK/none.md"
+[ "$(head_now)" = "$before" ] && ok "  nothing committed" || bad "  committed anyway"
+printf 'text\nADR: \n' > "$WORK/empty-adr.md"
+expect_exit 1 "finish: empty ADR line stops before the commit" flow finish_issue_flow.sh --pr-body-file "$WORK/empty-adr.md"
+[ "$(head_now)" = "$before" ] && ok "  nothing committed" || bad "  committed anyway"
+expect_exit 1 "finish: no open PR and no body file stops before the commit" flow finish_issue_flow.sh
+printf 'did it\n' > "$WORK/bad-msg.txt"
+expect_exit 1 "finish: commit message without type(GH-n) refused" flow finish_issue_flow.sh --commit-message-file "$WORK/bad-msg.txt" --pr-body-file "$WORK/empty-adr.md"
+
+printf 'What changed\n\nADR: none\n' > "$WORK/body.md"; : > "$FAKE_GH_LOG"
+expect_exit 0 "finish: a closed PR does not count; a new one is opened" flow finish_issue_flow.sh --pr-body-file "$WORK/body.md"
+grep -q '^pr create' "$FAKE_GH_LOG" && ok "  gh pr create called" || bad "  no pr create" "$(cat "$FAKE_GH_LOG")"
+grep -q 'pr list .*--state open' "$FAKE_GH_LOG" && ok "  only open PRs looked up" || bad "  lookup not limited to open PRs"
+contains "  subject from the issue title, first letter lowered" "Subject: feat(GH-12): add Landing page" "$LAST"
+[ "$(git log -1 --format=%s)" = "feat(GH-12): add Landing page" ] && ok "  commit carries the subject" || bad "  commit subject"
+[ "$(git rev-parse origin/12-landing 2>/dev/null)" = "$(head_now)" ] && ok "  branch pushed" || bad "  branch not pushed"
+
+echo "https://github.com/u473t8/fake/pull/99" > "$FAKE/pr-list"; : > "$FAKE_GH_LOG"
+echo more >> f; git add f
+printf 'fix(GH-12): handle more\n\nbody\n' > "$WORK/msg.txt"
+expect_exit 0 "finish: an open PR needs no body file" flow finish_issue_flow.sh --type fix --commit-message-file "$WORK/msg.txt"
+grep -q '^pr create' "$FAKE_GH_LOG" && bad "  opened a second PR" || ok "  no second PR"
+contains "  subject from the commit message file" "Subject: fix(GH-12): handle more" "$LAST"
+
+echo OPEN > "$FAKE/pr-state"
+expect_exit 1 "merge: a PR that did not merge keeps its branch" flow merge_issue_flow.sh
+git rev-parse -q --verify refs/heads/12-landing >/dev/null && ok "  branch kept" || bad "  branch deleted"
+
+W="$WORK/main-wt"; git worktree add -q "$W" main
+echo MERGED > "$FAKE/pr-state"
+expect_exit 0 "merge: works while main is checked out in another worktree" flow merge_issue_flow.sh
+git rev-parse -q --verify refs/heads/12-landing >/dev/null && bad "  local branch left" || ok "  local branch deleted"
+git ls-remote --exit-code --heads origin 12-landing >/dev/null 2>&1 && bad "  remote branch left" || ok "  remote branch deleted"
+[ "$(git rev-parse --abbrev-ref HEAD)" = HEAD ] && ok "  this worktree detached on the base" || bad "  not detached"
+cd "$P" || exit 1
+
 echo
 echo "passed $pass, failed $fail"
 [ "$fail" -eq 0 ]

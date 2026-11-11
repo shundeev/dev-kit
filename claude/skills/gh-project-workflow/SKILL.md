@@ -50,8 +50,11 @@ bash .claude/skills/gh-project-workflow/scripts/finish_issue_flow.sh \
   --pr-body-file /path/to/pr.md
 ```
 
-- Subject: `type(GH-<issue>): <summary>`, summary defaulting to the issue title.
-  The PR title is the same subject; squash merge makes it the commit on `main`.
+- Subject: `--summary`, else the first line of `--commit-message-file`, else the issue title
+  with its first letter lowered; it must read `type(GH-<issue>): summary`. The PR title is the
+  same subject; squash merge makes it the commit on `main`.
+- Every input is checked before the commit and the push (body file, `ADR:` line, subject).
+- Only an open pull request counts as the branch's PR.
 - The PR body must contain an `ADR:` line (`ADR: none` or `ADR: adr/NNNN-....md`) and states
   what was verified and what was not. `Closes #<issue>` is added when missing.
 - `--no-commit` pushes and opens the PR for commits already on the branch.
@@ -69,7 +72,8 @@ A separate script so that the permission rules can make it ask the owner every t
 under `ask` in `.claude/settings.json`, like `gh pr merge`.
 
 Squash-merges, confirms the PR is `MERGED`, moves the card to **Done**, deletes the branch
-locally and on GitHub, returns to `main`. A PR that did not merge keeps its branch.
+locally and on GitHub, returns to `main` (or detaches on `origin/main` when `main` is checked out
+in another worktree). A PR that did not merge keeps its branch.
 The `main` ruleset requires every review thread resolved before merge.
 
 ## Dependencies between issues
