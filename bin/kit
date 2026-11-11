@@ -2,6 +2,7 @@
 ;; dev-kit: lays out and checks the shared setup of a project that mounts dev-kit at .shared
 ;;
 ;;   .shared/bin/kit init     [--repo owner/name] [--showcase NAME] [--modules clojure] [--scaffold]
+;;   .shared/bin/kit init     --local   per-machine items only (the SessionStart hook runs it)
 ;;   .shared/bin/kit doctor   [--ci] [--quiet]
 ;;   .shared/bin/kit modules
 ;;   .shared/bin/kit identity [--dir PATH]   the agent's GitHub identity alone, for any repository
@@ -135,9 +136,16 @@
 (def local-settings ".claude/settings.local.json")
 
 
+(defn expand-home
+  "~ as the shell and gh read it: from HOME, not from the JVM's user.home."
+  [path]
+  (str/replace-first (str path) #"^~(?=/|$)"
+                     (str/re-quote-replacement (or (not-empty (System/getenv "HOME")) (System/getProperty "user.home")))))
+
+
 (defn agent-env
   [{:keys [login email gh-config-dir]}]
-  {"GH_CONFIG_DIR"       (str (fs/expand-home gh-config-dir))
+  {"GH_CONFIG_DIR"       (expand-home gh-config-dir)
    ;; git takes config from the environment too: SSH remotes go over HTTPS, and the github.com
    ;; credential helpers are reset to gh alone, which answers with GH_CONFIG_DIR's login.
    "GIT_CONFIG_COUNT"    "3"
@@ -202,7 +210,7 @@
   []
   (or (not-empty (System/getenv "GH_CONFIG_DIR"))
       (some-> (not-empty (System/getenv "XDG_CONFIG_HOME")) (fs/path "gh") str)
-      (str (fs/expand-home "~/.config/gh"))))
+      (expand-home "~/.config/gh")))
 
 
 (defn gh-login
@@ -216,31 +224,71 @@
 (defn same-dir? [a b] (= (str (fs/normalize (fs/absolutize a))) (str (fs/normalize (fs/absolutize b)))))
 
 
-(defn identity-problems
-  "Inside a Claude session (CLAUDECODE is set), gh must act as the agent, never as the owner."
-  [cfg]
-  (when-let [{:keys [login gh-config-dir]} (when (System/getenv "CLAUDECODE") (:agent cfg))]
-    (let [want  (str (fs/expand-home gh-config-dir))
-          have  (gh-config-dir-in-use)
-          user  (gh-login have)
-          token (first (filter #(not-empty (System/getenv %)) ["GH_TOKEN" "GITHUB_TOKEN"]))
-          login-fix (str "in your own terminal: GH_CONFIG_DIR=" gh-config-dir
-                         " gh auth login --hostname github.com --git-protocol https --web --scopes project,workflow")]
-      (cond
-        token
-        [[:fail (str token " is set, so gh in this Claude session uses that token, not the agent's account")
-          (str "unset " token " before starting claude")]]
+(defn agent-login-problem
+  "nil when the agent's gh config holds the agent's login."
+  [{:keys [login gh-config-dir]}]
+  (let [dir  (expand-home gh-config-dir)
+        user (gh-login dir)]
+    (cond (nil? user) (str "the agent's gh config " dir " is not logged in")
+          (not= login user) (str "the agent's gh config " dir " is logged in as " user ", not " login))))
 
-        (not (same-dir? want have))
+
+(defn interactive?
+  "A person at a terminal: stdin and stdout are a tty, and this is not a Claude session."
+  []
+  (and (not (System/getenv "CLAUDECODE"))
+       (try (boolean (some-> (System/console) (.isTerminal)))
+            (catch Exception _ (some? (System/console))))))
+
+
+(defn login-agent!
+  "Logs the agent's account into its gh config with gh's browser flow, attached to this
+  terminal. The person finishes it in the browser, signed in as the agent."
+  [{:keys [login gh-config-dir]}]
+  (let [dir  (expand-home gh-config-dir)
+        opts {:continue true :extra-env {"GH_CONFIG_DIR" dir}}]
+    (println (str "\nLogging the agent's GitHub account " login " into " dir ".\n"
+                  "On the github.com/login/device page check that you are signed in as " login
+                  " (switch account, or use a private window), then enter the code gh shows.\n"))
+    (when-let [user (gh-login dir)]
+      (p/shell opts "gh" "auth" "logout" "--hostname" "github.com" "--user" user))
+    (p/shell opts "gh" "auth" "login" "--hostname" "github.com" "--git-protocol" "https" "--web"
+             "--scopes" "project,workflow")))
+
+
+(defn offer-login!
+  "Starts the agent's login when it is missing or wrong and a person is at the terminal."
+  [agent]
+  (when (and (agent-login-problem agent) (interactive?) (sh "bash" "-c" "command -v gh"))
+    (login-agent! agent)))
+
+
+(defn identity-problems
+  "Outside a Claude session: a warning when the agent is not logged in on this machine.
+  Inside one (CLAUDECODE is set): gh must act as the agent, never as the owner."
+  [cfg]
+  (when-let [{:keys [login gh-config-dir] :as agent} (:agent cfg)]
+    (let [session? (System/getenv "CLAUDECODE")
+          want     (expand-home gh-config-dir)
+          have     (gh-config-dir-in-use)
+          user     (gh-login have)
+          token    (first (filter #(not-empty (System/getenv %)) ["GH_TOKEN" "GITHUB_TOKEN"]))]
+      (cond
+        (and session? token)
+        [[:fail (str token " is set, so gh in this Claude session uses that token, not the agent's account")
+          (str "unset " token " in the shell that starts claude, then restart the session")]]
+
+        (and session? (not (same-dir? want have)))
         [[:fail (str "this Claude session runs gh from " have (if user (str ", logged in as " user) ", logged out")
                      ", not from the agent's config " want)
-          (str mount "/bin/kit init, then restart the session")]]
+          (if (local-env-problem root (agent-env agent))
+            (str mount "/bin/kit init, then restart this Claude session")
+            (str "restart this Claude session: " local-settings " is in place and applies at start"))]]
 
-        (nil? user)
-        [[:fail (str "the agent's gh config " want " is not logged in") login-fix]]
-
-        (not= login user)
-        [[:fail (str "the agent's gh config " want " is logged in as " user ", not " login) login-fix]]))))
+        :else
+        (when-let [problem (agent-login-problem agent)]
+          [[(if session? :fail :warn) problem
+            (str "in your own terminal: " mount "/bin/kit init — it logs " login " in")]])))))
 
 
 (def agent-marker
@@ -528,6 +576,15 @@
     (System/exit (if (some #(= :fail (first %)) ps) 1 0))))
 
 
+(defn init-local
+  "Per-machine items only (settings.local.json, local git config), never a committed file:
+  the SessionStart hook runs it, so a fresh clone or worktree sets itself up."
+  []
+  (when-let [cfg (read-config)]
+    (doseq [c (keep fix! (filter :local (managed-items cfg)))]
+      (println "dev-kit init --local: wrote" c))))
+
+
 (defn init
   [opts]
   (when-not (fs/exists? config-file) (create-config! opts))
@@ -542,6 +599,7 @@
     (if (seq changes)
       (doseq [c changes] (println "  wrote" c))
       (println "  nothing to change"))
+    (some-> (:agent cfg) offer-login!)
     (let [ps (problems cfg {})]
       (print-problems ps false)
       (System/exit (if (some #(= :fail (first %)) ps) 1 0)))))
@@ -555,14 +613,19 @@
         _    (when-not (and (fs/directory? dir) (= (str (fs/real-path dir)) (sh-in dir "git" "rev-parse" "--show-toplevel")))
                (die dir "is not the root of a git repository"))
         cfg  (merge (read-defaults) (some-> (slurp-if (str (fs/path dir "kit.edn"))) edn/read-string))
-        env  (agent-env (or (:agent cfg) (die "no :agent in kit.edn or dev-kit's defaults")))
+        agent (or (:agent cfg) (die "no :agent in kit.edn or dev-kit's defaults"))
+        env  (agent-env agent)
         done (cond-> []
                (ignored-problem dir local-settings)   (conj (do (ignore! dir local-settings) "ignored"))
                (local-env-problem dir env)            (conj (do (write-local-env! dir env) "wrote")))]
     (println "dev-kit identity" (str "(" dir ")"))
     (println (if (seq done)
                (str "  " (str/join ", " done) " " local-settings " — restart Claude sessions here to use it")
-               "  nothing to change"))))
+               "  nothing to change"))
+    (offer-login! agent)
+    (when-let [problem (agent-login-problem agent)]
+      (println (str "  WARN  " problem "  →  in your own terminal: bb " (fs/path kit-dir "bin" "kit")
+                    " identity --dir " dir " — it logs " (:login agent) " in")))))
 
 
 (defn parse-args
@@ -577,6 +640,7 @@
       "--ci" (recur more (assoc opts :ci true))
       "--quiet" (recur more (assoc opts :quiet true))
       "--dir" (recur (rest more) (assoc opts :dir (first more)))
+      "--local" (recur more (assoc opts :local true))
       (die "unknown option" a))))
 
 
@@ -593,7 +657,7 @@
              (not= (str root) (sh "git" "rev-parse" "--show-toplevel")))
     (die "dev-kit must be mounted at <project>/" mount "; " (str root) "is not a git repository root"))
   (case cmd
-    "init" (init (parse-args args))
+    "init" (let [opts (parse-args args)] (if (:local opts) (init-local) (init opts)))
     "doctor" (doctor (parse-args args))
     "modules" (println (str "clojure=" (boolean (some-> (read-config) clojure?))))
     "identity" (identity! (parse-args args))

@@ -35,6 +35,9 @@ unset CLAUDECODE GH_TOKEN GITHUB_TOKEN
 # settings.local.json into the global ignore file, which would hide what kit itself ignores.
 : > "$WORK/gitconfig"
 export GIT_CONFIG_GLOBAL="$WORK/gitconfig" XDG_CONFIG_HOME="$WORK/config"
+# A home of its own: whether the agent is logged in on this machine must not change the results.
+export HOME="$WORK/home"
+mkdir -p "$HOME"
 
 echo "dev-kit selftest ($KIT)"
 
@@ -145,8 +148,18 @@ expect_exit 1 "doctor catches settings.local.json that git would commit" bb $kit
 contains "doctor says why" "$local: is not git-ignored" "$LAST"
 rm $local
 expect_exit 0 "doctor --ci skips the per-machine settings" bb $kit doctor --ci
+echo '{}' > .claude/settings.json
+git config --unset core.hooksPath
+expect_exit 0 "init --local succeeds" bb $kit init --local
+git check-ignore -q $local && [ -f $local ] && ok "init --local writes and ignores settings.local.json" || bad "not restored"
+[ "$(git config core.hooksPath)" = ".shared/githooks" ] && ok "init --local sets the hooks path" || bad "hooksPath not restored"
+[ "$(cat .claude/settings.json)" = "{}" ] && ok "init --local leaves committed files alone" || bad "init --local touched settings.json"
 bb $kit init >/dev/null
-git check-ignore -q $local && [ -f $local ] && ok "init writes and ignores it again" || bad "not restored"
+rm $local
+git config --unset core.hooksPath
+bash .shared/claude/hooks/session-start.sh >/dev/null
+[ -f $local ] && [ "$(git config core.hooksPath)" = ".shared/githooks" ] \
+  && ok "session start repairs the per-machine items itself" || bad "session start did not repair"
 
 echo "- agent identity: who a Claude session acts as"
 AG="$WORK/gh-agent"
@@ -157,11 +170,18 @@ bb -e "(spit \"kit.edn\" (pr-str (assoc (clojure.edn/read-string (slurp \"kit.ed
 bb $kit init >/dev/null
 printf 'github.com:\n    user: the-owner\n    git_protocol: ssh\n' > "$WORK/xdg/gh/hosts.yml"
 as_owner() { env -u GH_CONFIG_DIR XDG_CONFIG_HOME="$WORK/xdg" "$@"; }
-expect_exit 0 "outside a Claude session the identity is not checked" as_owner bb $kit doctor
+expect_exit 0 "outside a Claude session a logged-out agent only warns" as_owner bb $kit doctor
+contains "the warning names the agent's config" "WARN  the agent's gh config $AG is not logged in" "$LAST"
+contains "the fix is kit init, which logs in" "kit init — it logs kit-bot in" "$LAST"
 expect_exit 1 "doctor fails a Claude session that runs gh as the owner" as_owner env CLAUDECODE=1 bb $kit doctor
 contains "doctor names the owner's login" "logged in as the-owner" "$LAST"
-expect_exit 1 "doctor fails when the agent's config is logged out" env GH_CONFIG_DIR="$AG" CLAUDECODE=1 bb $kit doctor
-contains "doctor gives the login command" "gh auth login" "$LAST"
+contains "with settings.local.json in place the fix is a restart" "restart this Claude session: $local is in place" "$LAST"
+jq '.env.GH_CONFIG_DIR = "/elsewhere"' $local > "$WORK/local.json" && mv "$WORK/local.json" $local
+expect_exit 1 "a session without the agent env fails too" as_owner env CLAUDECODE=1 bb $kit doctor
+contains "then the fix is init and a restart" "kit init, then restart this Claude session" "$LAST"
+bb $kit init >/dev/null
+expect_exit 1 "doctor fails a session whose agent config is logged out" env GH_CONFIG_DIR="$AG" CLAUDECODE=1 bb $kit doctor
+contains "inside a session that is a failure" "FAIL  the agent's gh config $AG is not logged in" "$LAST"
 printf 'github.com:\n    user: someone-else\n' > "$AG/hosts.yml"
 expect_exit 1 "doctor fails when the agent's config holds another login" env GH_CONFIG_DIR="$AG" CLAUDECODE=1 bb $kit doctor
 contains "doctor names the wrong login" "logged in as someone-else, not kit-bot" "$LAST"
@@ -169,6 +189,46 @@ printf 'github.com:\n    users:\n        kit-bot:\n    git_protocol: https\n    
 expect_exit 0 "doctor passes a Claude session that acts as the agent" env GH_CONFIG_DIR="$AG" CLAUDECODE=1 bb $kit doctor
 expect_exit 1 "doctor fails when GH_TOKEN overrides the agent's config" env GH_CONFIG_DIR="$AG" GH_TOKEN=x CLAUDECODE=1 bb $kit doctor
 contains "doctor names the variable" "GH_TOKEN is set" "$LAST"
+
+echo "- agent identity: kit init logs the agent in from a terminal"
+if command -v script >/dev/null 2>&1; then
+  FB="$WORK/fakebin"
+  mkdir -p "$FB"
+  cat > "$FB/gh" <<'FAKE'
+#!/usr/bin/env bash
+# Fake gh for the login cases: `auth login` stores $FAKE_LOGIN in $GH_CONFIG_DIR/hosts.yml.
+echo "gh $*" >> "$GH_CONFIG_DIR/calls"
+case "$1 $2" in
+  "auth login")  printf 'github.com:\n    user: %s\n' "$FAKE_LOGIN" > "$GH_CONFIG_DIR/hosts.yml" ;;
+  "auth logout") rm -f "$GH_CONFIG_DIR/hosts.yml" ;;
+esac
+FAKE
+  chmod +x "$FB/gh"
+  tty_run() { script -qec "$(printf '%q ' "$@")" /dev/null; }
+  rm -f "$AG/hosts.yml" "$AG/calls"
+  expect_exit 0 "init in a terminal logs the agent in" tty_run env PATH="$FB:$PATH" FAKE_LOGIN=kit-bot bb $kit init
+  contains "init says which account to sign in as" "check that you are signed in as kit-bot" "$LAST"
+  grep -qx "gh auth login --hostname github.com --git-protocol https --web --scopes project,workflow" "$AG/calls" \
+    && ok "init runs gh's browser login into the agent's config" || bad "login call" "$(cat "$AG/calls" 2>&1)"
+  grep -q "user: kit-bot" "$AG/hosts.yml" && ok "the agent is logged in" || bad "not logged in"
+  rm -f "$AG/calls"
+  expect_exit 0 "init with the agent logged in" tty_run env PATH="$FB:$PATH" bb $kit init
+  [ ! -e "$AG/calls" ] && ok "a logged-in agent is left alone" || bad "logged in again" "$(cat "$AG/calls")"
+  printf 'github.com:\n    user: the-owner\n' > "$AG/hosts.yml"
+  expect_exit 0 "init with the wrong account in the agent's config" tty_run env PATH="$FB:$PATH" FAKE_LOGIN=the-owner bb $kit init
+  grep -qx "gh auth logout --hostname github.com --user the-owner" "$AG/calls" && ok "the wrong account is logged out first" || bad "no logout"
+  contains "a browser signed in as someone else is reported" "logged in as the-owner, not kit-bot" "$LAST"
+  rm -f "$AG/calls"
+  expect_exit 0 "init without a terminal" env PATH="$FB:$PATH" FAKE_LOGIN=kit-bot bb $kit init
+  [ ! -e "$AG/calls" ] && ok "without a terminal init starts no login" || bad "login without a terminal"
+  contains "and says how to log in" "kit init — it logs kit-bot in" "$LAST"
+  rm -f "$AG/calls"
+  # Inside a session init fails on the session's identity (gh runs as the owner here); it must not log in.
+  expect_exit 1 "init inside a Claude session with a terminal" tty_run env PATH="$FB:$PATH" CLAUDECODE=1 FAKE_LOGIN=kit-bot bb $kit init
+  [ ! -e "$AG/calls" ] && ok "a Claude session never starts a login" || bad "login inside a session"
+else
+  echo "  (skipped: no script command for a pseudo-terminal)"
+fi
 mv "$WORK/kit.edn.bak" kit.edn
 bb $kit init >/dev/null
 

@@ -24,11 +24,22 @@ git add -A && git commit -m "chore: add dev-kit"
 ```
 
 A fresh clone: `git clone --recurse-submodules …`, then `.shared/bin/kit init` (it sets the
-local git hooks path, which a clone does not carry).
+local git hooks path and the agent's identity, which a clone does not carry).
+
+A new machine:
+
+1. Install `git`, `gh`, `bb` (babashka), `jq`, and Claude Code.
+2. Log yourself in for your own terminal: `gh auth login`.
+3. Clone with `--recurse-submodules` and run `.shared/bin/kit init` in your terminal. It also
+   logs the agent's account in: gh shows a one-time code, you enter it on github.com/login/device
+   while signed in as the agent (switch account, or use a private window).
+
+Forgot step 3 and started Claude? The first session writes the per-machine settings itself and
+tells you what is left: restart the session, or run `kit init` in your terminal for the login.
 
 | Command | What it does |
 |---|---|
-| `.shared/bin/kit init` | Lays everything out. Safe to rerun; never overwrites project-owned files. |
+| `.shared/bin/kit init` | Lays everything out. Safe to rerun; never overwrites project-owned files. In a terminal it logs the agent's account in when it is not. `--local` touches only the per-machine items; the SessionStart hook runs it. |
 | `.shared/bin/kit doctor` | Checks that everything is in place and matches the pinned dev-kit version. Each problem comes with the command that fixes it. `--ci` skips local-only checks, `--quiet` prints problems only. |
 | `.shared/bin/kit modules` | `clojure=true/false`, for CI. |
 | `.shared/bin/kit identity [--dir PATH]` | Writes only the agent's GitHub identity (below) into a repository's `.claude/settings.local.json`: for dev-kit itself, or a repository that does not mount dev-kit yet. |
@@ -74,17 +85,23 @@ waits for the owner. The owner is the ruleset's only bypass actor, in pull-reque
 can merge a pull request without a review (needed for their own, which nobody else can approve),
 and still cannot push to `main` directly.
 
-- Once per machine the owner logs the account in, in their own terminal:
-  `GH_CONFIG_DIR=~/.config/gh-agent gh auth login --hostname github.com --git-protocol https --web --scopes project,workflow`.
-  The token stays in that directory; it never goes into chat, issues or a repository.
+- Once per machine the account is logged into its own gh config, `~/.config/gh-agent`. `kit init`
+  run in a terminal does it: it starts gh's browser login, the owner finishes it signed in as the
+  agent, and init checks which account came back (a wrong one is logged out on the next run).
+  The token stays in that directory; it never goes into chat, issues or a repository. A Claude
+  session never starts the login.
 - `kit init` writes the identity into `.claude/settings.local.json` and git-ignores it. Claude
   Code applies that `env` to the session, its hooks and its commands: `gh` reads the agent's
   config, git sends `git@github.com:` remotes over HTTPS with gh as the only credential helper,
   and commits are authored by the agent. The owner's terminal keeps the owner's login and SSH.
-  A session started before `init` keeps its old identity until it is restarted.
-- Inside a Claude session `kit doctor` fails when gh would act as anyone but the agent: a
-  session on another gh config (the owner's), a logged-out or foreign agent config, or a
-  `GH_TOKEN` / `GITHUB_TOKEN` that overrides it.
+  The SessionStart hook writes the file too (`kit init --local`), so a fresh clone or worktree
+  is set up by its first session; the env applies from the next one.
+- `kit doctor` warns when the agent is not logged in on this machine. Inside a Claude session it
+  fails when gh would act as anyone but the agent — a session on another gh config (the owner's),
+  a logged-out or foreign agent config, a `GH_TOKEN` / `GITHUB_TOKEN` override — and says what
+  is left: restart the session, or `kit init` in a terminal.
+- Without the login, a session cannot use GitHub at all (`gh` is logged out, `git push` finds no
+  credentials); it never falls back to the owner's account.
 - `:agent nil` in a project's `kit.edn` switches this off.
 
 Not a security boundary on its own: the owner's gh config and SSH key stay readable from a
