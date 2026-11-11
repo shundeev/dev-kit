@@ -293,11 +293,12 @@
 
 
 (defn codeowners-text
-  [cfg]
-  (str "# Managed by dev-kit (`kit init`); the owner comes from :owner in kit.edn.\n"
-       "# The owner reviews every file: with \"Require review from Code Owners\" in the main ruleset,\n"
-       "# no pull request merges without their approval, whoever else approves it.\n"
-       "* @" (:owner cfg) "\n"))
+  [{:keys [owners]}]
+  (when (empty? owners) (die ":owners in kit.edn is empty; list the GitHub logins who review every change, e.g. :owners [\"u473t8\"]"))
+  (str "# Managed by dev-kit (`kit init`); the code owners come from :owners in kit.edn.\n"
+       "# With \"Require review from Code Owners\" in the main ruleset, a pull request merges only\n"
+       "# with the approval of one of them, whoever else approves it.\n"
+       "* " (str/join " " (map #(str "@" %) owners)) "\n"))
 
 
 (def agent-marker
