@@ -65,6 +65,7 @@ Two kinds of files:
 | `.claude/skills/*` (links) | `claude/skills/` — `repo-task-delivery`, `gh-project-workflow`, `adr` |
 | `.claude/agents/*.md` (copies) | `claude/agents/` — `ops`, `log-reader`; `smell-reviewer` with Clojure |
 | `.github/workflows/ci.yml` | `managed/ci.yml`, which runs `ci/action.yml` from the submodule |
+| `.github/ISSUE_TEMPLATE/task.yml`, `.github/pull_request_template.md` | `managed/github/`: the issue form with the stages of ADR-0002 and the PR template with the sections the owner reviews |
 | `.github/CODEOWNERS` | `* @<login> …` from `:owners` in `kit.edn`: one of them reviews every change |
 | git `core.hooksPath` | `githooks/` — zprint check before commit |
 | `.zprint.edn` (link), `:config-paths` in `.clj-kondo/config.edn` | `clojure/` (module `clojure`) |

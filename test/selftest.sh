@@ -139,6 +139,27 @@ contains "and says what to put in kit.edn" ":owners in kit.edn is empty" "$LAST"
 mv "$WORK/kit.edn.bak" kit.edn
 bb $kit init >/dev/null
 
+echo "- issue form and PR template"
+form=.github/ISSUE_TEMPLATE/task.yml
+prt=.github/pull_request_template.md
+[ -f $form ] && [ -f $prt ] && ok "init writes the issue form and the PR template" || bad "templates missing"
+labels="$(bb -e "(require '[clj-yaml.core :as y]) (doseq [f (:body (y/parse-string (slurp \"$form\")))] (when-let [l (get-in f [:attributes :label])] (println (str l (when (get-in f [:validations :required]) \" (required)\")))))" 2>&1)"
+[ "$labels" = "$(printf 'Requirements (required)\nInvariants\nDesign\nPlan\nDone when (required)')" ] \
+  && ok "the issue form has the five ADR-0002 sections; Requirements and Done when are required" || bad "issue form sections" "$labels"
+missing=""
+for s in "## What changed" "## Why" "## Review" "## User-level test" "## Verified" "## Not verified" "## Owner steps"; do
+  grep -qx -- "$s" $prt || missing="$missing, $s"
+done
+[ -z "$missing" ] && ok "the PR template has the sections the owner reviews" || bad "PR template lacks${missing#,}"
+grep -Eq '^ADR: +[^[:space:]]' $prt && ok "the PR template passes the finish script's ADR check" || bad "PR template ADR line"
+if grep -Eqi '(close[sd]?|fix(e[sd])?|resolve[sd]?) #' $prt; then bad "PR template carries a closing keyword (the finish script adds it)"
+else ok "the PR template leaves the closing keyword to the finish script"; fi
+for f in $form $prt; do cmp -s "$f" "$KIT/$f" && ok "dev-kit itself has the same $f" || bad "dev-kit's own $f differs"; done
+echo "# edited" >> $prt
+expect_exit 1 "doctor --ci catches an edited PR template" bb $kit doctor --ci
+contains "doctor names the template" "$prt: differs" "$LAST"
+bb $kit init >/dev/null
+
 echo "- agent identity: per-machine settings"
 default_login="$(bb -e '(println (get-in (clojure.edn/read-string (slurp ".shared/kit-defaults.edn")) [:agent :login]))')"
 local=.claude/settings.local.json
