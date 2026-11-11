@@ -294,7 +294,7 @@
 
 (defn codeowners-text
   [{:keys [owners]}]
-  (when (empty? owners) (die ":owners in kit.edn is empty; list the GitHub logins who review every change, e.g. :owners [\"u473t8\"]"))
+  (when (empty? owners) (die ":owners in kit.edn is empty; list who reviews every change (an org/team or GitHub logins), e.g. :owners [\"shundeev/owners\"]"))
   (str "# Managed by dev-kit (`kit init`); the code owners come from :owners in kit.edn.\n"
        "# With \"Require review from Code Owners\" in the main ruleset, a pull request merges only\n"
        "# with the approval of one of them, whoever else approves it.\n"
@@ -430,7 +430,7 @@
     (cond-> []
       (not-any? #(str/ends-with? % (str " " mount)) paths)
       (conj [:fail (str mount " is not a submodule of this repository (.gitmodules has no path " mount ")")
-             (str "git submodule add https://github.com/u473t8/dev-kit " mount)])
+             (str "git submodule add https://github.com/shundeev/dev-kit " mount)])
 
       (some-> status (str/starts-with? "+"))
       (conj [:warn (str mount " is checked out at another commit than the one this repository pins")

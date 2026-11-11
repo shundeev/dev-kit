@@ -123,8 +123,8 @@ expect_exit 0 "doctor --ci skips local git config" bb $kit doctor --ci
 bb $kit init >/dev/null
 
 echo "- code owners"
-[ "$(grep -v '^#' .github/CODEOWNERS)" = "* @u473t8" ] && ok "CODEOWNERS makes the owner review every file" || bad "CODEOWNERS" "$(cat .github/CODEOWNERS 2>&1)"
-grep -qx '\* @u473t8' "$KIT/.github/CODEOWNERS" && ok "dev-kit itself has the same code owner" || bad "dev-kit's own CODEOWNERS"
+[ "$(grep -v '^#' .github/CODEOWNERS)" = "* @shundeev/owners" ] && ok "CODEOWNERS makes the owners team review every file" || bad "CODEOWNERS" "$(cat .github/CODEOWNERS 2>&1)"
+grep -qx '\* @shundeev/owners' "$KIT/.github/CODEOWNERS" && ok "dev-kit itself has the same code owner" || bad "dev-kit's own CODEOWNERS"
 echo '* @someone-else' > .github/CODEOWNERS
 expect_exit 1 "doctor --ci catches an edited CODEOWNERS" bb $kit doctor --ci
 contains "doctor names CODEOWNERS" ".github/CODEOWNERS: differs" "$LAST"

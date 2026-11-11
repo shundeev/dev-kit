@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=board.sh
+source "$(dirname "${BASH_SOURCE[0]}")/board.sh"
+
 usage() {
   cat <<'USAGE'
 Usage: finish_issue_flow.sh [options]
@@ -47,7 +50,7 @@ infer_repo_from_origin() {
   fi
 }
 
-# gh resolves the field and its option by name; the project number is positional.
+# board.sh resolves the item, the field and its option through the project.
 set_status() {
   local status="$1"
   [[ -n "$owner" && -n "$project_number" && -n "$status" ]] || return 0
@@ -56,8 +59,7 @@ set_status() {
   issue_url="$(gh issue view "$issue_number" -R "$repo" --json url --jq '.url' 2>/dev/null || true)"
   [[ -n "$issue_url" ]] || { echo "Warning: issue #$issue_number not found, Status not set" >&2; return 0; }
 
-  if ! output="$(gh project item-edit "$project_number" --owner "$owner" --url "$issue_url" \
-                   --field "$status_field" --value "$status" 2>&1)"; then
+  if ! output="$(board_set_field "$project_number" "$owner" "$issue_url" "$status_field" "$status" 2>&1)"; then
     echo "Warning: failed to set $status_field to '$status' for #$issue_number: $output" >&2
   fi
 }
