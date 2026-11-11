@@ -209,7 +209,7 @@ REMOTE="$WORK/remote.git"; git init -q --bare -b main "$REMOTE"
 T="$WORK/flow"; git init -q -b main "$T"; cd "$T" || exit 1
 git remote add origin "$REMOTE"; echo base > f; git add f; git commit -qm "chore: base"; git push -q -u origin main
 git switch -q -c 12-landing
-flow() { PATH="$KIT/test/fake-gh:$PATH" GHWF_REPO=u473t8/fake GHWF_OWNER=u473t8 GHWF_PROJECT_NUMBER=3 bash "$SCR/$@"; }
+flow() { local script="$1"; shift; PATH="$KIT/test/fake-gh:$PATH" GHWF_REPO=u473t8/fake GHWF_OWNER=u473t8 GHWF_PROJECT_NUMBER=3 bash "$SCR/$script" "$@"; }
 head_now() { git rev-parse HEAD; }
 
 : > "$FAKE/pr-list"; echo "Add Landing page" > "$FAKE/issue-title"
