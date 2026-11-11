@@ -65,6 +65,7 @@ Two kinds of files:
 | `.claude/skills/*` (links) | `claude/skills/` — `repo-task-delivery`, `gh-project-workflow`, `adr` |
 | `.claude/agents/*.md` (copies) | `claude/agents/` — `ops`, `log-reader`; `smell-reviewer` with Clojure |
 | `.github/workflows/ci.yml` | `managed/ci.yml`, which runs `ci/action.yml` from the submodule |
+| `.github/CODEOWNERS` | `* @<owner>` with `:owner` from `kit.edn`: the owner reviews every file |
 | git `core.hooksPath` | `githooks/` — zprint check before commit |
 | `.zprint.edn` (link), `:config-paths` in `.clj-kondo/config.edn` | `clojure/` (module `clojure`) |
 | `env` in `.claude/settings.local.json` — per machine, git-ignored, skipped by `doctor --ci` | `:agent` in `kit.edn` / `kit-defaults.edn` (below) |
@@ -79,9 +80,11 @@ and the workflow file in the project never changes.
 ## The agent's GitHub identity
 
 The agent works under its own GitHub account (`:agent` in `kit-defaults.edn`), so GitHub tells
-its actions from the owner's. Each repository's `main` ruleset requires one approving review,
-a push after the approval dismisses it, and nobody can approve their own pull request: a merge
-waits for the owner. The owner is the ruleset's only bypass actor, in pull-request mode: they
+its actions from the owner's. Each repository's `main` ruleset requires one approving review
+and a review from the code owners; a push after the approval dismisses it. `.github/CODEOWNERS`
+makes the owner the code owner of every file, so only the owner's approval lets a pull request
+merge — the agent's approval of a pull request the owner opened does not count, and nobody can
+approve their own. The owner is the ruleset's only bypass actor, in pull-request mode: they
 can merge a pull request without a review (needed for their own, which nobody else can approve),
 and still cannot push to `main` directly.
 
@@ -115,8 +118,9 @@ session until the sandbox (ADR-0001, choice 3) denies them.
  :modules  #{}}          ; #{:clojure} for the shared zprint/clj-kondo setup
 ```
 
-Defaults (board, base branch, agent account) come from `kit-defaults.edn`; `:board`, `:base`,
-`:agent` and `:claude-settings` (merged into the generated settings) can be overridden per project.
+Defaults (board, base branch, code owner, agent account) come from `kit-defaults.edn`; `:board`,
+`:base`, `:owner`, `:agent` and `:claude-settings` (merged into the generated settings) can be
+overridden per project.
 
 ## Developing dev-kit
 

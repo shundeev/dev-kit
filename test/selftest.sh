@@ -122,6 +122,19 @@ expect_exit 1 "doctor catches a missing hooksPath" bb $kit doctor
 expect_exit 0 "doctor --ci skips local git config" bb $kit doctor --ci
 bb $kit init >/dev/null
 
+echo "- code owners"
+[ "$(grep -v '^#' .github/CODEOWNERS)" = "* @u473t8" ] && ok "CODEOWNERS makes the owner review every file" || bad "CODEOWNERS" "$(cat .github/CODEOWNERS 2>&1)"
+grep -qx '\* @u473t8' "$KIT/.github/CODEOWNERS" && ok "dev-kit itself has the same code owner" || bad "dev-kit's own CODEOWNERS"
+echo '* @someone-else' > .github/CODEOWNERS
+expect_exit 1 "doctor --ci catches an edited CODEOWNERS" bb $kit doctor --ci
+contains "doctor names CODEOWNERS" ".github/CODEOWNERS: differs" "$LAST"
+cp kit.edn "$WORK/kit.edn.bak"
+bb -e '(spit "kit.edn" (pr-str (assoc (clojure.edn/read-string (slurp "kit.edn")) :owner "kit-owner")))'
+bb $kit init >/dev/null
+[ "$(grep -v '^#' .github/CODEOWNERS)" = "* @kit-owner" ] && ok "the code owner comes from kit.edn" || bad "owner override" "$(cat .github/CODEOWNERS)"
+mv "$WORK/kit.edn.bak" kit.edn
+bb $kit init >/dev/null
+
 echo "- agent identity: per-machine settings"
 default_login="$(bb -e '(println (get-in (clojure.edn/read-string (slurp ".shared/kit-defaults.edn")) [:agent :login]))')"
 local=.claude/settings.local.json

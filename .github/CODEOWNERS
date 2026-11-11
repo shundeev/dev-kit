@@ -1,0 +1,4 @@
+# The owner reviews every file: with "Require review from Code Owners" in the main ruleset,
+# no pull request merges without their approval, whoever else approves it.
+# Projects get the same file from `kit init` (bin/kit, codeowners-text).
+* @u473t8
