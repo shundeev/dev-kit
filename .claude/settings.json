@@ -46,6 +46,7 @@
       "Bash(gh project field-list *)",
       "Bash(bash .claude/skills/gh-project-workflow/scripts/start_issue_flow.sh *)",
       "Bash(bash .claude/skills/gh-project-workflow/scripts/finish_issue_flow.sh *)",
+      "Bash(bash .claude/skills/gh-project-workflow/scripts/merge_issue_flow.sh *)",
       "Bash(jq *)",
       "Bash(test/selftest.sh *)",
       "Bash(shellcheck *)",
@@ -54,7 +55,6 @@
     ],
     "ask": [
       "Bash(gh pr merge *)",
-      "Bash(bash .claude/skills/gh-project-workflow/scripts/merge_issue_flow.sh *)",
       "Bash(gh api *)",
       "Bash(gh issue close *)",
       "Bash(gh issue delete *)",

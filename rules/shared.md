@@ -16,8 +16,11 @@ These rules apply to every agent working in this repository (Claude Code, Codex,
 - Priority is Urgent / High / Medium / Low. Judge it; never leave it empty.
 - Branches come from `gh issue develop` (the start script), named `<number>-<slug>`.
   Never `git checkout -b` / `git switch -c`.
-- Never push to `main`; it accepts pull requests only. Merge only when the owner says so
-  (`merge_issue_flow.sh` and `gh pr merge` ask for confirmation).
+- Never push to `main`; it accepts pull requests only. A pull request merges only on the
+  owner's Approve of its latest commit and only on top of the latest `main`; the ruleset
+  enforces both. The agent never approves. Auto-merge, turned on by the finish script, merges
+  once both hold; `merge_issue_flow.sh` brings a branch that fell behind up to date (merging
+  `main` in keeps the approval) and closes out.
 - Not part of the flow: answering a question, reading or measuring, continuing an issue that is
   already active, or the owner saying to skip GitHub.
 - A refusal from a hook or a permission rule stops the work and goes to the owner: what you

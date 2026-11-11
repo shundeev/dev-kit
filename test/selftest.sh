@@ -78,7 +78,11 @@ has() { perm "$1" | grep -qxF -- "$2"; }
 for rule in "Bash(git *)" "Bash(gh *)" "Bash(bb *)"; do
   has allow "$rule" && bad "no blanket allow: $rule" || ok "no blanket allow: $rule"
 done
-for rule in "Bash(gh pr merge *)" "Bash(bash .claude/skills/gh-project-workflow/scripts/merge_issue_flow.sh *)" \
+# The merge script runs without a prompt: the server merges only on the owner's Approve (#22, #37).
+has allow "Bash(bash .claude/skills/gh-project-workflow/scripts/merge_issue_flow.sh *)" \
+  && ! has ask "Bash(bash .claude/skills/gh-project-workflow/scripts/merge_issue_flow.sh *)" \
+  && ok "the merge script runs without a prompt" || bad "the merge script still asks"
+for rule in "Bash(gh pr merge *)" \
             "Bash(gh api *)" "Bash(git reset --hard *)" "Bash(git clean *)" "Bash(git branch -D *)"; do
   has ask "$rule" && ok "asks: $rule" || bad "asks: $rule"
 done
@@ -396,6 +400,8 @@ printf 'What changed\n\nADR: none\n' > "$WORK/body.md"; : > "$FAKE_GH_LOG"
 expect_exit 0 "finish: a closed PR does not count; a new one is opened" flow finish_issue_flow.sh --pr-body-file "$WORK/body.md"
 grep -q '^pr create' "$FAKE_GH_LOG" && ok "  gh pr create called" || bad "  no pr create" "$(cat "$FAKE_GH_LOG")"
 grep -q 'pr list .*--state open' "$FAKE_GH_LOG" && ok "  only open PRs looked up" || bad "  lookup not limited to open PRs"
+grep -q '^pr merge https://github.com/u473t8/fake/pull/99 --auto --squash' "$FAKE_GH_LOG" \
+  && ok "  auto-merge turned on: the owner's Approve merges it" || bad "  auto-merge not turned on" "$(cat "$FAKE_GH_LOG")"
 contains "  subject from the issue title, first letter lowered" "Subject: feat(GH-12): add Landing page" "$LAST"
 [ "$(git log -1 --format=%s)" = "feat(GH-12): add Landing page" ] && ok "  commit carries the subject" || bad "  commit subject"
 [ "$(git rev-parse origin/12-landing 2>/dev/null)" = "$(head_now)" ] && ok "  branch pushed" || bad "  branch not pushed"
@@ -417,16 +423,37 @@ contains "  an explicit --type wins" "Subject: docs(GH-13): correct a typo" "$LA
 git switch -q 12-landing
 echo "https://github.com/u473t8/fake/pull/99" > "$FAKE/pr-list"
 
-echo OPEN > "$FAKE/pr-state"
+export GHWF_MERGE_WAIT=0
+echo "REVIEW_REQUIRED BLOCKED" > "$FAKE/pr-review"; echo OPEN > "$FAKE/pr-state"; : > "$FAKE_GH_LOG"
+expect_exit 1 "merge: refuses without the owner's Approve" flow merge_issue_flow.sh
+contains "  says what it waits for" "Waiting for the owner's Approve" "$LAST"
+if grep -q '^pr merge' "$FAKE_GH_LOG"; then bad "  tried to merge"; else ok "  no merge attempted"; fi
+echo "APPROVED CLEAN" > "$FAKE/pr-review"
+touch "$FAKE/no-auto-merge"; : > "$FAKE_GH_LOG"
+expect_exit 1 "merge: without auto-merge in the repository" flow merge_issue_flow.sh
+calls="$(grep -E '^pr merge' "$FAKE_GH_LOG" | sed 's/ https:[^ ]*//' | tr '\n' ',')"
+[ "$calls" = "pr merge --auto --squash,pr merge --squash," ] && ok "  falls back to a plain squash merge" || bad "  no fallback" "$calls"
+rm "$FAKE/no-auto-merge"
 expect_exit 1 "merge: a PR that did not merge keeps its branch" flow merge_issue_flow.sh
+contains "  says it is not merged yet" "not merged yet" "$LAST"
 git rev-parse -q --verify refs/heads/12-landing >/dev/null && ok "  branch kept" || bad "  branch deleted"
 
 W="$WORK/main-wt"; git worktree add -q "$W" main
-echo MERGED > "$FAKE/pr-state"
+echo "APPROVED BEHIND" > "$FAKE/pr-review"; echo MERGED > "$FAKE/pr-state"; : > "$FAKE_GH_LOG"
 expect_exit 0 "merge: works while main is checked out in another worktree" flow merge_issue_flow.sh
+calls="$(grep -E '^pr (update-branch|merge)' "$FAKE_GH_LOG" | cut -d' ' -f1,2 | tr '\n' ',')"
+[ "$calls" = "pr update-branch,pr merge," ] && ok "  a branch behind main is updated, then merged" || bad "  update and merge order" "$calls"
 git rev-parse -q --verify refs/heads/12-landing >/dev/null && bad "  local branch left" || ok "  local branch deleted"
 git ls-remote --exit-code --heads origin 12-landing >/dev/null 2>&1 && bad "  remote branch left" || ok "  remote branch deleted"
 [ "$(git rev-parse --abbrev-ref HEAD)" = HEAD ] && ok "  this worktree detached on the base" || bad "  not detached"
+
+git switch -q -c 14-auto origin/main && git push -q -u origin 14-auto
+: > "$FAKE/pr-list"; echo "https://github.com/u473t8/fake/pull/98" > "$FAKE/pr-list-merged"; : > "$FAKE_GH_LOG"
+expect_exit 0 "merge: a PR already merged by GitHub gets the closeout only" flow merge_issue_flow.sh
+if grep -q '^pr merge' "$FAKE_GH_LOG"; then bad "  merged again"; else ok "  no second merge"; fi
+grep -q '^project item-add' "$FAKE_GH_LOG" && ok "  the card is moved to Done" || bad "  no board update"
+git rev-parse -q --verify refs/heads/14-auto >/dev/null && bad "  local branch left" || ok "  local branch deleted"
+unset GHWF_MERGE_WAIT
 cd "$P" || exit 1
 
 echo

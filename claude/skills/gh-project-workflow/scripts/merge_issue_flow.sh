@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Merges an issue's pull request. Run it only when the owner said to merge.
+# Merges an issue's pull request once the owner has approved it, or closes out one that
+# GitHub's auto-merge already merged.
 #
-# A separate command on purpose: the generated .claude/settings.json puts
-# `bash .claude/skills/gh-project-workflow/scripts/merge_issue_flow.sh *` under "ask",
-# so an agent cannot start a merge without the owner confirming it. (Permission rules see
-# only the command the agent types, never the `gh pr merge` inside this script.)
+# The owner's Approve of the latest commit is the word to merge (rules/shared.md), and the
+# server enforces it: the main ruleset counts only an approval from the owners team (#22) and
+# merges only a branch that contains the latest main (#37). So this script runs without a
+# permission prompt; its own checks only say what is missing.
 set -euo pipefail
 
 # shellcheck source=board.sh
@@ -14,9 +15,12 @@ usage() {
   cat <<'USAGE'
 Usage: merge_issue_flow.sh [options]
 
-Run from the issue branch. Squash-merges the branch's pull request, confirms GitHub reports
-it MERGED, sets the board Status to "Done", deletes the branch locally and on GitHub, and
-switches back to the base branch. A pull request that did not merge keeps its branch.
+Run from the issue branch. When the pull request is open, it needs the owner's Approve of the
+latest commit. A branch behind the base is first updated by merging the base into it, which
+keeps the approval. The script then turns on auto-merge (squash) and waits until GitHub reports
+the pull request MERGED. When GitHub already merged it, only the closeout runs: board Status
+"Done", the branch deleted locally and on GitHub, back to the base branch. A pull request that
+did not merge keeps its branch.
 
 Options:
   --repo <owner/repo>           Default: GHWF_REPO, then the origin remote
@@ -26,6 +30,8 @@ Options:
   --status-field <name>         Default: GHWF_STATUS_FIELD or Status
   --done-status <option>        Default: Done
   --help                        Show this help
+
+Environment: GHWF_MERGE_WAIT, seconds to wait for GitHub to merge (default 900).
 USAGE
 }
 
@@ -66,16 +72,43 @@ branch_name="$(git rev-parse --abbrev-ref HEAD)"
 [[ "$branch_name" =~ ^([0-9]+)- ]] || die "Branch '$branch_name' is not <number>-<slug>"
 issue_number="${BASH_REMATCH[1]}"
 
+merge_wait="${GHWF_MERGE_WAIT:-900}"
+
 # Only an open pull request counts: `gh pr view <branch>` also returns closed and merged ones.
 pr_url="$(gh pr list -R "$repo" --head "$branch_name" --state open --json url --jq '.[0].url // empty')"
-[[ -n "$pr_url" ]] || die "No open pull request for branch '$branch_name'"
-
-gh pr merge "$pr_url" --squash
+if [[ -z "$pr_url" ]]; then
+  # Merged by GitHub's auto-merge after the owner's Approve: only the closeout is left.
+  pr_url="$(gh pr list -R "$repo" --head "$branch_name" --state merged --json url --jq '.[0].url // empty')"
+  [[ -n "$pr_url" ]] || die "No open or merged pull request for branch '$branch_name'"
+  echo "Already merged by GitHub: $pr_url"
+else
+  read -r review_decision merge_state <<<"$(gh pr view "$pr_url" --json reviewDecision,mergeStateStatus \
+    --jq '"\(.reviewDecision // "NONE") \(.mergeStateStatus)"')"
+  [[ "$review_decision" == "APPROVED" ]] \
+    || die "Waiting for the owner's Approve of the latest commit (review: $review_decision): $pr_url"
+  if [[ "$merge_state" == "BEHIND" ]]; then
+    echo "The branch is behind $base_branch: merging $base_branch into it; the approval stays."
+    gh pr update-branch "$pr_url"
+  fi
+  # Auto-merge merges at once when everything is in place, or as soon as the checks pass.
+  # Without auto-merge in the repository, a plain squash merge works when nothing is pending.
+  if ! auto_out="$(gh pr merge "$pr_url" --auto --squash 2>&1)"; then
+    echo "Auto-merge not available ($auto_out); trying a plain squash merge." >&2
+    gh pr merge "$pr_url" --squash \
+      || die "Could not merge $pr_url. If checks are still running, run this again when they pass; for a merge that waits by itself, the owner turns on Settings > General > 'Allow auto-merge' (dev-kit#37)."
+  fi
+fi
 
 # Only a confirmed merge may delete the branch: cleaning up after a failed merge closes
 # the pull request with the work still in it.
 pr_state="$(gh pr view "$pr_url" --json state --jq '.state')"
-[[ "$pr_state" == "MERGED" ]] || die "Pull request is $pr_state, not MERGED; branch '$branch_name' kept"
+waited=0
+while [[ "$pr_state" != "MERGED" && "$waited" -lt "$merge_wait" ]]; do
+  sleep 10; waited=$((waited + 10))
+  pr_state="$(gh pr view "$pr_url" --json state --jq '.state')"
+done
+[[ "$pr_state" == "MERGED" ]] \
+  || die "Pull request is $pr_state, not merged yet; auto-merge stays on and branch '$branch_name' is kept. Run this again later: $pr_url"
 
 if [[ -n "$owner" && -n "$project_number" ]]; then
   issue_url="$(gh issue view "$issue_number" -R "$repo" --json url --jq '.url')"

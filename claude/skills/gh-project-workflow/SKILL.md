@@ -1,6 +1,6 @@
 ---
 name: gh-project-workflow
-description: "GitHub mechanics of the delivery flow: file an issue on the project board with Status/Priority/Showcase and create its branch (start_issue_flow.sh), then commit, push, open the pull request and move the card to In review (finish_issue_flow.sh), and after the owner approves, squash-merge and move it to Done (merge_issue_flow.sh). Use when repo-task-delivery delegates the GitHub steps, or when the user explicitly asks to file an issue, open or merge a PR."
+description: "GitHub mechanics of the delivery flow: file an issue on the project board with Status/Priority/Showcase and create its branch (start_issue_flow.sh), then commit, push, open the pull request and move the card to In review (finish_issue_flow.sh), and once the owner approves, merge and move the card to Done (auto-merge, merge_issue_flow.sh). Use when repo-task-delivery delegates the GitHub steps, or when the user explicitly asks to file an issue, open or merge a PR."
 ---
 
 # GH Project Workflow
@@ -58,23 +58,30 @@ bash .claude/skills/gh-project-workflow/scripts/finish_issue_flow.sh \
 - The PR body must contain an `ADR:` line (`ADR: none` or `ADR: adr/NNNN-....md`) and states
   what was verified and what was not. `Closes #<issue>` is added when missing.
 - `--no-commit` pushes and opens the PR for commits already on the branch.
-- Never merges. The card moves to **In review** — the owner's signal to look.
+- Never merges itself, but turns on auto-merge (squash): the owner's Approve of the latest
+  commit is the word to merge. The card moves to **In review**, the owner's signal to look.
+  If the repository does not allow auto-merge, it warns and names the setting.
 
 ## Merge after approval
 
-Only when the owner said to merge:
+The owner's Approve of the latest commit is the word; no chat message is needed. Usually
+auto-merge has merged the PR by the time the agent looks. Either way, run:
 
 ```bash
 bash .claude/skills/gh-project-workflow/scripts/merge_issue_flow.sh
 ```
 
-A separate script so that the permission rules can make it ask the owner every time; it is
-under `ask` in `.claude/settings.json`, like `gh pr merge`.
+- Open PR: refuses without the owner's Approve and says so. A branch behind `main` is updated
+  first by merging `main` into it, which keeps the approval (tested on #45). Then it turns on
+  auto-merge and waits up to `GHWF_MERGE_WAIT` seconds (900) for GitHub to merge.
+- PR already merged by auto-merge: only the closeout.
+- Closeout after a confirmed `MERGED`: card **Done**, branch deleted locally and on GitHub,
+  back to `main` (or detached on `origin/main` when `main` is checked out in another worktree).
+  A PR that did not merge keeps its branch.
 
-Squash-merges, confirms the PR is `MERGED`, moves the card to **Done**, deletes the branch
-locally and on GitHub, returns to `main` (or detaches on `origin/main` when `main` is checked out
-in another worktree). A PR that did not merge keeps its branch.
-The `main` ruleset requires every review thread resolved before merge.
+It runs without a permission prompt: the server enforces the approval, and the `main` ruleset
+merges only an up-to-date branch with every review thread resolved. A raw `gh pr merge` stays
+under `ask`.
 
 ## Dependencies between issues
 
