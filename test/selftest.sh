@@ -72,7 +72,8 @@ for rule in "Bash(gh pr merge *)" "Bash(bash .claude/skills/gh-project-workflow/
             "Bash(gh api *)" "Bash(git reset --hard *)" "Bash(git clean *)" "Bash(git branch -D *)"; do
   has ask "$rule" && ok "asks: $rule" || bad "asks: $rule"
 done
-for rule in "Bash(git push --force *)" "Bash(git push * --force *)" "Bash(git push -f *)" "Bash(gh repo delete *)"; do
+for rule in "Bash(git push --force *)" "Bash(git push * --force *)" "Bash(git push * --force)" "Bash(git push -f *)" \
+            "Bash(git push * -f)" "Bash(git push * +*)" "Bash(gh repo delete *)"; do
   has deny "$rule" && ok "denies: $rule" || bad "denies: $rule"
 done
 has allow "Bash(.shared/bin/kit *)" && ok "kit path substituted" || bad "kit path substituted"
