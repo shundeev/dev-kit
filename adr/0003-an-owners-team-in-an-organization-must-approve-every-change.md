@@ -20,7 +20,13 @@ Requiring a review from the code owners does not close it. With `* @u473t8` in C
 
 The owner's repositories move into an organization they own. A team `owners` (the owner, later colleagues) has Write. The `main` ruleset requires 1 approving review and lists `owners` as required reviewers for every file; the owner stays the only bypass actor, in pull-request mode. The agent keeps Write: it pushes branches and merges after an approval, but its approval never satisfies the team requirement.
 
-This decision holds only if a test in a throwaway organization shows that the agent's approval on a PR authored by a team member leaves it blocked. The pull request that carries this ADR stays a draft until that test passes; if it fails, this ADR is rewritten for the fork option before it is merged.
+The organization is `shundeev`; the repositories become `shundeev/dev-kit` and `shundeev/site`. CODEOWNERS names `@shundeev/owners`.
+
+A test in a throwaway organization confirmed the decision before the move (2026-11-11):
+- the agent's approval on a PR by a member of `owners` left it blocked, and GitHub refused the agent's merge with "Waiting on required approvals from 1 team";
+- the owner's approval on the agent's PR let the agent merge it.
+
+The record is on PR #39.
 
 ## Consequences
 

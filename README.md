@@ -18,7 +18,7 @@ requests only.
 ## Use in a project
 
 ```sh
-git submodule add https://github.com/u473t8/dev-kit .shared
+git submodule add https://github.com/shundeev/dev-kit .shared
 .shared/bin/kit init --showcase <board Showcase option> [--modules clojure] [--scaffold]
 git add -A && git commit -m "chore: add dev-kit"
 ```
@@ -80,14 +80,15 @@ and the workflow file in the project never changes.
 ## The agent's GitHub identity
 
 The agent works under its own GitHub account (`:agent` in `kit-defaults.edn`), so GitHub tells
-its actions from the owner's. Each repository's `main` ruleset requires one approving review
-and a review from the code owners; a push after the approval dismisses it. `.github/CODEOWNERS`
-makes the people in `:owners` the code owners of every file, so a pull request merges only with
-the approval of one of them — the agent's approval does not count, and nobody can approve their
-own. A colleague joins by being added to `:owners` (and given Write access); then the owner and
-the colleague review each other's pull requests and the agent's. The owner is the ruleset's only bypass actor, in pull-request mode: they
-can merge a pull request without a review (needed for their own, which nobody else can approve),
-and still cannot push to `main` directly.
+its actions from the owner's. The repositories live in the organization `shundeev` (ADR-0003).
+Each `main` ruleset requires one approving review and names the team `shundeev/owners` as the
+required reviewer of every file, so a pull request merges only with the approval of a team
+member; the agent's approval never counts, and nobody can approve their own. A push after the
+approval dismisses it. The owner is the only bypass actor, in pull-request mode: they merge
+their own pull requests that way, and still cannot push to `main` directly. `.github/CODEOWNERS`
+(from `:owners`) names the same team. CODEOWNERS alone was not enough: GitHub counts the
+author's own code ownership, so the agent's approval completed a pull request the owner had
+opened (#22). A colleague joins by being added to the team.
 
 - Once per machine the account is logged into its own gh config, `~/.config/gh-agent`. `kit init`
   run in a terminal does it: it starts gh's browser login, the owner finishes it signed in as the
@@ -114,7 +115,7 @@ session until the sandbox (ADR-0001, choice 3) denies them.
 ## kit.edn
 
 ```clojure
-{:repo     "u473t8/shundeev"
+{:repo     "shundeev/site"
  :showcase "Site"
  :modules  #{}}          ; #{:clojure} for the shared zprint/clj-kondo setup
 ```
