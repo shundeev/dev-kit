@@ -407,6 +407,16 @@ expect_exit 0 "finish: an open PR needs no body file" flow finish_issue_flow.sh 
 grep -q '^pr create' "$FAKE_GH_LOG" && bad "  opened a second PR" || ok "  no second PR"
 contains "  subject from the commit message file" "Subject: fix(GH-12): handle more" "$LAST"
 
+git switch -q -c 13-typo main
+echo typo >> f; git commit -qam "fix(GH-13): correct the typo"
+: > "$FAKE/pr-list"; : > "$FAKE_GH_LOG"
+expect_exit 0 "finish --no-commit without --type" flow finish_issue_flow.sh --no-commit --summary "correct a typo" --pr-body-file "$WORK/body.md"
+contains "  the PR type comes from the branch's first commit" "Subject: fix(GH-13): correct a typo" "$LAST"
+expect_exit 0 "finish --no-commit with --type" flow finish_issue_flow.sh --no-commit --type docs --summary "correct a typo" --pr-body-file "$WORK/body.md"
+contains "  an explicit --type wins" "Subject: docs(GH-13): correct a typo" "$LAST"
+git switch -q 12-landing
+echo "https://github.com/u473t8/fake/pull/99" > "$FAKE/pr-list"
+
 echo OPEN > "$FAKE/pr-state"
 expect_exit 1 "merge: a PR that did not merge keeps its branch" flow merge_issue_flow.sh
 git rev-parse -q --verify refs/heads/12-landing >/dev/null && ok "  branch kept" || bad "  branch deleted"

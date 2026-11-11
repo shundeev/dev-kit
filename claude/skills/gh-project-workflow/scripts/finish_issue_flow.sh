@@ -20,7 +20,8 @@ GitHub appends the PR number on squash: "feat(GH-12): add landing page (#13)".
 
 Options:
   --issue <number>              Issue number (default: from the branch name)
-  --type <type>                 feat|fix|docs|refactor|test|perf|build|ci|chore (default: feat)
+  --type <type>                 feat|fix|docs|refactor|test|perf|build|ci|chore (default: the type of
+                                the branch's first commit, else feat)
   --summary <text>              Subject text after "type(GH-n): " (default: the issue title)
   --commit-message-file <path>  Full commit message (subject, body, trailers); overrides --summary for the commit
   --pr-body-file <path>         PR description. Required when the PR is opened. Must contain a line
@@ -72,7 +73,7 @@ status_field="${GHWF_STATUS_FIELD:-Status}"
 review_status="${GHWF_REVIEW_STATUS:-In review}"
 
 issue_number=""
-commit_type="feat"
+commit_type=""
 summary=""
 commit_message_file=""
 pr_body_file=""
@@ -98,6 +99,14 @@ while [[ $# -gt 0 ]]; do
     *) die "Unknown argument: $1" ;;
   esac
 done
+
+# Without --type the PR follows the branch: the type of its first `type(GH-n): …` commit,
+# else feat. (`--no-commit --summary` used to title a branch of fixes `feat`.)
+if [[ -z "$commit_type" ]]; then
+  first_subject="$(git log --reverse --format=%s "origin/$base_branch..HEAD" 2>/dev/null | head -n1 || true)"
+  [[ "$first_subject" =~ ^([a-z]+)\(GH-[0-9]+\):\  ]] && commit_type="${BASH_REMATCH[1]}"
+  commit_type="${commit_type:-feat}"
+fi
 
 case "$commit_type" in
   feat|fix|docs|refactor|test|perf|build|ci|chore) ;;
