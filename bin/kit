@@ -1,21 +1,25 @@
 #!/usr/bin/env bb
 ;; dev-kit: lays out and checks the shared setup of a project that mounts dev-kit at .shared
 ;;
-;;   .shared/bin/kit init   [--repo owner/name] [--showcase NAME] [--modules clojure] [--scaffold]
-;;   .shared/bin/kit doctor [--ci] [--quiet]
+;;   .shared/bin/kit init     [--repo owner/name] [--showcase NAME] [--modules clojure] [--scaffold]
+;;   .shared/bin/kit init     --local   per-machine items only (the SessionStart hook runs it)
+;;   .shared/bin/kit doctor   [--ci] [--quiet]
 ;;   .shared/bin/kit modules
+;;   .shared/bin/kit identity [--dir PATH]   the agent's GitHub identity alone, for any repository
 ;;
 ;; Two kinds of files:
 ;;   scaffold — created once if missing, then owned by the project (kit.edn, LICENSE, the
 ;;              project part of AGENTS.md; with --scaffold also README.md, adr/, docs/experiments/)
 ;;   managed  — owned by dev-kit, rewritten by init, verified by doctor (the AGENTS.md block,
 ;;              .claude/settings.json, .claude/skills links, .claude/agents copies,
-;;              .github/workflows/ci.yml, clojure module: .zprint.edn link, clj-kondo config-paths)
+;;              .github/workflows/ci.yml, clojure module: .zprint.edn link, clj-kondo config-paths;
+;;              per machine and git-ignored: the agent identity env in .claude/settings.local.json)
 (ns kit
   (:require
     [babashka.fs :as fs]
     [babashka.process :as p]
     [cheshire.core :as json]
+    [clj-yaml.core :as yaml]
     [clojure.edn :as edn]
     [clojure.string :as str]
     [rewrite-clj.zip :as z]))
@@ -32,11 +36,17 @@
   (System/exit 2))
 
 
+(defn sh-in
+  "Runs a command in dir. Returns trimmed stdout, or nil when it fails."
+  [dir & args]
+  (let [{:keys [exit out]} (apply p/sh {:dir (str dir) :continue true} args)]
+    (when (zero? exit) (str/trim out))))
+
+
 (defn sh
   "Runs a command in the project root. Returns trimmed stdout, or nil when it fails."
   [& args]
-  (let [{:keys [exit out]} (apply p/sh {:dir (str root) :continue true} args)]
-    (when (zero? exit) (str/trim out))))
+  (apply sh-in root args))
 
 
 (defn rel [& parts] (str (apply fs/path root parts)))
@@ -50,11 +60,13 @@
 (def config-file (rel "kit.edn"))
 
 
+(defn read-defaults [] (edn/read-string (slurp (str (fs/path kit-dir "kit-defaults.edn")))))
+
+
 (defn read-config
   []
   (when-let [s (slurp-if config-file)]
-    (merge (edn/read-string (slurp (str (fs/path kit-dir "kit-defaults.edn"))))
-           (edn/read-string s))))
+    (merge (read-defaults) (edn/read-string s))))
 
 
 (defn clojure? [cfg] (contains? (set (:modules cfg)) :clojure))
@@ -87,6 +99,14 @@
         :else b))
 
 
+(defn json-text
+  [m]
+  (str (json/generate-string m {:pretty {:indentation 2
+                                         :indent-arrays? true
+                                         :object-field-value-separator ": "}})
+       "\n"))
+
+
 (defn settings-text
   [cfg]
   (let [base (-> (slurp (str (fs/path kit-dir "claude" "settings.base.json")))
@@ -104,12 +124,171 @@
                            "GHWF_REPO"           (:repo cfg)
                            "GHWF_DEFAULT_BASE"   (:base cfg)
                            "GHWF_SHOWCASE"       (:showcase cfg)})}]
-    (str (json/generate-string (deep-merge (deep-merge (deep-merge base clj) env)
-                                           (json/parse-string (json/generate-string (:claude-settings cfg {}))))
-                               {:pretty {:indentation 2
-                                         :indent-arrays? true
-                                         :object-field-value-separator ": "}})
-         "\n")))
+    (json-text (deep-merge (deep-merge (deep-merge base clj) env)
+                           (json/parse-string (json/generate-string (:claude-settings cfg {})))))))
+
+
+;; ------------------------------------------------------------------ agent identity
+;; The agent works under its own GitHub account (kit.edn :agent), so the main ruleset's required
+;; review is a review by the owner. Claude Code applies settings env to the session, its hooks
+;; and every command it runs; the owner's own terminal is untouched.
+
+(def local-settings ".claude/settings.local.json")
+
+
+(defn expand-home
+  "~ as the shell and gh read it: from HOME, not from the JVM's user.home."
+  [path]
+  (str/replace-first (str path) #"^~(?=/|$)"
+                     (str/re-quote-replacement (or (not-empty (System/getenv "HOME")) (System/getProperty "user.home")))))
+
+
+(defn agent-env
+  [{:keys [login email gh-config-dir]}]
+  {"GH_CONFIG_DIR"       (expand-home gh-config-dir)
+   ;; git takes config from the environment too: SSH remotes go over HTTPS, and the github.com
+   ;; credential helpers are reset to gh alone, which answers with GH_CONFIG_DIR's login.
+   "GIT_CONFIG_COUNT"    "3"
+   "GIT_CONFIG_KEY_0"    "url.https://github.com/.insteadOf"
+   "GIT_CONFIG_VALUE_0"  "git@github.com:"
+   "GIT_CONFIG_KEY_1"    "credential.https://github.com.helper"
+   "GIT_CONFIG_VALUE_1"  ""
+   "GIT_CONFIG_KEY_2"    "credential.https://github.com.helper"
+   "GIT_CONFIG_VALUE_2"  "!gh auth git-credential"
+   "GIT_AUTHOR_NAME"     login
+   "GIT_AUTHOR_EMAIL"    email
+   "GIT_COMMITTER_NAME"  login
+   "GIT_COMMITTER_EMAIL" email})
+
+
+(defn read-json-object
+  "The JSON object in file f: {} when the file is missing, ::invalid when it holds no object."
+  [f]
+  (if-let [s (slurp-if f)]
+    (let [m (try (json/parse-string s) (catch Exception _ nil))]
+      (if (map? m) m ::invalid))
+    {}))
+
+
+(defn local-env-problem
+  [dir env]
+  (let [f (str (fs/path dir local-settings))
+        m (read-json-object f)]
+    (cond (not (fs/exists? f)) "missing"
+          (= ::invalid m) "is not a JSON object"
+          (not= env (select-keys (get m "env") (keys env))) "env differs from the agent identity in kit.edn")))
+
+
+(defn write-local-env!
+  "Merges env into the file's env; every other key, the owner's own, stays."
+  [dir env]
+  (let [f (str (fs/path dir local-settings))
+        m (read-json-object f)]
+    (when (= ::invalid m) (die local-settings "is not a JSON object; fix or remove it, then run again"))
+    (fs/create-dirs (fs/parent f))
+    (spit f (json-text (update m "env" #(into (sorted-map) (merge % env)))))))
+
+
+(defn ignored-problem
+  [dir path]
+  (when-not (sh-in dir "git" "check-ignore" "-q" path) "is not git-ignored, so it could be committed"))
+
+
+(defn ignore!
+  "Adds path to the repository's info/exclude: per clone, shared by its worktrees."
+  [dir path]
+  (let [ex (or (sh-in dir "git" "rev-parse" "--path-format=absolute" "--git-path" "info/exclude")
+               (die (str dir) "is not a git repository"))
+        s  (slurp-if ex)]
+    (fs/create-dirs (fs/parent ex))
+    (spit ex (str (when (and s (not (str/blank? s)) (not (str/ends-with? s "\n"))) "\n") "/" path "\n")
+          :append true)))
+
+
+(defn gh-config-dir-in-use
+  "Where gh in this process reads its login from."
+  []
+  (or (not-empty (System/getenv "GH_CONFIG_DIR"))
+      (some-> (not-empty (System/getenv "XDG_CONFIG_HOME")) (fs/path "gh") str)
+      (expand-home "~/.config/gh")))
+
+
+(defn gh-login
+  "The github.com login stored in a gh config dir, read offline; nil when logged out."
+  [dir]
+  (some-> (slurp-if (str (fs/path dir "hosts.yml")))
+          (yaml/parse-string :keywords false)
+          (get-in ["github.com" "user"])))
+
+
+(defn same-dir? [a b] (= (str (fs/normalize (fs/absolutize a))) (str (fs/normalize (fs/absolutize b)))))
+
+
+(defn agent-login-problem
+  "nil when the agent's gh config holds the agent's login."
+  [{:keys [login gh-config-dir]}]
+  (let [dir  (expand-home gh-config-dir)
+        user (gh-login dir)]
+    (cond (nil? user) (str "the agent's gh config " dir " is not logged in")
+          (not= login user) (str "the agent's gh config " dir " is logged in as " user ", not " login))))
+
+
+(defn interactive?
+  "A person at a terminal: stdin and stdout are a tty, and this is not a Claude session."
+  []
+  (and (not (System/getenv "CLAUDECODE"))
+       (try (boolean (some-> (System/console) (.isTerminal)))
+            (catch Exception _ (some? (System/console))))))
+
+
+(defn login-agent!
+  "Logs the agent's account into its gh config with gh's browser flow, attached to this
+  terminal. The person finishes it in the browser, signed in as the agent."
+  [{:keys [login gh-config-dir]}]
+  (let [dir  (expand-home gh-config-dir)
+        opts {:continue true :extra-env {"GH_CONFIG_DIR" dir}}]
+    (println (str "\nLogging the agent's GitHub account " login " into " dir ".\n"
+                  "On the github.com/login/device page check that you are signed in as " login
+                  " (switch account, or use a private window), then enter the code gh shows.\n"))
+    (when-let [user (gh-login dir)]
+      (p/shell opts "gh" "auth" "logout" "--hostname" "github.com" "--user" user))
+    (p/shell opts "gh" "auth" "login" "--hostname" "github.com" "--git-protocol" "https" "--web"
+             "--scopes" "project,workflow")))
+
+
+(defn offer-login!
+  "Starts the agent's login when it is missing or wrong and a person is at the terminal."
+  [agent]
+  (when (and (agent-login-problem agent) (interactive?) (sh "bash" "-c" "command -v gh"))
+    (login-agent! agent)))
+
+
+(defn identity-problems
+  "Outside a Claude session: a warning when the agent is not logged in on this machine.
+  Inside one (CLAUDECODE is set): gh must act as the agent, never as the owner."
+  [cfg]
+  (when-let [{:keys [login gh-config-dir] :as agent} (:agent cfg)]
+    (let [session? (System/getenv "CLAUDECODE")
+          want     (expand-home gh-config-dir)
+          have     (gh-config-dir-in-use)
+          user     (gh-login have)
+          token    (first (filter #(not-empty (System/getenv %)) ["GH_TOKEN" "GITHUB_TOKEN"]))]
+      (cond
+        (and session? token)
+        [[:fail (str token " is set, so gh in this Claude session uses that token, not the agent's account")
+          (str "unset " token " in the shell that starts claude, then restart the session")]]
+
+        (and session? (not (same-dir? want have)))
+        [[:fail (str "this Claude session runs gh from " have (if user (str ", logged in as " user) ", logged out")
+                     ", not from the agent's config " want)
+          (if (local-env-problem root (agent-env agent))
+            (str mount "/bin/kit init, then restart this Claude session")
+            (str "restart this Claude session: " local-settings " is in place and applies at start"))]]
+
+        :else
+        (when-let [problem (agent-login-problem agent)]
+          [[(if session? :fail :warn) problem
+            (str "in your own terminal: " mount "/bin/kit init — it logs " login " in")]])))))
 
 
 (def agent-marker
@@ -136,6 +315,9 @@
       :content (slurp (str (fs/path kit-dir "managed" "ci.yml")))}
      {:kind :file :path ".claude/hooks/pretooluse.sh"
       :content (str/replace (slurp (str (fs/path kit-dir "managed" "pretooluse.sh"))) "{{kit}}" mount)}]
+    (when-let [a (:agent cfg)]
+      [{:kind :ignored :path local-settings :local true}
+       {:kind :local-env :path local-settings :env (agent-env a) :local true}])
     (for [dir (sort (fs/list-dir (fs/path kit-dir "claude" "skills")))
           :when (fs/directory? dir)
           :let [n (str (fs/file-name dir))]]
@@ -147,7 +329,7 @@
     (when (clojure? cfg)
       [{:kind :symlink :path ".zprint.edn" :target (str mount "/clojure/.zprint.edn")}
        {:kind :kondo :path ".clj-kondo/config.edn"}])
-    [{:kind :git-config :key "core.hooksPath" :value (str mount "/githooks")}]))
+    [{:kind :git-config :key "core.hooksPath" :value (str mount "/githooks") :local true}]))
 
 
 (defn stale-paths
@@ -191,9 +373,13 @@
 
 (defn check
   "nil when the item is in place, otherwise a one-line problem."
-  [{:keys [kind path content target key value]}]
+  [{:keys [kind path content target key value env]}]
   (let [f (some-> path rel)]
     (case kind
+      :ignored (ignored-problem root path)
+
+      :local-env (local-env-problem root env)
+
       :file
       (cond (not (fs/exists? f)) "missing"
             (not= content (slurp-if f)) "differs from what dev-kit generates")
@@ -277,13 +463,13 @@
     (concat
       (submodule-problems)
       (for [item (managed-items cfg)
-            :when (not (and ci (= :git-config (:kind item))))
+            :when (not (and ci (:local item)))
             :let [problem (check item)]
             :when problem]
         [:fail (str (label item) ": " problem) (str mount "/bin/kit init")])
       (for [p (stale-paths (managed-items cfg))]
         [:fail (str p ": left over from dev-kit, no longer managed") (str mount "/bin/kit init")])
-      (when-not ci (concat (tool-problems cfg) (claude-version-problems))))))
+      (when-not ci (concat (tool-problems cfg) (claude-version-problems) (identity-problems cfg))))))
 
 
 ;; ------------------------------------------------------------------ init
@@ -296,11 +482,15 @@
 
 (defn fix!
   "Brings one managed item in place. Returns a description when something changed."
-  [{:keys [kind path content target key value] :as item}]
+  [{:keys [kind path content target key value env] :as item}]
   (when-let [problem (check item)]
     (let [f (some-> path rel)]
       (case kind
         :file (write! f content)
+
+        :ignored (ignore! root path)
+
+        :local-env (write-local-env! root env)
 
         :block
         (let [s (slurp-if f)]
@@ -386,6 +576,15 @@
     (System/exit (if (some #(= :fail (first %)) ps) 1 0))))
 
 
+(defn init-local
+  "Per-machine items only (settings.local.json, local git config), never a committed file:
+  the SessionStart hook runs it, so a fresh clone or worktree sets itself up."
+  []
+  (when-let [cfg (read-config)]
+    (doseq [c (keep fix! (filter :local (managed-items cfg)))]
+      (println "dev-kit init --local: wrote" c))))
+
+
 (defn init
   [opts]
   (when-not (fs/exists? config-file) (create-config! opts))
@@ -400,9 +599,33 @@
     (if (seq changes)
       (doseq [c changes] (println "  wrote" c))
       (println "  nothing to change"))
+    (some-> (:agent cfg) offer-login!)
     (let [ps (problems cfg {})]
       (print-problems ps false)
       (System/exit (if (some #(= :fail (first %)) ps) 1 0)))))
+
+
+(defn identity!
+  "Writes the agent identity into dir's settings.local.json: dev-kit itself, or a repository
+  that does not mount dev-kit yet. Uses dir's kit.edn when it has one, else the defaults."
+  [{:keys [dir]}]
+  (let [dir  (str (fs/normalize (fs/absolutize (or dir root))))
+        _    (when-not (and (fs/directory? dir) (= (str (fs/real-path dir)) (sh-in dir "git" "rev-parse" "--show-toplevel")))
+               (die dir "is not the root of a git repository"))
+        cfg  (merge (read-defaults) (some-> (slurp-if (str (fs/path dir "kit.edn"))) edn/read-string))
+        agent (or (:agent cfg) (die "no :agent in kit.edn or dev-kit's defaults"))
+        env  (agent-env agent)
+        done (cond-> []
+               (ignored-problem dir local-settings)   (conj (do (ignore! dir local-settings) "ignored"))
+               (local-env-problem dir env)            (conj (do (write-local-env! dir env) "wrote")))]
+    (println "dev-kit identity" (str "(" dir ")"))
+    (println (if (seq done)
+               (str "  " (str/join ", " done) " " local-settings " — restart Claude sessions here to use it")
+               "  nothing to change"))
+    (offer-login! agent)
+    (when-let [problem (agent-login-problem agent)]
+      (println (str "  WARN  " problem "  →  in your own terminal: bb " (fs/path kit-dir "bin" "kit")
+                    " identity --dir " dir " — it logs " (:login agent) " in")))))
 
 
 (defn parse-args
@@ -416,6 +639,8 @@
       "--scaffold" (recur more (assoc opts :scaffold true))
       "--ci" (recur more (assoc opts :ci true))
       "--quiet" (recur more (assoc opts :quiet true))
+      "--dir" (recur (rest more) (assoc opts :dir (first more)))
+      "--local" (recur more (assoc opts :local true))
       (die "unknown option" a))))
 
 
@@ -432,7 +657,8 @@
              (not= (str root) (sh "git" "rev-parse" "--show-toplevel")))
     (die "dev-kit must be mounted at <project>/" mount "; " (str root) "is not a git repository root"))
   (case cmd
-    "init" (init (parse-args args))
+    "init" (let [opts (parse-args args)] (if (:local opts) (init-local) (init opts)))
     "doctor" (doctor (parse-args args))
     "modules" (println (str "clojure=" (boolean (some-> (read-config) clojure?))))
+    "identity" (identity! (parse-args args))
     (usage)))

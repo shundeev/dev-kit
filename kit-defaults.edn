@@ -1,3 +1,10 @@
 ;; Defaults under every project's kit.edn. A project overrides any key in its own kit.edn.
 {:board {:owner "u473t8" :number 3} ; github.com/users/u473t8/projects/3 "Portfolio"
- :base  "main"}
+ :base  "main"
+ ;; The agent's own GitHub account. `kit init` points Claude sessions at it through the
+ ;; per-machine .claude/settings.local.json; `:agent nil` in kit.edn turns that off.
+ ;; The owner logs it in once per machine, in their own terminal:
+ ;;   GH_CONFIG_DIR=~/.config/gh-agent gh auth login --hostname github.com --git-protocol https --web --scopes project,workflow
+ :agent {:login         "u473t8-angel"
+         :email         "355360088+u473t8-angel@users.noreply.github.com"
+         :gh-config-dir "~/.config/gh-agent"}}
