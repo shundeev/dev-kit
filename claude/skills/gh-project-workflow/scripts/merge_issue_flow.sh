@@ -7,6 +7,9 @@
 # only the command the agent types, never the `gh pr merge` inside this script.)
 set -euo pipefail
 
+# shellcheck source=board.sh
+source "$(dirname "${BASH_SOURCE[0]}")/board.sh"
+
 usage() {
   cat <<'USAGE'
 Usage: merge_issue_flow.sh [options]
@@ -75,8 +78,7 @@ pr_state="$(gh pr view "$pr_url" --json state --jq '.state')"
 
 if [[ -n "$owner" && -n "$project_number" ]]; then
   issue_url="$(gh issue view "$issue_number" -R "$repo" --json url --jq '.url')"
-  gh project item-edit "$project_number" --owner "$owner" --url "$issue_url" \
-    --field "$status_field" --value "$done_status" >/dev/null \
+  board_set_field "$project_number" "$owner" "$issue_url" "$status_field" "$done_status" \
     || echo "Warning: could not set $status_field to '$done_status' for #$issue_number" >&2
 fi
 

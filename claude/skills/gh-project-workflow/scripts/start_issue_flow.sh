@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=board.sh
+source "$(dirname "${BASH_SOURCE[0]}")/board.sh"
+
 usage() {
   cat <<'USAGE'
 Usage: start_issue_flow.sh --title <title> [options]
@@ -53,9 +56,7 @@ graphql_remaining() {
   gh api rate_limit --jq '.resources.graphql.remaining' 2>/dev/null || true
 }
 
-# gh 2.98.0 resolves a project field and its option by name, so the id-lookup layer this
-# script used to carry is gone. The project number is POSITIONAL here; `--number` means a
-# numeric field value.
+# The field and its option are named; board.sh resolves them through the project.
 apply_project_field() {
   local field_name="$1"
   local option_name="$2"
@@ -64,11 +65,7 @@ apply_project_field() {
   [[ -n "$option_name" ]] || return 0
 
   local output
-  if output="$(gh project item-edit "$project_number" \
-                 --owner "$owner" \
-                 --url "$issue_url" \
-                 --field "$field_name" \
-                 --value "$option_name" 2>&1)"; then
+  if output="$(board_set_field "$project_number" "$owner" "$issue_url" "$field_name" "$option_name" 2>&1)"; then
     return 0
   fi
 
