@@ -1,0 +1,4 @@
+# The code owners of every file. With "Require review from Code Owners" in the main ruleset,
+# a pull request merges only with the approval of one of them, whoever else approves it.
+# Projects get the same file from `kit init` (bin/kit, codeowners-text; :owners in kit.edn).
+* @u473t8

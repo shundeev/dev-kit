@@ -1,6 +1,10 @@
 ;; Defaults under every project's kit.edn. A project overrides any key in its own kit.edn.
 {:board {:owner "u473t8" :number 3} ; github.com/users/u473t8/projects/3 "Portfolio"
  :base  "main"
+ ;; The code owners of every file (.github/CODEOWNERS): GitHub logins with Write access. With
+ ;; "Require review from Code Owners" in the main ruleset, a pull request merges only with the
+ ;; approval of one of them; the agent's approval never counts. Add a colleague here.
+ :owners ["u473t8"]
  ;; The agent's own GitHub account. `kit init` points Claude sessions at it through the
  ;; per-machine .claude/settings.local.json; `:agent nil` in kit.edn turns that off.
  ;; The owner logs it in once per machine, in their own terminal:

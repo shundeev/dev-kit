@@ -12,7 +12,8 @@
 ;;              project part of AGENTS.md; with --scaffold also README.md, adr/, docs/experiments/)
 ;;   managed  — owned by dev-kit, rewritten by init, verified by doctor (the AGENTS.md block,
 ;;              .claude/settings.json, .claude/skills links, .claude/agents copies,
-;;              .github/workflows/ci.yml, clojure module: .zprint.edn link, clj-kondo config-paths;
+;;              .github/workflows/ci.yml, .github/CODEOWNERS,
+;;              clojure module: .zprint.edn link, clj-kondo config-paths;
 ;;              per machine and git-ignored: the agent identity env in .claude/settings.local.json)
 (ns kit
   (:require
@@ -291,6 +292,15 @@
             (str "in your own terminal: " mount "/bin/kit init — it logs " login " in")]])))))
 
 
+(defn codeowners-text
+  [{:keys [owners]}]
+  (when (empty? owners) (die ":owners in kit.edn is empty; list the GitHub logins who review every change, e.g. :owners [\"u473t8\"]"))
+  (str "# Managed by dev-kit (`kit init`); the code owners come from :owners in kit.edn.\n"
+       "# With \"Require review from Code Owners\" in the main ruleset, a pull request merges only\n"
+       "# with the approval of one of them, whoever else approves it.\n"
+       "* " (str/join " " (map #(str "@" %) owners)) "\n"))
+
+
 (def agent-marker
   "<!-- Managed by dev-kit: this copy is rewritten by `kit init`. Edit the original in dev-kit. -->")
 
@@ -313,6 +323,7 @@
      {:kind :file :path ".claude/settings.json" :content (settings-text cfg)}
      {:kind :file :path ".github/workflows/ci.yml"
       :content (slurp (str (fs/path kit-dir "managed" "ci.yml")))}
+     {:kind :file :path ".github/CODEOWNERS" :content (codeowners-text cfg)}
      {:kind :file :path ".claude/hooks/pretooluse.sh"
       :content (str/replace (slurp (str (fs/path kit-dir "managed" "pretooluse.sh"))) "{{kit}}" mount)}]
     (when-let [a (:agent cfg)]
