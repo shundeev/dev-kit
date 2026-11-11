@@ -164,6 +164,17 @@ expect_exit 1 "doctor --ci catches an edited PR template" bb $kit doctor --ci
 contains "doctor names the template" "$prt: differs" "$LAST"
 bb $kit init >/dev/null
 
+echo "- delivery skill"
+skill="$KIT/claude/skills/repo-task-delivery/SKILL.md"
+sed -n 2p "$skill" | grep -qx 'name: repo-task-delivery' && ok "the delivery skill names itself" || bad "skill frontmatter"
+missing=""
+for h in "Size sets the ceremony" "Requirements" "Invariants" "Design" "G1" "Plan and execute" "Review and simplify" \
+         "User-level test" "Pull request" "Merge" "Retrospective"; do
+  grep -Eqi "^## [0-9]+\. .*$h" "$skill" || missing="$missing, $h"
+done
+[ -z "$missing" ] && ok "the delivery skill walks every stage of ADR-0002" || bad "the skill lacks the stage${missing#,}"
+[ "$(wc -l < "$KIT/rules/shared.md")" -le 100 ] && ok "the rules block stays within 100 lines" || bad "rules/shared.md is $(wc -l < "$KIT/rules/shared.md") lines"
+
 echo "- agent identity: per-machine settings"
 default_login="$(bb -e '(println (get-in (clojure.edn/read-string (slurp ".shared/kit-defaults.edn")) [:agent :login]))')"
 local=.claude/settings.local.json

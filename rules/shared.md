@@ -8,8 +8,12 @@ These rules apply to every agent working in this repository (Claude Code, Codex,
 ## Delivery
 
 - Work that is likely to end in a committed edit runs the full flow: invoke the
-  `repo-task-delivery` skill and let it drive.
-  The flow: issue on the board → branch from that issue → implement → verify → PR → owner review → merge → Done.
+  `repo-task-delivery` skill and let it drive. Every task passes its stages (ADR-0002): size →
+  requirements → invariants → design → the owner's `design-approved` before any code (M) →
+  plan → review and simplify → user-level test → PR → merge on the owner's Approve →
+  retrospective.
+  Name the task's Size (XS/S/M/L) and the reason in the first reply; it sets the ceremony.
+  No file is edited before the issue and its branch exist, XS included.
 - Issues are filed by `bash .claude/skills/gh-project-workflow/scripts/start_issue_flow.sh`,
   never by hand: it puts the issue on the board with Status, Priority and Showcase and creates
   its branch. An issue that is not on the board does not exist.
@@ -62,8 +66,8 @@ PRs merge by squash; these rules govern the branch history the reviewer reads.
 
 ## After the merge
 
-- A merged issue is closed. Follow-up work is a new task, except obvious closeout caused by
-  the merged change.
+- A merged issue gets a retrospective comment (stage 11). Follow-up work is a new task, except
+  obvious closeout caused by the merged change.
 
 ## Token hygiene
 
