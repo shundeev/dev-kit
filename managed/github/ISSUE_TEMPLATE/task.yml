@@ -1,0 +1,41 @@
+# Managed by dev-kit (`kit init`): edit managed/github/ISSUE_TEMPLATE/task.yml in dev-kit.
+name: Task
+description: Work a pull request will close. The sections are the stages of ADR-0002 in dev-kit.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Size (a board field) sets the ceremony:
+        - **XS / S** — Requirements and Done when are enough; Design may say "obvious".
+        - **M** — every section. No code before the owner adds the `design-approved` label.
+        - **L** — split into S and M issues first.
+  - type: textarea
+    id: requirements
+    attributes:
+      label: Requirements
+      description: What should be true for a person afterwards, and why. A question about what a person does or sees goes to the owner as one line with two named options.
+    validations:
+      required: true
+  - type: textarea
+    id: invariants
+    attributes:
+      label: Invariants
+      description: What must keep holding — rules and ADRs in force, behaviour that must not change — and any new invariant this work adds.
+  - type: textarea
+    id: design
+    attributes:
+      label: Design
+      description: The chosen approach and the alternatives that lost, in a few lines. For M the owner approves it with the `design-approved` label.
+  - type: textarea
+    id: plan
+    attributes:
+      label: Plan
+      description: The steps in order (M only).
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: Checks a person can see, including the user-level test.
+      placeholder: "- …"
+    validations:
+      required: true

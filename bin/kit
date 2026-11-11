@@ -12,7 +12,7 @@
 ;;              project part of AGENTS.md; with --scaffold also README.md, adr/, docs/experiments/)
 ;;   managed  — owned by dev-kit, rewritten by init, verified by doctor (the AGENTS.md block,
 ;;              .claude/settings.json, .claude/skills links, .claude/agents copies,
-;;              .github/workflows/ci.yml, .github/CODEOWNERS,
+;;              .github/workflows/ci.yml, .github/CODEOWNERS, the issue form and PR template,
 ;;              clojure module: .zprint.edn link, clj-kondo config-paths;
 ;;              per machine and git-ignored: the agent identity env in .claude/settings.local.json)
 (ns kit
@@ -324,6 +324,10 @@
      {:kind :file :path ".github/workflows/ci.yml"
       :content (slurp (str (fs/path kit-dir "managed" "ci.yml")))}
      {:kind :file :path ".github/CODEOWNERS" :content (codeowners-text cfg)}
+     {:kind :file :path ".github/ISSUE_TEMPLATE/task.yml"
+      :content (slurp (str (fs/path kit-dir "managed" "github" "ISSUE_TEMPLATE" "task.yml")))}
+     {:kind :file :path ".github/pull_request_template.md"
+      :content (slurp (str (fs/path kit-dir "managed" "github" "pull_request_template.md")))}
      {:kind :file :path ".claude/hooks/pretooluse.sh"
       :content (str/replace (slurp (str (fs/path kit-dir "managed" "pretooluse.sh"))) "{{kit}}" mount)}]
     (when-let [a (:agent cfg)]
