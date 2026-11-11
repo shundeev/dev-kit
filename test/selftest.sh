@@ -28,6 +28,13 @@ contains() { # contains <name> <needle> <haystack>
 
 export GIT_AUTHOR_NAME=selftest GIT_AUTHOR_EMAIL=selftest@example.invalid
 export GIT_COMMITTER_NAME=selftest GIT_COMMITTER_EMAIL=selftest@example.invalid
+# doctor checks the GitHub identity only inside a Claude session; the cases that test it set
+# CLAUDECODE themselves, so a selftest run from a session judges nothing about that session.
+unset CLAUDECODE GH_TOKEN GITHUB_TOKEN
+# The machine's global git config and ignore file stay out, as in CI: Claude Code puts
+# settings.local.json into the global ignore file, which would hide what kit itself ignores.
+: > "$WORK/gitconfig"
+export GIT_CONFIG_GLOBAL="$WORK/gitconfig" XDG_CONFIG_HOME="$WORK/config"
 
 echo "dev-kit selftest ($KIT)"
 
@@ -111,6 +118,70 @@ git config --unset core.hooksPath
 expect_exit 1 "doctor catches a missing hooksPath" bb $kit doctor
 expect_exit 0 "doctor --ci skips local git config" bb $kit doctor --ci
 bb $kit init >/dev/null
+
+echo "- agent identity: per-machine settings"
+default_login="$(bb -e '(println (get-in (clojure.edn/read-string (slurp ".shared/kit-defaults.edn")) [:agent :login]))')"
+local=.claude/settings.local.json
+lenv() { jq -r --arg k "$1" '.env[$k]' "${2:-$local}"; }
+[ "$(lenv GH_CONFIG_DIR)" = "$HOME/.config/gh-agent" ] && ok "gh in sessions reads the agent's config" || bad "local GH_CONFIG_DIR" "$(cat $local 2>&1)"
+[ "$(lenv GIT_CONFIG_KEY_0)=$(lenv GIT_CONFIG_VALUE_0)" = "url.https://github.com/.insteadOf=git@github.com:" ] \
+  && ok "SSH remotes go over HTTPS in sessions" || bad "insteadOf"
+jq -e '.env.GIT_CONFIG_COUNT == "3" and .env.GIT_CONFIG_VALUE_1 == ""' $local >/dev/null \
+  && ok "inherited github.com credential helpers are reset" || bad "helper reset"
+[ "$(lenv GIT_CONFIG_VALUE_2)" = '!gh auth git-credential' ] && ok "git push authenticates through gh" || bad "credential helper"
+[ "$(lenv GIT_AUTHOR_NAME)" = "$default_login" ] && [ "$(lenv GIT_COMMITTER_NAME)" = "$default_login" ] \
+  && ok "commits are made by the agent" || bad "author"
+git check-ignore -q $local && ok "settings.local.json is git-ignored" || bad "settings.local.json is not ignored"
+jq '.permissions.allow = ["Bash(ls *)"] | .env.MY_VAR = "1" | .env.GH_CONFIG_DIR = "/elsewhere"' $local > "$WORK/local.json"
+mv "$WORK/local.json" $local
+expect_exit 1 "doctor catches a changed agent env" bb $kit doctor
+contains "doctor names settings.local.json" "$local: env differs" "$LAST"
+expect_exit 0 "init restores the agent env" bb $kit init
+jq -e '.permissions.allow == ["Bash(ls *)"] and .env.MY_VAR == "1"' $local >/dev/null \
+  && ok "init keeps the owner's own local settings" || bad "local settings lost" "$(cat $local)"
+[ "$(lenv GH_CONFIG_DIR)" = "$HOME/.config/gh-agent" ] && ok "agent env restored" || bad "agent env not restored"
+sed -i '\#^/.claude/settings.local.json$#d' .git/info/exclude
+expect_exit 1 "doctor catches settings.local.json that git would commit" bb $kit doctor
+contains "doctor says why" "$local: is not git-ignored" "$LAST"
+rm $local
+expect_exit 0 "doctor --ci skips the per-machine settings" bb $kit doctor --ci
+bb $kit init >/dev/null
+git check-ignore -q $local && [ -f $local ] && ok "init writes and ignores it again" || bad "not restored"
+
+echo "- agent identity: who a Claude session acts as"
+AG="$WORK/gh-agent"
+mkdir -p "$AG" "$WORK/xdg/gh"
+cp kit.edn "$WORK/kit.edn.bak"
+bb -e "(spit \"kit.edn\" (pr-str (assoc (clojure.edn/read-string (slurp \"kit.edn\"))
+         :agent {:login \"kit-bot\" :email \"kit-bot@example.invalid\" :gh-config-dir \"$AG\"})))"
+bb $kit init >/dev/null
+printf 'github.com:\n    user: the-owner\n    git_protocol: ssh\n' > "$WORK/xdg/gh/hosts.yml"
+as_owner() { env -u GH_CONFIG_DIR XDG_CONFIG_HOME="$WORK/xdg" "$@"; }
+expect_exit 0 "outside a Claude session the identity is not checked" as_owner bb $kit doctor
+expect_exit 1 "doctor fails a Claude session that runs gh as the owner" as_owner env CLAUDECODE=1 bb $kit doctor
+contains "doctor names the owner's login" "logged in as the-owner" "$LAST"
+expect_exit 1 "doctor fails when the agent's config is logged out" env GH_CONFIG_DIR="$AG" CLAUDECODE=1 bb $kit doctor
+contains "doctor gives the login command" "gh auth login" "$LAST"
+printf 'github.com:\n    user: someone-else\n' > "$AG/hosts.yml"
+expect_exit 1 "doctor fails when the agent's config holds another login" env GH_CONFIG_DIR="$AG" CLAUDECODE=1 bb $kit doctor
+contains "doctor names the wrong login" "logged in as someone-else, not kit-bot" "$LAST"
+printf 'github.com:\n    users:\n        kit-bot:\n    git_protocol: https\n    user: kit-bot\n' > "$AG/hosts.yml"
+expect_exit 0 "doctor passes a Claude session that acts as the agent" env GH_CONFIG_DIR="$AG" CLAUDECODE=1 bb $kit doctor
+expect_exit 1 "doctor fails when GH_TOKEN overrides the agent's config" env GH_CONFIG_DIR="$AG" GH_TOKEN=x CLAUDECODE=1 bb $kit doctor
+contains "doctor names the variable" "GH_TOKEN is set" "$LAST"
+mv "$WORK/kit.edn.bak" kit.edn
+bb $kit init >/dev/null
+
+echo "- agent identity: repositories without dev-kit"
+O="$WORK/other"
+git init -q "$O"
+expect_exit 0 "identity writes the agent env into another repository" bb $kit identity --dir "$O"
+[ "$(lenv GIT_AUTHOR_NAME "$O/$local")" = "$default_login" ] && ok "other repository gets the default agent" || bad "other repository env"
+git -C "$O" check-ignore -q $local && ok "and ignores the file there" || bad "not ignored in the other repository"
+git worktree add -q "$WORK/wt" 2>/dev/null
+expect_exit 0 "identity works in a linked worktree" bb $kit identity --dir "$WORK/wt"
+git -C "$WORK/wt" check-ignore -q $local && ok "ignored in the worktree" || bad "not ignored in the worktree"
+expect_exit 2 "identity refuses a directory that is not a repository root" bb $kit identity --dir "$WORK"
 
 echo "- clojure module"
 sed -i 's/:modules  #{}/:modules  #{:clojure}/' kit.edn

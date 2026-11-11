@@ -31,6 +31,7 @@ local git hooks path, which a clone does not carry).
 | `.shared/bin/kit init` | Lays everything out. Safe to rerun; never overwrites project-owned files. |
 | `.shared/bin/kit doctor` | Checks that everything is in place and matches the pinned dev-kit version. Each problem comes with the command that fixes it. `--ci` skips local-only checks, `--quiet` prints problems only. |
 | `.shared/bin/kit modules` | `clojure=true/false`, for CI. |
+| `.shared/bin/kit identity [--dir PATH]` | Writes only the agent's GitHub identity (below) into a repository's `.claude/settings.local.json`: for dev-kit itself, or a repository that does not mount dev-kit yet. |
 
 Update a project to a newer dev-kit: `git submodule update --remote .shared && .shared/bin/kit init`,
 then a pull request "chore: bump dev-kit".
@@ -55,6 +56,7 @@ Two kinds of files:
 | `.github/workflows/ci.yml` | `managed/ci.yml`, which runs `ci/action.yml` from the submodule |
 | git `core.hooksPath` | `githooks/` — zprint check before commit |
 | `.zprint.edn` (link), `:config-paths` in `.clj-kondo/config.edn` | `clojure/` (module `clojure`) |
+| `env` in `.claude/settings.local.json` — per machine, git-ignored, skipped by `doctor --ci` | `:agent` in `kit.edn` / `kit-defaults.edn` (below) |
 
 Why `AGENTS.md` and not `CLAUDE.md`: one instruction file for every agent (Claude Code reads
 `AGENTS.md` when no `CLAUDE.md` exists; Codex and OpenCode read it natively). The shared rules
@@ -62,6 +64,31 @@ are written into it as text rather than imported, because only Claude Code under
 
 Why CI runs from the submodule: the checks always match the dev-kit version the project pins,
 and the workflow file in the project never changes.
+
+## The agent's GitHub identity
+
+The agent works under its own GitHub account (`:agent` in `kit-defaults.edn`), so GitHub tells
+its actions from the owner's. Each repository's `main` ruleset requires one approving review,
+a push after the approval dismisses it, and nobody can approve their own pull request: a merge
+waits for the owner. The owner is the ruleset's only bypass actor, in pull-request mode: they
+can merge a pull request without a review (needed for their own, which nobody else can approve),
+and still cannot push to `main` directly.
+
+- Once per machine the owner logs the account in, in their own terminal:
+  `GH_CONFIG_DIR=~/.config/gh-agent gh auth login --hostname github.com --git-protocol https --web --scopes project,workflow`.
+  The token stays in that directory; it never goes into chat, issues or a repository.
+- `kit init` writes the identity into `.claude/settings.local.json` and git-ignores it. Claude
+  Code applies that `env` to the session, its hooks and its commands: `gh` reads the agent's
+  config, git sends `git@github.com:` remotes over HTTPS with gh as the only credential helper,
+  and commits are authored by the agent. The owner's terminal keeps the owner's login and SSH.
+  A session started before `init` keeps its old identity until it is restarted.
+- Inside a Claude session `kit doctor` fails when gh would act as anyone but the agent: a
+  session on another gh config (the owner's), a logged-out or foreign agent config, or a
+  `GH_TOKEN` / `GITHUB_TOKEN` that overrides it.
+- `:agent nil` in a project's `kit.edn` switches this off.
+
+Not a security boundary on its own: the owner's gh config and SSH key stay readable from a
+session until the sandbox (ADR-0001, choice 3) denies them.
 
 ## kit.edn
 
@@ -71,8 +98,8 @@ and the workflow file in the project never changes.
  :modules  #{}}          ; #{:clojure} for the shared zprint/clj-kondo setup
 ```
 
-Defaults (board, base branch) come from `kit-defaults.edn`; `:board`, `:base` and
-`:claude-settings` (merged into the generated settings) can be overridden per project.
+Defaults (board, base branch, agent account) come from `kit-defaults.edn`; `:board`, `:base`,
+`:agent` and `:claude-settings` (merged into the generated settings) can be overridden per project.
 
 ## Developing dev-kit
 

@@ -11,3 +11,6 @@ not run here.
 - Changing `rules/`, `claude/`, `managed/` or `scaffold/` changes every project on its next
   `kit init`. Say in the PR body what projects will see.
 - Shell scripts pass `shellcheck -S warning`; `bin/kit` passes `clj-kondo`.
+- Claude sessions here act as the agent's GitHub account once `bb bin/kit identity --dir .` has
+  written the git-ignored `.claude/settings.local.json` (per clone and per worktree), then the
+  session is restarted. Check: `gh api user --jq .login` names the agent, not the owner.
