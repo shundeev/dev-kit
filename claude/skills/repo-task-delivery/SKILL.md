@@ -92,8 +92,9 @@ When the owner says the round is done, process every thread:
 
 ## 7. Merge — only on the owner's word
 
-`finish_issue_flow.sh --merge` (gh-project-workflow, step 2). It deletes the branch only after
-GitHub reports `MERGED`; never delete a branch before that.
+`merge_issue_flow.sh` (gh-project-workflow, "Merge after approval"); it asks the owner for
+confirmation. It deletes the branch only after GitHub reports `MERGED`; never delete a
+branch before that.
 
 ## 8. Close the task
 
