@@ -133,7 +133,9 @@
     [{:kind :block :path "AGENTS.md" :content (block-text cfg)}
      {:kind :file :path ".claude/settings.json" :content (settings-text cfg)}
      {:kind :file :path ".github/workflows/ci.yml"
-      :content (slurp (str (fs/path kit-dir "managed" "ci.yml")))}]
+      :content (slurp (str (fs/path kit-dir "managed" "ci.yml")))}
+     {:kind :file :path ".claude/hooks/pretooluse.sh"
+      :content (str/replace (slurp (str (fs/path kit-dir "managed" "pretooluse.sh"))) "{{kit}}" mount)}]
     (for [dir (sort (fs/list-dir (fs/path kit-dir "claude" "skills")))
           :when (fs/directory? dir)
           :let [n (str (fs/file-name dir))]]
@@ -244,6 +246,20 @@
       (conj [:warn (str mount " has local changes") "commit them in dev-kit, or git -C .shared checkout ."]))))
 
 
+(def min-claude-version
+  "onFailure on hooks needs it; older versions let a failing guard through (ADR-0001, rule 3)."
+  [2 1 295])
+
+
+(defn claude-version-problems
+  []
+  (when-let [out (sh "bash" "-c" "command -v claude >/dev/null && claude --version")]
+    (let [v (some->> (re-find #"(\d+)\.(\d+)\.(\d+)" out) rest (mapv parse-long))]
+      (when (and v (neg? (compare v min-claude-version)))
+        [[:fail (str "Claude Code " (str/join "." v) " ignores onFailure, so a failing guard would let commands through")
+          (str "update Claude Code to " (str/join "." min-claude-version) " or later")]]))))
+
+
 (defn tool-problems
   [cfg]
   (for [[tool why] (cond-> [["git" "everything"]
@@ -267,7 +283,7 @@
         [:fail (str (label item) ": " problem) (str mount "/bin/kit init")])
       (for [p (stale-paths (managed-items cfg))]
         [:fail (str p ": left over from dev-kit, no longer managed") (str mount "/bin/kit init")])
-      (when-not ci (tool-problems cfg)))))
+      (when-not ci (concat (tool-problems cfg) (claude-version-problems))))))
 
 
 ;; ------------------------------------------------------------------ init

@@ -21,7 +21,11 @@ decide() { # decide <allow|deny|ask> <reason>
   exit 0
 }
 
-command -v jq >/dev/null 2>&1 || exit 0
+# Fail closed: without jq the guard cannot judge anything (ADR-0001, rule 3).
+command -v jq >/dev/null 2>&1 || {
+  echo "Refused: the delivery guard needs jq and it is not installed. Ask the owner to install jq." >&2
+  exit 2
+}
 
 # `gh pr create` may name its source branch explicitly. Judge the branch the command
 # actually pushes from, not the one this hook's working directory happens to be on.

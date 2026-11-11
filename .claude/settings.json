@@ -83,7 +83,8 @@
       "Bash(git push * --force)",
       "Bash(git push * -f)",
       "Bash(git push * +*)"
-    ]
+    ],
+    "disableBypassPermissionsMode": "disable"
   },
   "hooks": {
     "PreToolUse": [
@@ -94,7 +95,8 @@
             "type": "command",
             "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/claude/hooks/delivery-guard.sh\"",
             "timeout": 10,
-            "statusMessage": "Checking delivery flow..."
+            "statusMessage": "Checking delivery flow...",
+            "onFailure": "block"
           }
         ]
       }

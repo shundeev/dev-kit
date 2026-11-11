@@ -162,6 +162,31 @@ contains "denies gh pr create from main" '"permissionDecision":"deny"' "$(guard 
 contains "asks on DELIVERY_GUARD=off" '"permissionDecision":"ask"' "$(guard 'DELIVERY_GUARD=off gh issue create -t x')"
 [ -z "$(guard 'git status')" ] && ok "ignores unrelated commands" || bad "unrelated command judged"
 
+echo "- fail closed"
+jq -e '.hooks.PreToolUse[0].hooks[0].onFailure == "block"' .claude/settings.json >/dev/null && ok "PreToolUse hook fails closed" || bad "PreToolUse onFailure"
+[ "$(jq -r .permissions.disableBypassPermissionsMode .claude/settings.json)" = disable ] && ok "bypass mode disabled" || bad "bypass mode"
+[ -f .claude/hooks/pretooluse.sh ] && ! grep -q '{{kit}}' .claude/hooks/pretooluse.sh && ok "entry hook in the project, kit path filled in" || bad "entry hook"
+entry() { jq -nc --arg c "$1" '{tool_input:{command:$c}}' | CLAUDE_PROJECT_DIR="${2:-$P}" bash .claude/hooks/pretooluse.sh; }
+contains "entry hook hands calls to the guard" '"permissionDecision":"deny"' "$(entry 'gh issue create --title x')"
+mkdir -p "$WORK/nokit"
+for c in "git submodule update --init" ".shared/bin/kit init" "git status"; do
+  expect_exit 0 "empty kit allows repair: $c" entry "$c" "$WORK/nokit"
+done
+expect_exit 2 "empty kit refuses other commands" entry "ls -la" "$WORK/nokit"
+contains "refusal names the repair" "git submodule update --init" "$LAST"
+nojq="$WORK/nojq"; mkdir -p "$nojq"
+for t in bash git awk sed cat head tr; do ln -sf "$(command -v $t)" "$nojq/$t"; done
+out="$(jq -nc '{tool_input:{command:"gh issue create -t x"}}' | PATH="$nojq" bash .shared/claude/hooks/delivery-guard.sh 2>&1)"; code=$?
+[ "$code" -eq 2 ] && ok "guard without jq refuses (exit 2)" || bad "guard without jq (exit $code)" "$out"
+contains "says jq is missing" "needs jq" "$out"
+fake="$WORK/fakeclaude"; mkdir -p "$fake"
+printf '#!/bin/sh\necho "2.1.200 (Claude Code)"\n' > "$fake/claude"; chmod +x "$fake/claude"
+expect_exit 1 "doctor fails on a Claude Code too old for onFailure" env PATH="$fake:$PATH" bb $kit doctor
+contains "doctor names the version" "ignores onFailure" "$LAST"
+printf '#!/bin/sh\necho "2.1.322 (Claude Code)"\n' > "$fake/claude"
+out="$(PATH="$fake:$PATH" bb $kit doctor 2>&1)"
+grep -q "ignores onFailure" <<<"$out" && bad "new enough Claude Code flagged" "$out" || ok "new enough Claude Code passes"
+
 echo "- flow scripts, offline guards"
 export GHWF_OWNER=u473t8 GHWF_PROJECT_NUMBER=3 GHWF_REPO=u473t8/kit-selftest
 expect_exit 1 "start refuses an issue without priority" bash .claude/skills/gh-project-workflow/scripts/start_issue_flow.sh --title x
