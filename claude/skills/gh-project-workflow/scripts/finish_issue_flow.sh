@@ -116,9 +116,32 @@ if [[ -z "$issue_number" && "$branch_name" =~ ^([0-9]+)- ]]; then
 fi
 [[ -n "$issue_number" ]] || die "No issue number: the branch is not <number>-<slug> and --issue was not given"
 
-issue_title="$(gh issue view "$issue_number" -R "$repo" --json title --jq '.title')"
-[[ -n "$summary" ]] || summary="$issue_title"
-subject="$commit_type(GH-$issue_number): $summary"
+# Everything that can be wrong with the inputs is checked before the commit and the push:
+# a run that dies after the push leaves a branch with no pull request and a confusing rerun.
+if [[ -n "$pr_body_file" ]]; then
+  [[ -r "$pr_body_file" ]] || die "PR body file '$pr_body_file' not found"
+  grep -Eq '^ADR: +[^[:space:]]' "$pr_body_file" \
+    || die "The PR body needs an 'ADR: none' or 'ADR: adr/NNNN-....md' line (see the adr skill)"
+fi
+if [[ -n "$commit_message_file" ]]; then
+  [[ -r "$commit_message_file" ]] || die "Commit message file '$commit_message_file' not found"
+fi
+
+# Only an open pull request counts: `gh pr view <branch>` also returns closed and merged ones.
+pr_url="$(gh pr list -R "$repo" --head "$branch_name" --state open --json url --jq '.[0].url // empty')"
+[[ -n "$pr_url" || -n "$pr_body_file" ]] || die "--pr-body-file is required to open the pull request"
+
+# The subject: --summary, else the commit message file's first line, else the issue title.
+if [[ -n "$summary" ]]; then
+  subject="$commit_type(GH-$issue_number): $summary"
+elif [[ -n "$commit_message_file" ]]; then
+  subject="$(head -n1 "$commit_message_file")"
+else
+  issue_title="$(gh issue view "$issue_number" -R "$repo" --json title --jq '.title')"
+  subject="$commit_type(GH-$issue_number): ${issue_title,}"
+fi
+[[ "$subject" =~ ^(feat|fix|docs|refactor|test|perf|build|ci|chore)\(GH-$issue_number\):\ .+ ]] \
+  || die "Subject '$subject' is not 'type(GH-$issue_number): summary'"
 
 if [[ "$no_commit" -eq 0 ]]; then
   [[ "${#add_paths[@]}" -eq 0 ]] || git add -- "${add_paths[@]}"
@@ -132,12 +155,7 @@ fi
 
 git push -u origin "$branch_name"
 
-pr_url="$(gh pr view "$branch_name" -R "$repo" --json url --jq '.url' 2>/dev/null || true)"
 if [[ -z "$pr_url" ]]; then
-  [[ -n "$pr_body_file" ]] || die "--pr-body-file is required to open the pull request"
-  grep -Eq '^ADR: ' "$pr_body_file" \
-    || die "The PR body needs an 'ADR: none' or 'ADR: adr/NNNN-....md' line (see the adr skill)"
-
   body="$(cat "$pr_body_file")"
   grep -Eqi "(close[sd]?|fix(e[sd])?|resolve[sd]?) #$issue_number\b" <<<"$body" \
     || body="Closes #$issue_number"$'\n\n'"$body"
