@@ -21,6 +21,16 @@ bb "$kit_dir/bin/kit" init --local >/dev/null 2>&1 || true
 missing="$(bb "$kit_dir/bin/kit" retro --missing 2>/dev/null)"
 [ $? -eq 1 ] && echo "dev-kit: $missing"
 
+# A newer dev-kit (#3): say so, and how it reaches this project. Silent offline; a slow network
+# gives up after a few seconds instead of holding the session's start.
+if git -C "$kit_dir" -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=5 fetch -q origin main 2>/dev/null; then
+  behind="$(git -C "$kit_dir" rev-list --count HEAD..FETCH_HEAD 2>/dev/null || echo 0)"
+  if [ "${behind:-0}" -gt 0 ]; then
+    [ "$behind" -eq 1 ] && unit=commit || unit=commits
+    echo "dev-kit is $behind $unit behind its main. Open an XS task to update dev-kit here: move ${kit_dir##*/} to origin/main, run ${kit_dir##*/}/bin/kit init, commit the generated files, open the PR."
+  fi
+fi
+
 report="$(bb "$kit_dir/bin/kit" doctor --quiet 2>&1)"
 if [ -n "$report" ]; then
   echo "dev-kit doctor found problems with this project's setup. Tell the owner before starting work:"

@@ -29,6 +29,7 @@
     [clj-yaml.core :as yaml]
     [clojure.edn :as edn]
     [clojure.string :as str]
+    [rewrite-clj.parser :as rewrite-parser]
     [rewrite-clj.zip :as z]))
 
 
@@ -70,10 +71,63 @@
 (defn read-defaults [] (edn/read-string (slurp (str (fs/path kit-dir "kit-defaults.edn")))))
 
 
+(defn fail!
+  "A problem the person fixes: kit prints the message, without a stack trace, and exits 1."
+  [& msg]
+  (throw (ex-info (str/join " " msg) {:kit/problem true})))
+
+
+(defn merge-config
+  "kit.edn over the defaults: a key replaces the default, except :board, whose :owner and :number merge one by one
+  (#14). :agent replaces whole, so one account's login never pairs with another's email."
+  [defaults m]
+  (cond-> (merge defaults m)
+    (and (map? (:board defaults)) (map? (:board m))) (assoc :board (merge (:board defaults) (:board m)))))
+
+
 (defn read-config
+  "kit.edn over the defaults, or nil when there is none."
   []
   (when-let [s (slurp-if config-file)]
-    (merge (read-defaults) (edn/read-string s))))
+    (let [m (try (edn/read-string s)
+                 (catch Exception e
+                   (let [why (or (try (rewrite-parser/parse-string-all s) nil (catch Exception e2 (ex-message e2))) (ex-message e))
+                         [_ msg line] (re-find #"(.*) \[at line (\d+), column \d+\]" why)]
+                     (fail! (str "kit.edn" (when line (str " line " line)) " cannot be read (" (or msg why) "): fix it by hand")))))]
+      (when-not (map? m) (fail! "kit.edn is not a map: make it {:repo \"owner/name\" :showcase \"…\" :modules #{}}"))
+      (merge-config (read-defaults) m))))
+
+
+(def known-modules #{:clojure})
+
+
+(defn config-problems
+  "What is wrong with kit.edn over the defaults, each naming the key and the fix (#14)."
+  [{:keys [repo showcase modules base owners board agent]}]
+  (let [unknown (when (coll? modules) (remove known-modules modules))]
+    (cond-> []
+      (not (and (string? repo) (re-matches #"[^/\s]+/[^/\s]+" repo)))
+      (conj (str ":repo is " (pr-str repo) ", not \"owner/name\": set it in kit.edn (kit init --repo owner/name in a new project)"))
+
+      (not (and (string? showcase) (not (str/blank? showcase))))
+      (conj (str ":showcase is missing: set it in kit.edn to the board's Showcase option for this project"
+                 " (kit init --showcase <option> in a new project)"))
+
+      (not (coll? modules)) (conj ":modules must be a set, e.g. #{} or #{:clojure}")
+
+      (seq unknown)
+      (conj (str ":modules has " (str/join ", " (map pr-str unknown)) "; known modules: "
+                 (str/join ", " (map name (sort known-modules)))))
+
+      (not (and (string? base) (not (str/blank? base)))) (conj ":base must name the base branch, e.g. \"main\"")
+
+      (not (and (sequential? owners) (seq owners) (every? string? owners)))
+      (conj ":owners must list who reviews every change, e.g. [\"shundeev/owners\"]")
+
+      (not (and (string? (:owner board)) (int? (:number board)))) (conj ":board must be {:owner \"login\" :number N}")
+
+      (not (or (nil? agent) (and (map? agent) (every? #(string? (get agent %)) [:login :email :gh-config-dir]))))
+      (conj ":agent must be nil, or a map with :login, :email and :gh-config-dir (the agent's account; see kit-defaults.edn)"))))
 
 
 (defn clojure? [cfg] (contains? (set (:modules cfg)) :clojure))
@@ -205,7 +259,7 @@
   [dir env]
   (let [f (str (fs/path dir local-settings))
         m (read-json-object f)]
-    (when (= ::invalid m) (die local-settings "is not a JSON object; fix or remove it, then run again"))
+    (when (= ::invalid m) (fail! local-settings "is not a JSON object; fix or remove it, then run again"))
     (fs/create-dirs (fs/parent f))
     (spit f (json-text (update m "env" #(into (sorted-map)
                                               (merge % env
@@ -317,7 +371,6 @@
 
 (defn codeowners-text
   [{:keys [owners]}]
-  (when (empty? owners) (die ":owners in kit.edn is empty; list who reviews every change (an org/team or GitHub logins), e.g. :owners [\"shundeev/owners\"]"))
   (str "# Managed by dev-kit (`kit init`); the code owners come from :owners in kit.edn.\n"
        "# With \"Require review from Code Owners\" in the main ruleset, a pull request merges only\n"
        "# with the approval of one of them, whoever else approves it.\n"
@@ -336,6 +389,7 @@
 
 
 (defn kondo-entry [] (str "../" mount "/clojure/clj-kondo"))
+(defn kondo-map-text [] (str "{:config-paths [\"" (kondo-entry) "\"]}"))
 
 
 (defn managed-items
@@ -392,21 +446,48 @@
 
 ;; ------------------------------------------------------------------ checks
 
-(defn split-block
-  "[before block after] of AGENTS.md text, or nil when the markers are missing or repeated."
+(defn block-markers
+  "The dev-kit blocks of AGENTS.md text: {:pairs [[first-line last-line] …], :stray [line numbers]}, lines counted
+  from 0 in :pairs and from 1 in :stray. A marker is found by its start, so another version's wording still counts."
   [s]
-  (let [b (str/index-of s block-begin)
-        e (some-> (str/index-of s block-end) (+ (count block-end)))]
-    (when (and b e (< b e)
-               (= b (str/last-index-of s block-begin))
-               (= (- e (count block-end)) (str/last-index-of s block-end)))
-      [(subs s 0 b) (subs s b e) (subs s e)])))
+  (loop [[l & more :as ls] (str/split s #"\n" -1) i 0 open nil pairs [] stray []]
+    (cond
+      (empty? ls) {:pairs pairs :stray (cond-> stray open (conj (inc open)))}
+      (str/starts-with? l "<!-- dev-kit:begin") (recur more (inc i) i pairs (cond-> stray open (conj (inc open))))
+      (str/starts-with? l "<!-- dev-kit:end") (if open
+                                                 (recur more (inc i) nil (conj pairs [open i]) stray)
+                                                 (recur more (inc i) nil pairs (conj stray (inc i))))
+      :else (recur more (inc i) open pairs stray))))
 
 
-(defn kondo-paths
+(defn with-block
+  "AGENTS.md text with every dev-kit block removed and content put where the first one was, in the file's line ends."
+  [s content pairs]
+  (let [content (if (str/includes? s "\r\n") (str (str/replace content "\n" "\r\n") "\r") content) ; lines join on \n
+        lines (str/split s #"\n" -1)
+        [first-line] (first pairs)
+        in-pair? (fn [i] (some (fn [[a b]] (<= a i b)) pairs))]
+    (str/join "\n" (concat (subvec lines 0 first-line)
+                           [content]
+                           (keep-indexed (fn [i l] (when (and (> i first-line) (not (in-pair? i))) l)) lines)))))
+
+
+(defn block-problem
+  "nil when AGENTS.md text holds exactly the dev-kit block content, otherwise the problem."
+  [s content]
+  (let [{:keys [pairs stray]} (block-markers s)]
+    (cond
+      (seq stray) (str "line " (str/join ", " stray) " has a dev-kit marker without its pair: delete what is left of the"
+                       " old block, or restore the missing marker, then run kit init")
+      (empty? pairs) "has no dev-kit block"
+      (next pairs) (str "has " (count pairs) " dev-kit blocks")
+      (not= s (with-block s content pairs)) "the dev-kit block differs from dev-kit's rules")))
+
+
+(defn kondo-config
+  "The form in a clj-kondo config.edn: nil when it holds none (empty, comments only), ::unreadable when it fails."
   [s]
-  (try (let [m (edn/read-string s)] (when (map? m) (set (:config-paths m))))
-       (catch Exception _ nil)))
+  (try (edn/read-string s) (catch Exception _ ::unreadable)))
 
 
 (defn check
@@ -423,11 +504,7 @@
             (not= content (slurp-if f)) "differs from what dev-kit generates")
 
       :block
-      (if-let [s (slurp-if f)]
-        (if-let [[_ block _] (split-block s)]
-          (when (not= content block) "the dev-kit block differs from dev-kit's rules")
-          "has no dev-kit block (or the markers are broken)")
-        "missing")
+      (if-let [s (slurp-if f)] (block-problem s content) "missing")
 
       :symlink
       (cond (not (fs/sym-link? f)) (if (fs/exists? f) "is a real file, not the dev-kit link" "missing")
@@ -435,9 +512,12 @@
             (not (fs/exists? f)) (str "dangling: " target " does not exist"))
 
       :kondo
-      (cond (not (fs/exists? f)) "missing"
-            (not (contains? (kondo-paths (slurp f)) (kondo-entry)))
-            (str ":config-paths lacks \"" (kondo-entry) "\""))
+      (let [m (some-> (slurp-if f) kondo-config)]
+        (cond (not (fs/exists? f)) "missing"
+              (= m ::unreadable) "cannot be read: fix it by hand"
+              (and (some? m) (not (map? m)))
+              (str "is not a map: make it a map, e.g. " (kondo-map-text))
+              (not (contains? (set (:config-paths m)) (kondo-entry))) (str ":config-paths lacks \"" (kondo-entry) "\"")))
 
       :git-config
       (let [v (sh "git" "config" "--local" "--get" key)]
@@ -494,11 +574,68 @@
     [:fail (str tool " is not installed (needed for " why ")") (str "install " tool)]))
 
 
+(defn ownership-problems
+  "Where init would replace what dev-kit did not write (#14): a file without dev-kit's marker, a real file where a
+  link goes, a hooks path of another tool. .claude/settings.json carries no marker (JSON has no comments): before the
+  first init it moves into kit.edn instead, and from then on it is generated."
+  [items]
+  (for [{:keys [kind path key value] :as item} items
+        :let [f       (some-> path rel)
+              problem (case kind
+                        :file (when (and (fs/regular-file? f) (not= path ".claude/settings.json")
+                                         (not (str/includes? (slurp f) "Managed by dev-kit")))
+                                (if (str/starts-with? path ".claude/agents/")
+                                  "is an agent of the project's own with dev-kit's name: rename it"
+                                  "holds a file dev-kit did not write: move it away, or merge what it needs elsewhere"))
+                        :symlink (when (and (fs/exists? f) (not (fs/sym-link? f)))
+                                   (str "is a real " (if (fs/directory? f) "folder" "file") " where dev-kit puts a link to "
+                                        (:target item) ": move it away"))
+                        :git-config (let [v (sh "git" "config" "--local" "--get" key)]
+                                      (when (and v (not= v value))
+                                        (str "is " v ": call those hooks from " value " or drop them, then git config --unset " key)))
+                        nil)]
+        :when problem]
+    (str (label item) " " problem "; then run kit init again")))
+
+
+(defn user-reads-both?
+  "Whether the user's Claude Code settings load AGENTS.md next to CLAUDE.md files (Project instructions)."
+  []
+  (let [m (read-json-object (expand-home "~/.claude/settings.json"))]
+    (some #(= "claude-md-and-agents-md" (get-in m ["pluginConfigs" % "options" "instructionFiles"]))
+          ["cc-plugin-agents-md@builtin" "agents-md@builtin"])))
+
+
+(defn claude-md-problems
+  "Claude Code reads AGENTS.md only when no CLAUDE.md, .claude/CLAUDE.md or CLAUDE.local.md is in the project or
+  above it; the user's own ~/.claude/CLAUDE.md does not count
+  (https://code.claude.com/docs/en/memory#when-claude-code-reads-agents-md). --ci looks at the committed files only."
+  [ci]
+  (let [real  #(str (fs/real-path %))
+        user  (let [u (expand-home "~/.claude/CLAUDE.md")] (when (fs/exists? u) (real u)))
+        found (distinct
+                (for [d (if ci [root] (take-while some? (iterate fs/parent (fs/real-path root))))
+                      f (if ci ["CLAUDE.md" ".claude/CLAUDE.md"] ["CLAUDE.md" ".claude/CLAUDE.md" "CLAUDE.local.md"])
+                      :let [p (fs/path d f)]
+                      :when (and (fs/exists? p) (not= (real p) user))]
+                  (real p)))]
+    (when (and (seq found) (or ci (not (user-reads-both?))))
+      [[:fail (str (str/join ", " found) " hides AGENTS.md: Claude Code then never reads the rules")
+        "move its content into AGENTS.md below the dev-kit block and delete it, or set Project instructions to claude-md-and-agents-md in /config"]])))
+
+
 (defn problems
   [cfg {:keys [ci]}]
-  (if (nil? cfg)
+  (cond
+    (nil? cfg)
     [[:fail "kit.edn is missing" (str mount "/bin/kit init --repo <owner/repo> --showcase <name>")]]
+
+    (seq (config-problems cfg))
+    (for [p (config-problems cfg)] [:fail (str "kit.edn: " p) "fix kit.edn"])
+
+    :else
     (concat
+      (claude-md-problems ci)
       (submodule-problems)
       (for [item (managed-items cfg)
             :when (not (and ci (:local item)))
@@ -531,31 +668,34 @@
         :local-env (write-local-env! root env)
 
         :block
-        (let [s (slurp-if f)]
-          (write! f (cond
-                      (nil? s) (str content "\n" (slurp (str (fs/path kit-dir "scaffold" "AGENTS.md"))))
-                      (split-block s) (let [[before _ after] (split-block s)] (str before content after))
-                      :else (str content "\n\n" s))))
+        (let [s (slurp-if f)
+              {:keys [pairs stray]} (some-> s block-markers)]
+          (cond
+            (nil? s) (write! f (str content "\n" (slurp (str (fs/path kit-dir "scaffold" "AGENTS.md")))))
+            (seq stray) (fail! problem)
+            (empty? pairs) (write! f (str content "\n\n" s))
+            :else (write! f (with-block s content pairs))))
 
         :symlink
         (if (and (fs/exists? f) (not (fs/sym-link? f)))
-          (die path "is a real file where dev-kit wants a link; move it away, then run init again")
+          (fail! path "is a real file where dev-kit wants a link; move it away, then run init again")
           (do (fs/delete-if-exists f)
               (fs/create-dirs (fs/parent f))
               (fs/create-sym-link f target)))
 
         :kondo
-        (let [s (slurp-if f)]
-          (write! f (if (nil? s)
-                      (str ";; Project settings for clj-kondo. Shared strict linters come from dev-kit.\n"
-                           "{:config-paths [\"" (kondo-entry) "\"]}\n")
-                      (let [zloc (z/of-string s)]
-                        (z/root-string
-                          (if (z/get zloc :config-paths)
-                            (z/edit (z/get zloc :config-paths) conj (kondo-entry))
-                            (z/assoc zloc :config-paths [(kondo-entry)]))))))
-          (when-not (contains? (kondo-paths (slurp f)) (kondo-entry))
-            (die path "could not be updated; add" (kondo-entry) "to :config-paths by hand")))
+        (let [s (slurp-if f)
+              m (some-> s kondo-config)
+              entry (str (kondo-map-text) "\n")]
+          (cond
+            (nil? s) (write! f (str ";; Project settings for clj-kondo. Shared strict linters come from dev-kit.\n" entry))
+            (nil? m) (write! f (str s (when-not (str/ends-with? s "\n") "\n") entry)) ; empty, or comments only
+            (not (map? m)) (fail! path problem)
+            :else (let [zloc (z/of-string s)]
+                    (write! f (z/root-string (if (z/get zloc :config-paths)
+                                               (z/edit (z/get zloc :config-paths) conj (kondo-entry))
+                                               (z/assoc zloc :config-paths [(kondo-entry)]))))))
+          (when (check item) (fail! path "could not be updated; add" (kondo-entry) "to :config-paths by hand")))
 
         :git-config (sh "git" "config" "--local" key value))
       (str (label item) " (" problem ")"))))
@@ -567,16 +707,32 @@
     (second (re-find #"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$" url))))
 
 
-(defn create-config!
+(defn new-config
+  "The kit.edn a project without one gets, from init's flags. A .claude/settings.json already there becomes
+  :claude-settings, which the generated settings merge in: nothing of it is lost."
   [{:keys [repo showcase modules]}]
-  (let [repo (or repo (infer-repo) (die "no origin remote; pass --repo owner/name"))
-        mods (into #{} (map keyword) (some-> modules (str/split #",")))]
-    (write! config-file
-            (str ";; dev-kit settings for this project, read by " mount "/bin/kit (see " mount "/README.md).\n"
-                 "{:repo     " (pr-str repo) "\n"
-                 " :showcase " (pr-str showcase) "\n"
-                 " ;; #{:clojure} adds the shared zprint/clj-kondo setup and Clojure rules\n"
-                 " :modules  " (pr-str mods) "}\n"))))
+  (let [settings (read-json-object (rel ".claude/settings.json"))
+        ;; settings dev-kit wrote run its hook; kit.edn went missing, they are not the project's own
+        settings (if (str/includes? (json/generate-string settings) ".claude/hooks/pretooluse.sh") {} settings)]
+    (when (= ::invalid settings) (fail! ".claude/settings.json is not a JSON object: fix it or move it away, then run kit init again"))
+    (cond-> {:repo     (or repo (infer-repo) (fail! "no origin remote on GitHub: pass --repo owner/name"))
+             :showcase showcase
+             :modules  (into #{} (comp (remove str/blank?) (map keyword)) (some-> modules (str/split #",")))}
+      (seq settings) (assoc :claude-settings settings))))
+
+
+(defn create-config!
+  [{:keys [repo showcase modules claude-settings]}]
+  (write! config-file
+          (str ";; dev-kit settings for this project, read by " mount "/bin/kit (see " mount "/README.md).\n"
+               "{:repo     " (pr-str repo) "\n"
+               " :showcase " (pr-str showcase) "\n"
+               " ;; #{:clojure} adds the shared zprint/clj-kondo setup and Clojure rules\n"
+               " :modules  " (pr-str modules)
+               (when claude-settings
+                 (str "\n ;; merged into the generated .claude/settings.json; it was the project's own before dev-kit\n"
+                      " :claude-settings " (pr-str claude-settings)))
+               "}\n")))
 
 
 (defn scaffold!
@@ -619,28 +775,50 @@
   the SessionStart hook runs it, so a fresh clone or worktree sets itself up."
   []
   (when-let [cfg (read-config)]
-    (doseq [c (keep fix! (filter :local (managed-items cfg)))]
-      (println "dev-kit init --local: wrote" c))))
+    (when (empty? (config-problems cfg)) ; doctor names them; the session start does not repeat it
+      (doseq [c (keep fix! (filter :local (managed-items cfg)))]
+        (println "dev-kit init --local: wrote" c)))))
+
+
+(defn refuse!
+  "Prints why init writes nothing, and exits 1."
+  [ps]
+  (println "dev-kit init" (str "(" root ")"))
+  (doseq [p ps] (println (str "  FAIL  " p)))
+  (println "  nothing was written")
+  (System/exit 1))
 
 
 (defn init
+  "Writes nothing until kit.edn is valid and no project file sits where dev-kit writes; then brings every item in
+  place on its own, so one that fails leaves the others done (#14)."
   [opts]
-  (when-not (fs/exists? config-file) (create-config! opts))
-  (let [cfg     (read-config)
+  (let [new     (when-not (fs/exists? config-file) (new-config opts))
+        cfg     (if new (merge-config (read-defaults) new) (read-config))
+        _       (some-> (seq (config-problems cfg)) refuse!)
         items   (managed-items cfg)
+        _       (some-> (seq (ownership-problems items)) refuse!)
+        _       (when new (create-config! new))
         stale   (stale-paths items)
         _       (run! #(fs/delete-if-exists (rel %)) stale)
-        changes (concat (scaffold! cfg (:scaffold opts))
-                        (keep fix! items)
+        results (doall (for [item items]
+                         (try [:ok (fix! item)]
+                              (catch clojure.lang.ExceptionInfo e [:fail (str (label item) ": " (ex-message e)) (label item)]))))
+        failed  (set (keep (fn [[l _ lbl]] (when (= l :fail) lbl)) results))
+        changes (concat (when (:claude-settings new)
+                          ["kit.edn :claude-settings (the project's .claude/settings.json, which is generated from now on)"])
+                        (scaffold! cfg (:scaffold opts))
+                        (keep (fn [[l c]] (when (= l :ok) c)) results)
                         (map #(str % " (removed, no longer managed)") stale))]
     (println "dev-kit init" (str "(" root ")"))
-    (if (seq changes)
-      (doseq [c changes] (println "  wrote" c))
-      (println "  nothing to change"))
+    (doseq [c changes] (println "  wrote" c))
+    (doseq [[l msg] results :when (= l :fail)] (println (str "  FAIL  " msg)))
+    (when (and (empty? changes) (empty? failed)) (println "  nothing to change"))
     (some-> (:agent cfg) offer-login!)
-    (let [ps (problems cfg {})]
+    ;; doctor's view of what is left, without repeating the items that failed above
+    (let [ps (remove (fn [[_ msg]] (some #(str/starts-with? msg (str % ": ")) failed)) (problems cfg {}))]
       (print-problems ps false)
-      (System/exit (if (some #(= :fail (first %)) ps) 1 0)))))
+      (System/exit (if (or (seq failed) (some #(= :fail (first %)) ps)) 1 0)))))
 
 
 (defn identity!
@@ -997,12 +1175,17 @@
   (when (and (#{"init" "doctor" "modules"} cmd)
              (not= (str root) (sh "git" "rev-parse" "--show-toplevel")))
     (die "dev-kit must be mounted at <project>/" mount "; " (str root) "is not a git repository root"))
-  (case cmd
-    "init" (let [opts (parse-args args)] (if (:local opts) (init-local) (init opts)))
-    "doctor" (doctor (parse-args args))
-    "modules" (println (str "clojure=" (boolean (some-> (read-config) clojure?))))
-    "identity" (identity! (parse-args args))
-    "gate" (gate! (parse-args args))
-    "retro" (retro! args)
-    nil (usage)
-    (do (usage) (die "unknown command" cmd))))
+  (try
+    (case cmd
+      "init" (let [opts (parse-args args)] (if (:local opts) (init-local) (init opts)))
+      "doctor" (doctor (parse-args args))
+      "modules" (println (str "clojure=" (boolean (some-> (read-config) clojure?))))
+      "identity" (identity! (parse-args args))
+      "gate" (gate! (parse-args args))
+      "retro" (retro! args)
+      nil (usage)
+      (do (usage) (die "unknown command" cmd)))
+    (catch clojure.lang.ExceptionInfo e
+      (if (:kit/problem (ex-data e))
+        (do (println (str "  FAIL  " (ex-message e))) (System/exit 1))
+        (throw e)))))
