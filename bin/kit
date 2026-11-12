@@ -9,6 +9,8 @@
 ;;   .shared/bin/kit gate     --branch B --pr N | --g1 N | --hook   the design approval gate (ADR-0002)
 ;;   .shared/bin/kit retro    N [--repo R] [--messages]   friction data of merged issue N for its
 ;;                            retrospective: the friction log the hooks keep on this machine, and GitHub (#55)
+;;   .shared/bin/kit retro    --missing [--repo R]   merged issues of the last 14 days without a retrospective;
+;;                            exit 1 when there are some (#56)
 ;;
 ;; Two kinds of files:
 ;;   scaffold — created once if missing, then owned by the project (kit.edn, LICENSE, the
@@ -875,17 +877,16 @@
 
 
 (defn retro!
-  "kit retro N …: the code lives in bin/retro.clj, loaded only for this command."
+  "kit retro N … and kit retro --missing …: the code lives in bin/retro.clj, loaded only for this command."
   [[n & more]]
-  (when-not (and n (re-matches #"\d+" n)) (die "retro: name the issue, e.g. kit retro 55"))
-  (let [opts (parse-args more)]
-    (load-file (str (fs/path kit-dir "bin" "retro.clj")))
-    ((resolve 'retro/run)
-     (assoc opts
-            :issue (parse-long n)
-            :repo (gate-repo opts (gate-config))
-            :agent (get-in (read-defaults) [:agent :login])
-            :gh gh!))))
+  (when-not (and n (or (= n "--missing") (re-matches #"\d+" n)))
+    (die "retro: name the issue, e.g. kit retro 55, or kit retro --missing"))
+  (load-file (str (fs/path kit-dir "bin" "retro.clj")))
+  (let [opts (parse-args more)
+        opts (assoc opts :repo (gate-repo opts (gate-config)) :gh gh!)]
+    (if (= n "--missing")
+      ((resolve 'retro/run-missing) opts)
+      ((resolve 'retro/run) (assoc opts :issue (parse-long n) :agent (get-in (read-defaults) [:agent :login]))))))
 
 
 (let [[cmd & args] *command-line-args*]

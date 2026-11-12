@@ -9,6 +9,7 @@
 #   no-auto-merge   when present, `pr merge --auto` fails as in a repository without auto-merge
 #   gate-issue.json the full response of `api graphql` (the gate's issue query)
 #   retro.json      the full response of `api graphql` for the retrospective's query
+#   missing.json    the full response of `api graphql` for merged issues without a retrospective
 #   perm-<login>    output of `api …/collaborators/<login>/permission --jq .permission`
 #   pr-files.json   output of `api …/pulls/<n>/files --paginate`
 #   gh-fails        when present, every `api` call fails, as when GitHub is unreachable
@@ -44,6 +45,7 @@ case "${1:-} ${2:-}" in
     case "$2" in
       graphql)
         case "$*" in
+          *'search('*) answer missing.json ;;
           *closedByPullRequestsReferences*) answer retro.json ;;
           *) answer gate-issue.json ;;
         esac ;;

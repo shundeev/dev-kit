@@ -128,6 +128,9 @@ component is an M: stop, resize it and ask for G1.
 
 ## 11. Retrospective
 
+- New work waits for it (ADR-0004, #56): `start_issue_flow.sh` refuses to start while an issue
+  merged in the last 14 days lacks its `## Retrospective` comment, and a session's start names
+  them. Only the owner waives it: `--skip-retro` asks them first.
 - After the merge, collect the data: `bb .shared/bin/kit retro <issue>` (in dev-kit itself
   `bb bin/kit retro <issue> --repo shundeev/dev-kit`). It counts the friction that dev-kit's hooks
   recorded as it happened, and adds GitHub's: the owner's confirmation windows by the ask rule
