@@ -466,7 +466,18 @@ expect_exit 1 "finish: no open PR and no body file stops before the commit" flow
 printf 'did it\n' > "$WORK/bad-msg.txt"
 expect_exit 1 "finish: commit message without type(GH-n) refused" flow finish_issue_flow.sh --commit-message-file "$WORK/bad-msg.txt" --pr-body-file "$WORK/empty-adr.md"
 
-printf 'What changed\n\nADR: none\n' > "$WORK/body.md"; : > "$FAKE_GH_LOG"
+git switch -q -c hotfix; expect_exit 1 "finish: a branch without an issue number stops before the commit" flow finish_issue_flow.sh --pr-body-file "$WORK/empty-adr.md"
+contains "  names the way out" "start_issue_flow.sh" "$LAST"
+git switch -q 12-landing; git branch -q -D hotfix
+printf '## Review\n<!-- hint -->\n\n## User-level test\nRan it.\n\nADR: none\n' > "$WORK/no-review.md"
+expect_exit 1 "finish: a Review section with only the hint stops before the commit (#21)" flow finish_issue_flow.sh --pr-body-file "$WORK/no-review.md"
+contains "  with the same words as CI" "fill in ## Review" "$LAST"
+[ "$(head_now)" = "$before" ] && ok "  nothing committed" || bad "  committed anyway"
+printf '## What changed\n- x\n\n## Review\nLooked at it.\n\n## User-level test\nRan it.\n\nADR: none\n' > "$WORK/body.md"
+expect_exit 1 "finish: a type outside Conventional Commits stops before the commit" flow finish_issue_flow.sh --type update --pr-body-file "$WORK/body.md"
+contains "  names the way out" "pass --type" "$LAST"
+[ "$(head_now)" = "$before" ] && ok "  nothing committed" || bad "  committed anyway"
+: > "$FAKE_GH_LOG"
 expect_exit 0 "finish: a closed PR does not count; a new one is opened" flow finish_issue_flow.sh --pr-body-file "$WORK/body.md"
 grep -q '^pr create' "$FAKE_GH_LOG" && ok "  gh pr create called" || bad "  no pr create" "$(cat "$FAKE_GH_LOG")"
 grep -q 'pr list .*--state open' "$FAKE_GH_LOG" && ok "  only open PRs looked up" || bad "  lookup not limited to open PRs"
@@ -558,15 +569,20 @@ gate() { PATH="$KIT/test/fake-gh:$PATH" FAKE_GH_DIR="$G" FAKE_GH_LOG="$G/log" GI
 issue() {
   jq -n --argjson labels "$1" --arg by "$2" --arg at "$3" --arg edited "$4" --arg dc "$5" --arg de "$6" \
     '{data: {repository: {issue: {
+       state: "OPEN",
        lastEditedAt: (if $edited == "null" then null else $edited end),
        labels: {nodes: ($labels | map({name: .}))},
        timelineItems: {nodes: [{actor: {login: $by}, label: {name: "design-approved"}, createdAt: $at}]},
        comments: {nodes: [{author: {login: "someone"}, createdAt: $dc, body: "## Design (proposed)",
                            lastEditedAt: (if $de == "null" then null else $de end)}]}}}}}' > "$G/gate-issue.json"
 }
-files() { jq -n --argjson n "$1" '[{filename: "src/a.clj", additions: $n, deletions: 0},
-                                    {filename: "package-lock.json", additions: 900, deletions: 0}]' > "$G/pr-files.json"; }
-echo admin > "$G/perm-the-owner"; echo write > "$G/perm-$default_login"; files 50
+# pr-files.json holds what `gh api --paginate …/files --jq '.[]'` prints: one file per line.
+files() { jq -nc --argjson n "$1" '{filename: "src/a.clj", status: "modified", additions: $n, deletions: 0},
+                                   {filename: "package-lock.json", status: "modified", additions: 900, deletions: 0}' > "$G/pr-files.json"; }
+GOOD_BODY=$'## What changed\n- x\n\n## Review\n<!-- hint -->\nSelf-review: fine.\n\n## User-level test\nRan it.\n\nADR: none'
+# pr <title> [body]: what `gh api …/pulls/<n>` prints after the gate's filter
+pr() { jq -nc --arg t "$1" --arg b "${2-$GOOD_BODY}" '{title: $t, body: $b}' > "$G/pr.json"; }
+echo admin > "$G/perm-the-owner"; echo write > "$G/perm-$default_login"; files 50; pr "feat(GH-26): add x"
 T0=2026-11-12T10:00:00Z; T1=2026-11-12T11:00:00Z; T2=2026-11-12T12:00:00Z
 issue '["design-approved","size:M"]' the-owner $T1 null $T0 null
 expect_exit 0 "gate: an approved M issue passes" gate --branch 26-x --pr 7
@@ -591,7 +607,54 @@ contains "  lock files are not counted" "150 lines" "$LAST"
 files 250
 expect_exit 1 "gate: an S PR over the threshold fails" gate --branch 26-x --pr 7
 contains "  says to resize" "size:M" "$LAST"
-expect_exit 0 "gate: a branch without an issue number is skipped" gate --branch feature-x --pr 7
+
+echo "- pull request shape and accepted ADRs (#21)"
+issue '["size:S"]' the-owner $T1 null $T0 null; files 10
+expect_exit 0 "pr gate: a well-formed S PR passes" gate --branch 26-x --pr 7
+grep -q -- '--paginate' "$G/log" && ok "  reads every page of the file list" || bad "  one page only" "$(grep files "$G/log")"
+expect_exit 1 "pr gate: a branch without an issue number fails" gate --branch feature-x --pr 7
+contains "  names the way out" "start_issue_flow.sh" "$LAST"
+jq '.data.repository.issue.state = "CLOSED"' "$G/gate-issue.json" > "$G/i" && mv "$G/i" "$G/gate-issue.json"
+expect_exit 1 "pr gate: a closed issue fails" gate --branch 26-x --pr 7
+contains "  says the issue is closed" "#26 is closed" "$LAST"
+issue '["size:S"]' the-owner $T1 null $T0 null
+pr "add x"; expect_exit 1 "pr gate: a title without type(GH-n) fails" gate --branch 26-x --pr 7
+contains "  with the command that renames it" "gh pr edit 7 --title" "$LAST"
+pr "feat(GH-25): add x"; expect_exit 1 "pr gate: a title naming another issue fails" gate --branch 26-x --pr 7
+pr "update(GH-26): add x"; expect_exit 1 "pr gate: a type outside Conventional Commits fails" gate --branch 26-x --pr 7
+pr "feat(GH-26): add x" "${GOOD_BODY%ADR: none}"; expect_exit 1 "pr gate: a body without an ADR line fails" gate --branch 26-x --pr 7
+contains "  names the line" "ADR: none" "$LAST"
+pr "feat(GH-26): add x" "${GOOD_BODY/ADR: none/ADR: none — a process change, decided in ADR-0001}"
+expect_exit 0 "pr gate: an ADR line with a reason after it passes" gate --branch 26-x --pr 7
+pr "feat(GH-26): add x" "${GOOD_BODY/ADR: none/ADR: maybe}"; expect_exit 1 "pr gate: an ADR line that names no ADR fails" gate --branch 26-x --pr 7
+pr "feat(GH-26): add x" "${GOOD_BODY/Self-review: fine./}"; expect_exit 1 "pr gate: a Review section with only the hint fails" gate --branch 26-x --pr 7
+contains "  names the section" "Review" "$LAST"
+pr "feat(GH-26): add x" "${GOOD_BODY/\#\# User-level test/\#\# Testing}"; expect_exit 1 "pr gate: a missing User-level test section fails" gate --branch 26-x --pr 7
+contains "  names the section" "User-level test" "$LAST"
+pr "add x" "no sections"; expect_exit 1 "pr gate: every problem is listed, not only the first" gate --branch 26-x --pr 7
+[ "$(grep -c '  FAIL  ' <<<"$LAST")" -ge 4 ] && ok "  four problems, four lines" || bad "  lines" "$LAST"
+pr "feat(GH-26): add x"
+adr() { jq -nc --arg s "$1" --arg f "${2:-adr/0001-a.md}" --arg p "${3:-}" \
+  '{filename: $f, status: $s, additions: 1, deletions: 1} + (if $p == "" then {} else {previous_filename: $p} end)' > "$G/pr-files.json"; }
+adr added adr/0005-new.md; expect_exit 0 "pr gate: a new ADR passes" gate --branch 26-x --pr 7
+adr modified; expect_exit 1 "pr gate: an edited accepted ADR fails" gate --branch 26-x --pr 7
+contains "  says what to do instead" "Supersedes: ADR-0001" "$LAST"
+adr removed; expect_exit 1 "pr gate: a deleted accepted ADR fails" gate --branch 26-x --pr 7
+adr renamed adr/0001-b.md adr/0001-a.md; expect_exit 1 "pr gate: a renamed accepted ADR fails" gate --branch 26-x --pr 7
+adr modified adr/README.md; expect_exit 0 "pr gate: the ADR index is not an ADR" gate --branch 26-x --pr 7
+echo '{"data":{"repository":{"issue":null}}}' > "$G/gate-issue.json"; files 10
+expect_exit 1 "pr gate: a branch number that is no issue fails" gate --branch 26-x --pr 7
+contains "  says so" "#26 is not an issue" "$LAST"
+touch "$G/gh-fails"; expect_exit 1 "pr gate: GitHub unreachable fails" gate --branch 26-x --pr 7
+grep -qE "Exception|----- Error" <<<"$LAST" && bad "  with a stack trace" "$LAST" || contains "  with what to do" "rerun the job" "$LAST"
+rm -f "$G/gh-fails"; issue '["size:S"]' the-owner $T1 null $T0 null
+for i in $(seq 1 101); do jq -nc --arg f "src/f$i.clj" '{filename: $f, status: "modified", additions: 2, deletions: 0}'; done > "$G/pr-files.json"
+expect_exit 1 "pr gate: 101 files are counted in full" gate --branch 26-x --pr 7
+contains "  202 lines" "202 lines" "$LAST"
+for f in managed/ci.yml .github/workflows/selftest.yml; do
+  grep -qE '^ +types: \[opened, synchronize, reopened, edited\]' "$KIT/$f" \
+    && ok "$f reruns when the title or body is edited" || bad "$f misses the edited type"
+done
 
 echo "- design approval hook (fake gh)"
 H="$WORK/hookrepo"; git init -q -b main "$H"; cd "$H" || exit 1

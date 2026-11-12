@@ -19,7 +19,6 @@ Subjects follow Conventional Commits with the issue in the scope:
 GitHub appends the PR number on squash: "feat(GH-12): add landing page (#13)".
 
 Options:
-  --issue <number>              Issue number (default: from the branch name)
   --type <type>                 feat|fix|docs|refactor|test|perf|build|ci|chore (default: the type of
                                 the branch's first commit, else feat)
   --summary <text>              Subject text after "type(GH-n): " (default: the issue title)
@@ -72,7 +71,6 @@ base_branch="${GHWF_DEFAULT_BASE:-main}"
 status_field="${GHWF_STATUS_FIELD:-Status}"
 review_status="${GHWF_REVIEW_STATUS:-In review}"
 
-issue_number=""
 commit_type=""
 summary=""
 commit_message_file=""
@@ -82,7 +80,6 @@ add_paths=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --issue) issue_number="$2"; shift 2 ;;
     --type) commit_type="$2"; shift 2 ;;
     --summary) summary="$2"; shift 2 ;;
     --commit-message-file) commit_message_file="$2"; shift 2 ;;
@@ -108,11 +105,6 @@ if [[ -z "$commit_type" ]]; then
   commit_type="${commit_type:-feat}"
 fi
 
-case "$commit_type" in
-  feat|fix|docs|refactor|test|perf|build|ci|chore) ;;
-  *) die "--type '$commit_type' is not a Conventional Commits type" ;;
-esac
-
 [[ -n "$repo" ]] || repo="$(infer_repo_from_origin)"
 [[ -n "$repo" ]] || die "--repo or GHWF_REPO is required"
 
@@ -120,17 +112,15 @@ branch_name="$(git rev-parse --abbrev-ref HEAD)"
 [[ "$branch_name" != "HEAD" ]] || die "Detached HEAD is not supported"
 [[ "$branch_name" != "$base_branch" ]] || die "On the base branch '$base_branch': run from the issue branch"
 
-if [[ -z "$issue_number" && "$branch_name" =~ ^([0-9]+)- ]]; then
-  issue_number="${BASH_REMATCH[1]}"
-fi
-[[ -n "$issue_number" ]] || die "No issue number: the branch is not <number>-<slug> and --issue was not given"
+# The issue is the branch's number: CI's pull request gate accepts no other (#21).
+[[ "$branch_name" =~ ^([0-9]+)- ]] \
+  || die "The branch '$branch_name' is not <number>-<slug>: open the issue with start_issue_flow.sh and move the work to its branch"
+issue_number="${BASH_REMATCH[1]}"
 
 # Everything that can be wrong with the inputs is checked before the commit and the push:
 # a run that dies after the push leaves a branch with no pull request and a confusing rerun.
 if [[ -n "$pr_body_file" ]]; then
   [[ -r "$pr_body_file" ]] || die "PR body file '$pr_body_file' not found"
-  grep -Eq '^ADR: +[^[:space:]]' "$pr_body_file" \
-    || die "The PR body needs an 'ADR: none' or 'ADR: adr/NNNN-....md' line (see the adr skill)"
 fi
 if [[ -n "$commit_message_file" ]]; then
   [[ -r "$commit_message_file" ]] || die "Commit message file '$commit_message_file' not found"
@@ -149,8 +139,13 @@ else
   issue_title="$(gh issue view "$issue_number" -R "$repo" --json title --jq '.title')"
   subject="$commit_type(GH-$issue_number): ${issue_title,}"
 fi
-[[ "$subject" =~ ^(feat|fix|docs|refactor|test|perf|build|ci|chore)\(GH-$issue_number\):\ .+ ]] \
-  || die "Subject '$subject' is not 'type(GH-$issue_number): summary'"
+# The title and the body pass the rules CI checks on the pull request (#21): one implementation, in kit.
+kit="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../../.." && pwd)/bin/kit"
+shape_args=(--shape --branch "$branch_name" --title "$subject")
+# The body file is checked only when it becomes a new PR's body; an open PR keeps its own.
+[[ -n "$pr_url" || -z "$pr_body_file" ]] || shape_args+=(--body-file "$pr_body_file")
+shape_out="$(bb "$kit" gate "${shape_args[@]}" 2>&1)" \
+  || die "The pull request would fail CI's shape check; nothing was committed or pushed:"$'\n'"$shape_out"
 
 if [[ "$no_commit" -eq 0 ]]; then
   [[ "${#add_paths[@]}" -eq 0 ]] || git add -- "${add_paths[@]}"
