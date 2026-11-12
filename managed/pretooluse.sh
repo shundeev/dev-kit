@@ -21,9 +21,20 @@ guard="$root/{{kit}}/claude/hooks/delivery-guard.sh"
 tool="$(printf '%s' "$input" | sed -n 's/.*"tool_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
 if [ -r "$guard" ]; then
   case "$tool" in
-    Edit|Write|NotebookEdit|MultiEdit) exec bb "$root/{{kit}}/bin/kit" gate --hook <<<"$input" ;;
-    *) exec bash "$guard" <<<"$input" ;;
+    Edit|Write|NotebookEdit|MultiEdit) out="$(bb "$root/{{kit}}/bin/kit" gate --hook <<<"$input")" ;;
+    *) out="$(bash "$guard" <<<"$input")" ;;
   esac
+  rc=$?
+  [ -n "$out" ] && printf '%s\n' "$out"
+  # A refusal is friction: the recorder keeps it with its call (#55). It never changes the verdict.
+  case "$out" in
+    *'"permissionDecision":"deny"'*)
+      rec="$root/{{kit}}/claude/hooks/friction.sh"
+      [ -r "$rec" ] && jq -c --argjson o "$out" '. + {reason: $o.hookSpecificOutput.permissionDecisionReason}' \
+        <<<"$input" 2>/dev/null | bash "$rec" HookDenied
+      ;;
+  esac
+  exit "$rc"
 fi
 
 # Extract tool_input.command without jq, which may be what is missing.

@@ -110,6 +110,108 @@
             "statusMessage": "Checking delivery flow..."
           }
         ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "bash -c 'h=\"${CLAUDE_PROJECT_DIR:-.}/{{kit}}/claude/hooks/friction.sh\"; [ -r \"$h\" ] && exec bash \"$h\" PreToolUse; exit 0'"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "bash -c 'h=\"${CLAUDE_PROJECT_DIR:-.}/{{kit}}/claude/hooks/friction.sh\"; [ -r \"$h\" ] && exec bash \"$h\" PermissionRequest; exit 0'"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "bash -c 'h=\"${CLAUDE_PROJECT_DIR:-.}/{{kit}}/claude/hooks/friction.sh\"; [ -r \"$h\" ] && exec bash \"$h\" PostToolUse; exit 0'"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "bash -c 'h=\"${CLAUDE_PROJECT_DIR:-.}/{{kit}}/claude/hooks/friction.sh\"; [ -r \"$h\" ] && exec bash \"$h\" PostToolUseFailure; exit 0'"
+          }
+        ]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "bash -c 'h=\"${CLAUDE_PROJECT_DIR:-.}/{{kit}}/claude/hooks/friction.sh\"; [ -r \"$h\" ] && exec bash \"$h\" PermissionDenied; exit 0'"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "bash -c 'h=\"${CLAUDE_PROJECT_DIR:-.}/{{kit}}/claude/hooks/friction.sh\"; [ -r \"$h\" ] && exec bash \"$h\" UserPromptSubmit; exit 0'"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "bash -c 'h=\"${CLAUDE_PROJECT_DIR:-.}/{{kit}}/claude/hooks/friction.sh\"; [ -r \"$h\" ] && exec bash \"$h\" Stop; exit 0'"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "bash -c 'h=\"${CLAUDE_PROJECT_DIR:-.}/{{kit}}/claude/hooks/friction.sh\"; [ -r \"$h\" ] && exec bash \"$h\" SubagentStop; exit 0'"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "bash -c 'h=\"${CLAUDE_PROJECT_DIR:-.}/{{kit}}/claude/hooks/friction.sh\"; [ -r \"$h\" ] && exec bash \"$h\" StopFailure; exit 0'"
+          }
+        ]
       }
     ]
   }

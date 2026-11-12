@@ -1,0 +1,5 @@
+{"at":"2026-10-20T10:00:00Z","event":"UserPromptSubmit","session":"s0","turn":"o1","prompt":"старое"}
+{"at":"2026-10-20T10:01:00Z","event":"PreToolUse","session":"s0","turn":"o1","tool":"Bash","id":"o1","input":{"command":"gh api graphql -f query=old"},"branch":"main","origin":"u473t8/fake"}
+{"at":"2026-10-20T10:01:00Z","event":"PermissionRequest","session":"s0","turn":"o1","tool":"Bash","input":{"command":"gh api graphql -f query=old"},"asks":["Bash(gh api *)","Bash(rm *)","Read(/secret/**)","Bash(curl https://host/tok*)"]}
+{"at":"2026-10-20T10:02:00Z","event":"PostToolUse","session":"s0","turn":"o1","id":"o1"}
+{"at":"2026-10-20T10:03:00Z","event":"Stop","session":"s0","turn":"o1","needs_input":false}
