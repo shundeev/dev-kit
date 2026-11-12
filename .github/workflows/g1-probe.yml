@@ -1,0 +1,24 @@
+# Temporary (#26): what the built-in token can read for the G1 gate. Removed before the merge.
+name: g1-probe
+on: pull_request
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      R: ${{ github.repository }}
+    steps:
+      - name: labeled events of issue 26 (REST timeline)
+        run: gh api "repos/$R/issues/26/timeline" --paginate --jq '.[] | select(.event=="labeled") | "\(.label.name) by \(.actor.login) at \(.created_at)"' || echo FAILED
+      - name: issue body edit time, labels, labeled events, comments (GraphQL)
+        run: |
+          gh api graphql -f o="${R%/*}" -f n="${R#*/}" -f query='query($o:String!,$n:String!){repository(owner:$o,name:$n){issue(number:26){lastEditedAt labels(first:20){nodes{name}} timelineItems(itemTypes:[LABELED_EVENT],last:5){nodes{... on LabeledEvent{actor{login} label{name} createdAt}}} comments(last:30){nodes{author{login} createdAt lastEditedAt body}}}}}' \
+            --jq '.data.repository.issue | {lastEditedAt, labels: [.labels.nodes[].name], labeled: [.timelineItems.nodes[] | "\(.label.name) by \(.actor.login) at \(.createdAt)"], comments: [.comments.nodes[] | "\(.author.login) created=\(.createdAt) edited=\(.lastEditedAt) design=\(.body | startswith("## Design"))"]}' || echo FAILED
+      - name: collaborator permission
+        run: for u in u473t8 u473t8-angel; do echo "$u: $(gh api "repos/$R/collaborators/$u/permission" --jq .permission 2>&1)"; done
+      - name: PR files and line counts
+        run: gh api "repos/$R/pulls/${{ github.event.pull_request.number }}/files" --jq '.[] | "\(.filename) +\(.additions) -\(.deletions)"' || echo FAILED
