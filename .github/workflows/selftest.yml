@@ -3,6 +3,8 @@ name: Selftest
 # No path filter: `selftest` is the required check of the main ruleset, so it must always report.
 on:
   pull_request:
+    # edited: a fixed title or body reruns the pull request gate (#21)
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 
@@ -32,8 +34,9 @@ jobs:
       - name: Selftest
         run: test/selftest.sh
 
-      - name: Design approval and size gate (ADR-0002, #26)
+      - name: Pull request gate (ADR-0002, #26, #21)
         if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bb bin/kit gate --branch "${{ github.head_ref }}" --pr "${{ github.event.pull_request.number }}"
+        # The branch comes from GITHUB_HEAD_REF: a branch name in the script could inject commands.
+        run: bb bin/kit gate --pr "${{ github.event.pull_request.number }}"

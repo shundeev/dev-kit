@@ -118,7 +118,9 @@ component is an M: stop, resize it and ask for G1.
 
 - Write the body from `.github/pull_request_template.md`, then run `finish_issue_flow.sh`
   (`gh-project-workflow`). It commits, pushes, opens the PR, turns on auto-merge and moves the
-  card to **In review**.
+  card to **In review**. It first runs the shape rules CI's pull request gate holds (branch,
+  title, `ADR:` line, filled **Review** and **User-level test**), so a PR that would fail them is
+  never opened (#21).
 - Anything the owner must do by hand goes into a PR comment as numbered steps: where to click,
   what to type, what the result looks like, what to do if it fails. The report gives the link.
 

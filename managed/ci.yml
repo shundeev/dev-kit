@@ -8,6 +8,8 @@ name: CI
 
 on:
   pull_request:
+    # edited: a fixed title or body reruns the pull request gate (dev-kit#21)
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 

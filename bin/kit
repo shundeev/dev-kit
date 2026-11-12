@@ -6,7 +6,8 @@
 ;;   .shared/bin/kit doctor   [--ci] [--quiet]
 ;;   .shared/bin/kit modules
 ;;   .shared/bin/kit identity [--dir PATH]   the agent's GitHub identity alone, for any repository
-;;   .shared/bin/kit gate     --branch B --pr N | --g1 N | --hook   the design approval gate (ADR-0002)
+;;   .shared/bin/kit gate     --branch B --pr N | --g1 N | --hook   the pull request gate (ADR-0002, #21)
+;;                            | --shape --branch B --title T [--body-file F]   its shape rules, offline
 ;;   .shared/bin/kit retro    N [--repo R] [--messages]   friction data of merged issue N for its
 ;;                            retrospective: the friction log the hooks keep on this machine, and GitHub (#55)
 ;;   .shared/bin/kit retro    --missing [--repo R]   merged issues of the last 14 days without a retrospective;
@@ -842,11 +843,16 @@
       (println (str "  WARN  " problem "  →  in your own terminal: bb " (fs/path kit-dir "bin" "kit")
                     " identity --dir " dir " — it logs " (:login agent) " in")))))
 
-;; ------------------------------------------------------------------ gate (ADR-0002, #26)
-;; G1: an M or L issue, or one without a `size:*` label, needs `design-approved`, added after the
-;; issue body and its `## Design` comments last changed, by someone with write access who is not
-;; the agent. An XS/S pull request stays within a size threshold. CI runs
-;; `kit gate --branch … --pr …`; the PreToolUse hook runs `kit gate --hook` before Edit/Write.
+;; ------------------------------------------------------------------ gate (ADR-0002, #26, #21)
+;; The pull request gate, in CI: `kit gate --branch … --pr …`. In order:
+;; - shape (#21): the branch is `<n>-<slug>` of an open issue, the title `type(GH-n): summary`, the
+;;   body has an `ADR:` line and filled **Review** and **User-level test** sections; the finish
+;;   script runs the same rules offline (`kit gate --shape`) before it opens the PR;
+;; - accepted ADRs (`adr/NNNN-*.md` on the base) are not modified, removed or renamed;
+;; - G1: an M or L issue, or one without a `size:*` label, needs `design-approved`, added after the
+;;   issue body and its `## Design` comments last changed, by someone with write access who is not
+;;   the agent. An XS/S pull request stays within a size threshold.
+;; The PreToolUse hook runs `kit gate --hook` before Edit/Write.
 
 (def size-threshold
   "Lines changed in an XS/S pull request, lock and kit-managed files not counted. Merged before the
@@ -858,6 +864,69 @@
 (def lock-file #"(^|/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|[^/]+\.lock)$")
 
 
+(def commit-types ["build" "chore" "ci" "docs" "feat" "fix" "perf" "refactor" "test"])
+
+
+(defn branch-issue
+  "The issue number of a `<n>-<slug>` branch, or nil."
+  [branch]
+  (second (re-find #"^(\d+)-" (str branch))))
+
+
+(defn report!
+  "Prints [level message] lines as `ok`/`FAIL`; exits 1 when one failed."
+  [verdicts]
+  (doseq [[level msg] verdicts]
+    (println (str (if (= level :ok) "  ok    " "  FAIL  ") msg)))
+  (when (some #(not= :ok (first %)) verdicts) (System/exit 1)))
+
+
+(defn section-text
+  "The text under `## <heading>` up to the next heading or the ADR line, without the template's
+  `<!-- … -->` hints; nil when the body has no such heading."
+  [body heading]
+  (when-let [[_ text] (re-find (re-pattern (str "(?ms)^## " (java.util.regex.Pattern/quote heading)
+                                                "[ \\t]*$(.*?)(?=^## |^ADR:|\\z)"))
+                               body)]
+    (str/trim (str/replace text #"(?s)<!--.*?-->" ""))))
+
+
+(defn shape-problems
+  "What is wrong with a pull request's branch, title and body, each with its fix (#21). Offline, so
+  the finish script checks before it opens the PR what CI checks after. A nil body is not checked."
+  [branch title body pr]
+  (if-let [n (branch-issue branch)]
+    (cond-> []
+      (not (re-matches (re-pattern (str "(?:" (str/join "|" commit-types) ")\\(GH-" n "\\): \\S.*")) (str title)))
+      (conj (str "the title '" title "' is not '<type>(GH-" n "): <summary>' with a type from " (str/join ", " commit-types)
+                 ": " (if pr
+                        (str "rename it: gh pr edit " pr " --title '<type>(GH-" n "): <summary>'")
+                        "pass --type from that list, or fix the first line of the commit message")))
+
+      (and body (not (re-find #"(?m)^ADR: +(?:none|adr/\d{4}-\S+\.md)\b" body)))
+      (conj "the body has no 'ADR: none' or 'ADR: adr/NNNN-….md' line: add one (adr skill); a reason may follow it")
+
+      body
+      (into (for [heading ["Review" "User-level test"]
+                  :let [text (section-text body heading)]
+                  :when (str/blank? text)]
+              (if (nil? text)
+                (str "the body has no line '## " heading "' (exactly that heading): add the section from the PR template")
+                (str "'## " heading "' is empty, or holds only the template's hint: fill in ## " heading
+                     "; CI reruns when the body is edited")))))
+    [(str "branch '" branch "' is not <issue>-<slug>: open the issue with start_issue_flow.sh and move the work to its branch")]))
+
+
+(defn adr-problems
+  "Accepted ADRs, `adr/NNNN-*.md` that exist on the base, which the pull request's files change."
+  [files]
+  (for [{:strs [filename status previous_filename]} files
+        :let [f (if (= status "renamed") previous_filename filename)]
+        :when (and (#{"modified" "changed" "removed" "renamed"} status) (re-matches #"adr/\d{4}-[^/]+\.md" (str f)))]
+    (str f " was " status ", but accepted ADRs are immutable: revert it, and record the change as a new ADR with "
+         "'Supersedes: ADR-" (subs f 4 8) "' (adr skill)")))
+
+
 (defn gh!
   "Runs gh; stdout, or an exception carrying gh's message."
   [& args]
@@ -867,7 +936,7 @@
 
 (def issue-query
   (str "query($o:String!,$n:String!,$i:Int!){repository(owner:$o,name:$n){issue(number:$i){"
-       "lastEditedAt labels(first:50){nodes{name}}"
+       "state lastEditedAt labels(first:50){nodes{name}}"
        " timelineItems(itemTypes:[LABELED_EVENT],last:50){nodes{... on LabeledEvent{actor{login} label{name} createdAt}}}"
        " comments(last:100){nodes{author{login} body createdAt lastEditedAt}}}}}"))
 
@@ -939,12 +1008,48 @@
     #{}))
 
 
+(defn pr-files
+  "Every file of the pull request, all pages: one JSON object per line from gh."
+  [repo pr]
+  (->> (gh! "api" (str "repos/" repo "/pulls/" pr "/files?per_page=100") "--paginate"
+            "--jq" ".[] | {filename, status, previous_filename, additions, deletions}")
+       str/split-lines
+       (remove str/blank?)
+       (map json/parse-string)))
+
+
 (defn pr-lines
-  [repo pr excluded]
-  (->> (json/parse-string (gh! "api" (str "repos/" repo "/pulls/" pr "/files?per_page=100")))
+  [files excluded]
+  (->> files
        (remove #(let [f (get % "filename")] (or (re-find lock-file f) (excluded f))))
        (map #(+ (get % "additions" 0) (get % "deletions" 0)))
        (reduce + 0)))
+
+
+(defn issue-verdict
+  "[level message] for the issue behind the pull request: open, and its design approval or size."
+  [repo n files cfg]
+  (let [issue (try (fetch-issue repo n) (catch Exception e {"error" (ex-message e)}))
+        size  (issue-size issue)]
+    (cond
+      (or (nil? issue) (get issue "error"))
+      [:fail (str "#" n " is not an issue of " repo (some->> (get issue "error") (str ": "))
+                  "; the branch must start with the number of the PR's issue")]
+
+      (not= "OPEN" (get issue "state"))
+      [:fail (str "#" n " is closed: reopen it, or move the work to the branch of an open issue")]
+
+      (#{"XS" "S"} size)
+      (let [lines (pr-lines files (managed-paths cfg))]
+        (if (<= lines size-threshold)
+          [:ok (str "size " size ": " lines " lines changed, within " size-threshold
+                    " (lock and kit-managed files not counted); G1 not required")]
+          [:fail (str "#" n " is size:" size " but the PR changes " lines " lines (over " size-threshold
+                      "): resize #" n " to size:M on the board and its label, post the design, and the owner approves it")]))
+
+      :else
+      (let [[l m] (g1-verdict repo n issue (get-in cfg [:agent :login]))]
+        [l (str (if size (str "size " size) "no size label, so M") "; " m)]))))
 
 
 (defn gate-ci!
@@ -952,23 +1057,20 @@
   (let [cfg    (gate-config)
         repo   (gate-repo opts cfg)
         branch (or branch (not-empty (System/getenv "GITHUB_HEAD_REF")) (die "gate: pass --branch"))
-        n      (second (re-find #"^(\d+)-" branch))]
-    (if-not n
-      (println (str "gate: branch " branch " carries no issue number; skipped"))
-      (let [issue (fetch-issue repo n)
-            size  (issue-size issue)
-            [level msg]
-            (if (#{"XS" "S"} size)
-              (let [lines (pr-lines repo (or pr (die "gate: pass --pr")) (managed-paths cfg))]
-                (if (<= lines size-threshold)
-                  [:ok (str "size " size ": " lines " lines changed, within " size-threshold
-                            " (lock and kit-managed files not counted); G1 not required")]
-                  [:fail (str "#" n " is size:" size " but the PR changes " lines " lines (over " size-threshold
-                              "): resize #" n " to size:M on the board and its label, post the design, and the owner approves it")]))
-              (let [[l m] (g1-verdict repo n issue (get-in cfg [:agent :login]))]
-                [l (str (if size (str "size " size) "no size label, so M") "; " m)]))]
-        (println (str (if (= level :ok) "  ok    " "  FAIL  ") msg))
-        (when (= level :fail) (System/exit 1))))))
+        pr     (or pr (die "gate: pass --pr"))
+        n      (branch-issue branch)
+        read!  #(try (%) (catch Exception e (report! [[:fail (str "could not read PR #" pr " of " repo " from GitHub ("
+                                                                  (ex-message e) "); rerun the job")]])))
+        {:strs [title body]} (read! #(json/parse-string (gh! "api" (str "repos/" repo "/pulls/" pr) "--jq" "{title, body}")))
+        files  (read! #(doall (pr-files repo pr)))]
+    (report! (concat (for [p (concat (shape-problems branch title (str body) pr) (adr-problems files))] [:fail p])
+                     (when n [(issue-verdict repo n files cfg)])))))
+
+
+(defn gate-shape!
+  "The shape rules alone, offline, for the finish script before it commits and opens the PR."
+  [{:keys [branch title body-file]}]
+  (report! (for [p (shape-problems branch title (some-> body-file slurp) nil)] [:fail p])))
 
 
 (defn gate-g1!
@@ -991,7 +1093,7 @@
         file   (or (get-in input ["tool_input" "file_path"]) (get-in input ["tool_input" "notebook_path"]))
         top    (sh-in "." "git" "rev-parse" "--show-toplevel")
         branch (sh-in "." "git" "rev-parse" "--abbrev-ref" "HEAD")
-        n      (second (re-find #"^(\d+)-" (str branch)))
+        n      (branch-issue branch)
         path   (when (and top file) (str (fs/relativize top (fs/absolutize file))))]
     (when (and n (not (str/starts-with? (str path) "adr/")))
       (let [cache (str (fs/absolutize (sh-in "." "git" "rev-parse" "--git-path" (str "kit/g1-" n))))
@@ -1014,12 +1116,11 @@
 
 
 (defn gate!
-  [{:keys [g1 hook] :as opts}]
+  [{:keys [g1 hook shape] :as opts}]
   (cond
     hook (gate-hook! opts)
-    g1   (let [[level msg] (try (gate-g1! g1 opts) (catch Exception e [:fail (ex-message e)]))]
-           (println (str (if (= level :ok) "  ok    " "  FAIL  ") msg))
-           (when (not= level :ok) (System/exit 1)))
+    shape (gate-shape! opts)
+    g1   (report! [(try (gate-g1! g1 opts) (catch Exception e [:fail (ex-message e)]))])
     :else (gate-ci! opts)))
 
 
@@ -1041,6 +1142,9 @@
       "--pr" (recur (rest more) (assoc opts :pr (first more)))
       "--g1" (recur (rest more) (assoc opts :g1 (first more)))
       "--hook" (recur more (assoc opts :hook true))
+      "--shape" (recur more (assoc opts :shape true))
+      "--title" (recur (rest more) (assoc opts :title (first more)))
+      "--body-file" (recur (rest more) (assoc opts :body-file (first more)))
       "--now" (recur (rest more) (assoc opts :now (first more)))
       "--messages" (recur more (assoc opts :messages true))
       (die "unknown option" a))))

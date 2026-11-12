@@ -12,7 +12,8 @@
 #   retro.json      the full response of `api graphql` for the retrospective's query
 #   missing.json    the full response of `api graphql` for merged issues without a retrospective
 #   perm-<login>    output of `api …/collaborators/<login>/permission --jq .permission`
-#   pr-files.json   output of `api …/pulls/<n>/files --paginate`
+#   pr-files.json   output of `api --paginate …/pulls/<n>/files --jq '.[] | …'`: one file per line
+#   pr.json         output of `api …/pulls/<n> --jq '{title, body}'`
 #   gh-fails        when present, every `api` call fails, as when GitHub is unreachable
 #   issue-title  output of `issue view … --json title`
 set -u
@@ -61,6 +62,7 @@ case "${1:-} ${2:-}" in
         esac ;;
       */permission) u="${2%/permission}"; answer "perm-${u##*/}" ;;
       */files*) answer pr-files.json ;;
+      */pulls/*) answer pr.json ;;
     esac ;;
   *) exit 0 ;;
 esac

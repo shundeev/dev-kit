@@ -13,7 +13,8 @@ An ADR is a short, permanent note: what was decided, why, and what it costs. ADR
 Never edit an ADR that is on `main` — not its status, not its body, not its date. To change a
 decision, write a new ADR with `Status: accepted, supersedes ADR-NNNN` and a
 `Supersedes: ADR-NNNN` line, and explain in its Context why the earlier decision is revisited.
-What is in force is found by walking the Supersedes links.
+What is in force is found by walking the Supersedes links. CI's pull request gate refuses a PR that
+modifies, removes or renames an accepted ADR (#21).
 
 ## When an ADR is due
 
