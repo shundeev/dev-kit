@@ -54,6 +54,8 @@ git submodule update --remote .shared && .shared/bin/kit init
 
 Then open a pull request "chore: update dev-kit". `kit init` rewrites the managed files to match.
 
+You do not have to watch for updates: the session start says when the pinned commit is behind dev-kit's `main`, and the agent opens the update as an XS task.
+
 ## What a project gets
 
 - **Scaffold**, created once when missing and owned by the project from then on:

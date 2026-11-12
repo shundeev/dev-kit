@@ -351,6 +351,16 @@ rm .claude/agents/ops.md
 out="$(bash .shared/claude/hooks/session-start.sh)"
 contains "reports a broken setup to the agent" ".claude/agents/ops.md: missing" "$out"
 bb $kit init >/dev/null
+# #3: a newer dev-kit upstream is named at the session's start, with the next step.
+UP="$WORK/upstream.git"; git clone -q --bare .shared "$UP"
+git clone -q "$UP" "$WORK/up-work" && git -C "$WORK/up-work" commit -q --allow-empty -m "feat: newer dev-kit" \
+  && git -C "$WORK/up-work" push -q origin HEAD:refs/heads/main
+old_origin="$(git -C .shared remote get-url origin)"; git -C .shared remote set-url origin "$UP"
+contains "the session start says dev-kit is behind" "dev-kit is 1 commit behind" "$(bash .shared/claude/hooks/session-start.sh 2>&1)"
+contains "  and names the update" "update dev-kit" "$(bash .shared/claude/hooks/session-start.sh 2>&1)"
+git -C .shared remote set-url origin "$WORK/no-such-remote"
+if bash .shared/claude/hooks/session-start.sh 2>&1 | grep -q behind; then bad "offline: claimed to be behind"; else ok "offline: says nothing about updates"; fi
+git -C .shared remote set-url origin "$old_origin"
 
 echo "- delivery guard"
 guard() { jq -nc --arg c "$1" '{tool_input:{command:$c}}' | bash .shared/claude/hooks/delivery-guard.sh; }

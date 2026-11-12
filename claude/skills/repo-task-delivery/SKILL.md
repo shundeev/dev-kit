@@ -19,6 +19,8 @@ are Requirements, Invariants, Design, Plan and Done when. The pull request body 
   or when the owner says to skip GitHub. A narrow sub-step ("open the PR") uses
   `gh-project-workflow` directly.
 - "It is small" is not an exception: small changes take the light path, not no path.
+- A session start that says dev-kit is behind: an XS task "Update dev-kit" in this project
+  (move `.shared` to origin/main, `kit init`, commit the generated files, PR), before other work.
 
 ## 1. Size sets the ceremony
 
