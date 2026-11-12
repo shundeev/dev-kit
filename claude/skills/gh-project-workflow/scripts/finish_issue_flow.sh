@@ -173,6 +173,18 @@ if [[ -z "$pr_url" ]]; then
               --title "$subject" --body "$body" | tail -n1 | tr -d '\r')"
 fi
 
+# On the reviewers' desk, assigned to the person behind the agent (#52). Repeating it is harmless.
+edit_args=()
+[[ -n "${GHWF_REVIEWERS:-}" ]] && edit_args+=(--add-reviewer "$GHWF_REVIEWERS")
+if [[ -n "${GHWF_HUMAN:-}" ]]; then
+  edit_args+=(--add-assignee "$GHWF_HUMAN")
+else
+  echo "Warning: no GHWF_HUMAN, so the PR has no assignee. Fix: run 'kit init' (or 'kit identity') on this machine; it reads your own gh login." >&2
+fi
+if [[ "${#edit_args[@]}" -gt 0 ]] && ! edit_out="$(gh pr edit "$pr_url" "${edit_args[@]}" 2>&1)"; then
+  echo "Warning: could not request the review or set the assignee: $edit_out" >&2
+fi
+
 # The owner's Approve is the word to merge: with auto-merge on, GitHub merges once the owner
 # approved the latest commit, the checks passed and the branch contains the latest base.
 if ! auto_out="$(gh pr merge "$pr_url" --auto --squash 2>&1)"; then

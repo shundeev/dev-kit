@@ -109,6 +109,9 @@ opened (#22). A colleague joins by being added to the team.
 - Without the login, a session cannot use GitHub at all (`gh` is logged out, `git push` finds no
   credentials); it never falls back to the owner's account.
 - `:agent nil` in a project's `kit.edn` switches this off.
+- PRs opened by the agent request a review from `:owners` and are assigned to the person behind
+  the agent: `kit init` reads that person's own gh login on the machine (`GHWF_HUMAN`), so a
+  colleague's agent assigns the colleague.
 
 Not a security boundary on its own: the owner's gh config and SSH key stay readable from a
 session until the sandbox (ADR-0001, choice 3) denies them.

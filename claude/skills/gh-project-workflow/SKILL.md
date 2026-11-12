@@ -58,6 +58,8 @@ bash .claude/skills/gh-project-workflow/scripts/finish_issue_flow.sh \
 - The PR body must contain an `ADR:` line (`ADR: none` or `ADR: adr/NNNN-....md`) and states
   what was verified and what was not. `Closes #<issue>` is added when missing.
 - `--no-commit` pushes and opens the PR for commits already on the branch.
+- Requests a review from the code owners (`GHWF_REVIEWERS`, from `:owners`) and assigns the PR to
+  the person behind the agent (`GHWF_HUMAN`, their own gh login, written by `kit init`).
 - Never merges itself, but turns on auto-merge (squash): the owner's Approve of the latest
   commit is the word to merge. The card moves to **In review**, the owner's signal to look.
   If the repository does not allow auto-merge, it warns and names the setting.

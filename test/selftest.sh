@@ -38,6 +38,8 @@ export GIT_CONFIG_GLOBAL="$WORK/gitconfig" XDG_CONFIG_HOME="$WORK/config"
 # A home of its own: whether the agent is logged in on this machine must not change the results.
 export HOME="$WORK/home"
 mkdir -p "$HOME"
+# The person behind the agent on this "machine": their own gh login, not the agent's (#52).
+mkdir -p "$XDG_CONFIG_HOME/gh" && printf 'github.com:\n    user: the-human\n' > "$XDG_CONFIG_HOME/gh/hosts.yml"
 
 echo "dev-kit selftest ($KIT)"
 
@@ -62,6 +64,8 @@ contains "init reports what it wrote" "wrote .claude/settings.json" "$LAST"
 grep -q ':repo     "u473t8/kit-selftest"' kit.edn && ok "kit.edn infers repo from origin" || bad "kit.edn repo" "$(cat kit.edn)"
 [ "$(jq -r .env.GHWF_REPO .claude/settings.json)" = "u473t8/kit-selftest" ] && ok "settings env carries the repo" || bad "settings env"
 [ "$(jq -r .env.GHWF_PROJECT_NUMBER .claude/settings.json)" = "3" ] && ok "settings env carries the board from defaults" || bad "board number"
+[ "$(jq -r .env.GHWF_REVIEWERS .claude/settings.json)" = "shundeev/owners" ] && ok "settings env names the reviewers from :owners" || bad "GHWF_REVIEWERS"
+[ "$(jq -r .env.GHWF_HUMAN .claude/settings.local.json)" = "the-human" ] && ok "the per-machine settings name the person behind the agent" || bad "GHWF_HUMAN" "$(cat .claude/settings.local.json)"
 [ -f .claude/skills/repo-task-delivery/SKILL.md ] && ok "skill readable through its link" || bad "skill link"
 grep -q "Managed by dev-kit" .claude/agents/ops.md && ok "agent copied with the managed marker" || bad "agent copy"
 head -1 .claude/agents/ops.md | grep -qx -- '---' && ok "agent copy keeps frontmatter first" || bad "agent frontmatter"
@@ -435,6 +439,20 @@ printf 'fix(GH-12): handle more\n\nbody\n' > "$WORK/msg.txt"
 expect_exit 0 "finish: an open PR needs no body file" flow finish_issue_flow.sh --type fix --commit-message-file "$WORK/msg.txt"
 grep -q '^pr create' "$FAKE_GH_LOG" && bad "  opened a second PR" || ok "  no second PR"
 contains "  subject from the commit message file" "Subject: fix(GH-12): handle more" "$LAST"
+
+: > "$FAKE/pr-list"; : > "$FAKE_GH_LOG"; echo more >> f; git add f
+printf 'fix(GH-12): handle even more\n' > "$WORK/msg2.txt"
+flow_rh() { GHWF_REVIEWERS=shundeev/owners GHWF_HUMAN=the-human flow "$@"; }
+flow_r() { GHWF_REVIEWERS=shundeev/owners flow "$@"; }
+expect_exit 0 "finish: a new PR with reviewers and the person behind the agent" \
+  flow_rh finish_issue_flow.sh --commit-message-file "$WORK/msg2.txt" --pr-body-file "$WORK/body.md"
+grep -qx 'pr edit https://github.com/u473t8/fake/pull/99 --add-reviewer shundeev/owners --add-assignee the-human' "$FAKE_GH_LOG" \
+  && ok "  asks the owners for a review and assigns the person" || bad "  no review request or assignee" "$(grep '^pr edit' "$FAKE_GH_LOG")"
+: > "$FAKE_GH_LOG"; echo again >> f; git add f
+printf 'fix(GH-12): handle once more\n' > "$WORK/msg3.txt"
+expect_exit 0 "finish: without GHWF_HUMAN" flow_r finish_issue_flow.sh --commit-message-file "$WORK/msg3.txt" --pr-body-file "$WORK/body.md"
+contains "  warns and names the fix" "kit init" "$LAST"
+echo "https://github.com/u473t8/fake/pull/99" > "$FAKE/pr-list"
 
 git switch -q -c 13-typo main
 echo typo >> f; git commit -qam "fix(GH-13): correct the typo"

@@ -125,7 +125,8 @@
                            "GHWF_PROJECT_NUMBER" (some-> (get-in cfg [:board :number]) str)
                            "GHWF_REPO"           (:repo cfg)
                            "GHWF_DEFAULT_BASE"   (:base cfg)
-                           "GHWF_SHOWCASE"       (:showcase cfg)})}]
+                           "GHWF_SHOWCASE"       (:showcase cfg)
+                           "GHWF_REVIEWERS"      (some->> (seq (:owners cfg)) (str/join ","))})}]
     (json-text (deep-merge (deep-merge (deep-merge base clj) env)
                            (json/parse-string (json/generate-string (:claude-settings cfg {})))))))
 
@@ -172,13 +173,26 @@
     {}))
 
 
+(declare gh-login)
+
+
+(defn human-login
+  "The person behind the agent on this machine: their own gh login (the default gh config, never
+  GH_CONFIG_DIR, which points at the agent). Their PRs are assigned to them (#52)."
+  []
+  (gh-login (or (some-> (not-empty (System/getenv "XDG_CONFIG_HOME")) (fs/path "gh") str)
+                (expand-home "~/.config/gh"))))
+
+
 (defn local-env-problem
   [dir env]
   (let [f (str (fs/path dir local-settings))
         m (read-json-object f)]
     (cond (not (fs/exists? f)) "missing"
           (= ::invalid m) "is not a JSON object"
-          (not= env (select-keys (get m "env") (keys env))) "env differs from the agent identity in kit.edn")))
+          (not= env (select-keys (get m "env") (keys env))) "env differs from the agent identity in kit.edn"
+          (and (human-login) (str/blank? (get-in m ["env" "GHWF_HUMAN"])))
+          "lacks GHWF_HUMAN, the person behind the agent")))
 
 
 (defn write-local-env!
@@ -188,7 +202,10 @@
         m (read-json-object f)]
     (when (= ::invalid m) (die local-settings "is not a JSON object; fix or remove it, then run again"))
     (fs/create-dirs (fs/parent f))
-    (spit f (json-text (update m "env" #(into (sorted-map) (merge % env)))))))
+    (spit f (json-text (update m "env" #(into (sorted-map)
+                                              (merge % env
+                                                     (when-let [h (human-login)]
+                                                       (when (str/blank? (get % "GHWF_HUMAN")) {"GHWF_HUMAN" h})))))))))
 
 
 (defn ignored-problem
