@@ -100,6 +100,17 @@ for rule in "Bash(git push --force *)" "Bash(git push * --force *)" "Bash(git pu
   has deny "$rule" && ok "denies: $rule" || bad "denies: $rule"
 done
 has allow "Bash(.shared/bin/kit *)" && ok "kit path substituted" || bad "kit path substituted"
+# #30: the project-link plugin comes from the pinned submodule, with nothing to install by hand
+jq -e '.extraKnownMarketplaces["dev-kit"].source == {source: "directory", path: ".shared"} and .enabledPlugins["project-link@dev-kit"] == true' \
+  .claude/settings.json >/dev/null && ok "settings enable project-link from the .shared marketplace" || bad "plugin settings" "$(jq -c '{extraKnownMarketplaces, enabledPlugins}' .claude/settings.json)"
+mk="$KIT/.claude-plugin/marketplace.json"
+jq -r '.plugins[] | "\(.name) \(.source)"' "$mk" | while read -r name src; do
+  [ "$(jq -r .name "$KIT/$src/.claude-plugin/plugin.json" 2>/dev/null)" = "$name" ] && echo ok || echo "bad $name"
+done | grep -q bad && bad "a marketplace entry does not match its plugin.json" \
+  || { [ "$(jq '.plugins | length' "$mk" 2>/dev/null || echo 0)" -ge 1 ] && ok "marketplace entries match their plugins" || bad "no plugins in $mk"; }
+if command -v claude >/dev/null 2>&1 && [ -z "${CI:-}" ]; then
+  out="$(claude plugin validate "$KIT" 2>&1)" && ok "claude plugin validate passes for dev-kit's marketplace" || bad "claude plugin validate" "$out"
+fi
 jq -e '.hooks.PreToolUse and .hooks.SessionStart' .claude/settings.json >/dev/null && ok "hooks survive the settings merge" || bad "hooks lost in the settings merge"
 perm allow | grep -q '{{kit}}' && bad "unsubstituted {{kit}}" || ok "no {{kit}} placeholder left"
 has allow "Bash(clj-kondo *)" && bad "clojure allows without the module" || ok "no clojure allows without the module"

@@ -76,6 +76,8 @@ You do not have to watch for updates: the session start says when the pinned com
 | `.zprint.edn`, `.clj-kondo/config.edn` `:config-paths` | `clojure/` (module `clojure`) |
 | `env` in `.claude/settings.local.json` (per machine, git-ignored) | `:agent` in `kit.edn` / `kit-defaults.edn` |
 
+**The board's link under the prompt** comes from the `project-link` plugin (`claude/plugins/`). The generated settings declare `.shared` as a plugin marketplace, so Claude Code loads it at the session start with nothing to install, at the dev-kit version the project pins (#30).
+
 **Why `AGENTS.md` and not `CLAUDE.md`.** It is one file for every agent. Claude Code reads `AGENTS.md` when there is no `CLAUDE.md`, and Codex and OpenCode read it natively. The shared rules are written into it as text, because only Claude Code understands `@` imports.
 
 **The rules block stays under 100 lines**, and the selftest checks it. A rule the agent keeps missing becomes a hook, not emphasis (ADR-0001).
