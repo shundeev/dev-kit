@@ -33,6 +33,20 @@ These rules apply to every agent working in this repository (Claude Code, Codex,
   If the owner asks for a blocked command outright, prefix it with `DELIVERY_GUARD=off`;
   never do that on your own judgement.
 
+## Working with the owner
+
+- A report to the owner says what changed for them and what is needed from them, in plain words,
+  item by item; the details stay in the PR. No jargon tables.
+- Every report after a push ends with the pull request's link.
+- Anything the owner has to do by hand (a setting, a login, a click) goes into a comment on its PR
+  as numbered steps: where to click, what to type, what the result looks like, what to do if it
+  fails. The report gives only the link; with no PR yet, open a draft PR first. When several PRs
+  need the owner, one step per PR, each named by its title.
+- Every error a tool, script or hook prints says what to do: to the agent, or to the owner when
+  only a person can. When the fix is mechanical, the code does it itself.
+- A lesson or preference that holds for every project goes into dev-kit through an issue and a PR,
+  not only into an agent's memory.
+
 ## Decisions
 
 - A decision about what a person does or sees cannot be settled by the code. Name it before

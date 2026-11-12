@@ -174,6 +174,12 @@ for h in "Size sets the ceremony" "Requirements" "Invariants" "Design" "G1" "Pla
 done
 [ -z "$missing" ] && ok "the delivery skill walks every stage of ADR-0002" || bad "the skill lacks the stage${missing#,}"
 [ "$(wc -l < "$KIT/rules/shared.md")" -le 100 ] && ok "the rules block stays within 100 lines" || bad "rules/shared.md is $(wc -l < "$KIT/rules/shared.md") lines"
+missing=""
+for phrase in "what changed for them and what is needed from them" "ends with the pull request's link" \
+              "as numbered steps" "says what to do" "not only into an agent's memory"; do
+  grep -qF -- "$phrase" "$KIT/rules/shared.md" || missing="$missing; $phrase"
+done
+[ -z "$missing" ] && ok "the owner's standing rules are in the rules block" || bad "rules block lacks:${missing#;}"
 
 echo "- agent identity: per-machine settings"
 default_login="$(bb -e '(println (get-in (clojure.edn/read-string (slurp ".shared/kit-defaults.edn")) [:agent :login]))')"

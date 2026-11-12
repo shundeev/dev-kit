@@ -629,7 +629,7 @@
         _    (when-not (and (fs/directory? dir) (= (str (fs/real-path dir)) (sh-in dir "git" "rev-parse" "--show-toplevel")))
                (die dir "is not the root of a git repository"))
         cfg  (merge (read-defaults) (some-> (slurp-if (str (fs/path dir "kit.edn"))) edn/read-string))
-        agent (or (:agent cfg) (die "no :agent in kit.edn or dev-kit's defaults"))
+        agent (or (:agent cfg) (die "no :agent in kit.edn or dev-kit's defaults; add :agent {:login \"<the agent's GitHub login>\" :email \"<its noreply email>\" :gh-config-dir \"~/.config/gh-agent\"} to kit.edn"))
         env  (agent-env agent)
         done (cond-> []
                (ignored-problem dir local-settings)   (conj (do (ignore! dir local-settings) "ignored"))
