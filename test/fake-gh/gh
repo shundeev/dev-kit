@@ -27,6 +27,8 @@
 #                   the last line repeats; empty or absent: every edit passes
 set -u
 printf '%s\n' "$*" >> "$FAKE_GH_LOG"
+# the repository a call names with -R, as real gh puts it into the URLs it prints
+repo=u473t8/fake; prev=""; for a in "$@"; do [ "$prev" = "-R" ] && repo="$a"; prev="$a"; done
 answer() { cat "$FAKE_GH_DIR/$1" 2>/dev/null || true; }
 answer_seq() { # answer_seq <name>: the next line of <name>.seq, else <name>
   local seq="$FAKE_GH_DIR/$1.seq"
@@ -59,14 +61,14 @@ case "${1:-} ${2:-}" in
     [ -e "$FAKE_GH_DIR/issue-missing" ] && { echo "GraphQL: Could not resolve to an issue or pull request with the number of ${3:-0}." >&2; exit 1; }
     case "$*" in
       *title*) answer issue-title ;;
-      *) echo "https://github.com/u473t8/fake/issues/${3:-0}" ;;
+      *) echo "https://github.com/$repo/issues/${3:-0}" ;;
     esac ;;
   "issue list") if [ -e "$FAKE_GH_DIR/issue-list" ]; then answer issue-list; else echo "[]"; fi ;;
-  "issue create") if [ -e "$FAKE_GH_DIR/issue-created" ]; then answer issue-created; else echo "https://github.com/u473t8/fake/issues/77"; fi ;;
+  "issue create") if [ -e "$FAKE_GH_DIR/issue-created" ]; then answer issue-created; else echo "https://github.com/$repo/issues/77"; fi ;;
   "issue develop")
     case "$*" in
       *--list*) ;;
-      *) echo "https://github.com/u473t8/fake/tree/${3:-0}-task" ;;
+      *) echo "https://github.com/$repo/tree/${3:-0}-task" ;;
     esac ;;
   "label list") if [ -e "$FAKE_GH_DIR/labels.json" ]; then answer labels.json; else echo "[]"; fi ;;
   "repo view") echo "R_fake" ;;
