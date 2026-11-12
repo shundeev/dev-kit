@@ -31,6 +31,9 @@ export GIT_COMMITTER_NAME=selftest GIT_COMMITTER_EMAIL=selftest@example.invalid
 # doctor checks the GitHub identity only inside a Claude session; the cases that test it set
 # CLAUDECODE themselves, so a selftest run from a session judges nothing about that session.
 unset CLAUDECODE GH_TOKEN GITHUB_TOKEN
+# The flow scripts read GHWF_* from the session's settings; a run from a session must not see
+# them, as CI does not (#55).
+while read -r v; do unset "$v"; done < <(compgen -e | grep '^GHWF_')
 # The machine's global git config and ignore file stay out, as in CI: Claude Code puts
 # settings.local.json into the global ignore file, which would hide what kit itself ignores.
 : > "$WORK/gitconfig"
