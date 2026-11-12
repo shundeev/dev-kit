@@ -1,21 +1,23 @@
 # dev-kit
 
-How I run engineering work with AI agents across my repositories: one set of agent rules,
-skills, hooks, lint and format settings, and CI checks, mounted into every project as a git
-submodule and kept in place by two commands.
+How I run engineering work with AI agents across my repositories: one set of agent rules, skills,
+hooks, format settings and CI checks, mounted into every project as a git submodule.
 
-Every project gets the same delivery flow:
+Every task takes the same path, and the path is enforced, not only written down:
 
 ```
-issue on the board → branch from the issue → [ADR] → implement → verify → PR → review → squash merge
+issue on the board → design approved by the owner (size M and up) → branch → tests first
+→ PR → the owner's Approve → auto-merge → retrospective
 ```
 
-The flow is enforced, not just written down: a Claude Code hook refuses issues filed outside
-the board and pull requests from branches with no issue, the flow scripts refuse an issue
-without a priority and a PR without an `ADR:` line, and the `main` ruleset accepts pull
-requests only.
+Hooks refuse:
+- an issue filed outside the board, and a PR from a branch with no issue;
+- an edit before an M-sized design is approved;
+- new work while a merged task lacks its retrospective.
 
-## Use in a project
+The `main` ruleset accepts pull requests only, with the owners' approval.
+
+## Add it to a project
 
 ```sh
 git submodule add https://github.com/shundeev/dev-kit .shared
@@ -23,100 +25,58 @@ git submodule add https://github.com/shundeev/dev-kit .shared
 git add -A && git commit -m "chore: add dev-kit"
 ```
 
-A fresh clone: `git clone --recurse-submodules …`, then `.shared/bin/kit init` (it sets the
-local git hooks path and the agent's identity, which a clone does not carry).
+- **A clone:** `git clone --recurse-submodules …`, then `.shared/bin/kit init`.
+- **A new machine:**
+  1. Install `git`, `gh`, `bb` (babashka), `jq` and Claude Code.
+  2. Log yourself in with `gh auth login`.
+  3. Run `.shared/bin/kit init` in your own terminal. It also logs the agent's GitHub account in; see [the agent's identity](docs/agent-identity.md).
 
-A new machine:
+## Commands
 
-1. Install `git`, `gh`, `bb` (babashka), `jq`, and Claude Code.
-2. Log yourself in for your own terminal: `gh auth login`.
-3. Clone with `--recurse-submodules` and run `.shared/bin/kit init` in your terminal. It also
-   logs the agent's account in: gh shows a one-time code, you enter it on github.com/login/device
-   while signed in as the agent (switch account, or use a private window).
-
-Forgot step 3 and started Claude? The first session writes the per-machine settings itself and
-tells you what is left: restart the session, or run `kit init` in your terminal for the login.
+`kit` is `.shared/bin/kit` in a project.
 
 | Command | What it does |
 |---|---|
-| `.shared/bin/kit init` | Lays everything out. Safe to rerun; never overwrites project-owned files. In a terminal it logs the agent's account in when it is not. `--local` touches only the per-machine items; the SessionStart hook runs it. |
-| `.shared/bin/kit doctor` | Checks that everything is in place and matches the pinned dev-kit version. Each problem comes with the command that fixes it. `--ci` skips local-only checks, `--quiet` prints problems only. |
-| `.shared/bin/kit modules` | `clojure=true/false`, for CI. |
-| `.shared/bin/kit identity [--dir PATH]` | Writes only the agent's GitHub identity (below) into a repository's `.claude/settings.local.json`: for dev-kit itself, or a repository that does not mount dev-kit yet. |
-| `.shared/bin/kit retro N` | The friction data of merged issue N for its retrospective. From the friction log the hooks keep on this machine (`~/.local/state/dev-kit/friction`, never committed): the owner's confirmation windows by the ask rule behind them, questions, interruptions, «трение:» marks, refusals, errors and repeated commands, for the task and for the last 14 days. From GitHub: the design approval, reviews, waiting on the owner, CI and manual steps. Counts only; `--messages` lists the owner's messages locally. Read-only. |
-| `.shared/bin/kit retro --missing` | The issues merged in the last 14 days without a `## Retrospective` comment, and the command that collects their data; exit 1 when there are some. The start script and the session start use it (#56). |
+| `kit init` | Lays everything out. It is safe to rerun and never overwrites project-owned files. `--local` touches only the per-machine items; the session start runs it. |
+| `kit doctor` | Checks that everything is in place and matches the pinned dev-kit. Each problem comes with the command that fixes it. `--ci` skips the local-only checks. |
+| `kit retro N` | The friction data of merged issue N, for its retrospective. From the friction log the hooks keep on this machine (`~/.local/state/dev-kit/friction`, never committed): confirmation windows by the rule behind them, questions, interruptions, «трение:» marks, refusals, errors, repeated commands and where the time went. From GitHub: reviews, waiting on the owner and CI. Counts only. |
+| `kit retro --missing` | Merged issues of the last 14 days without a retrospective. New work waits for them. |
+| `kit gate …` | The design-approval and size gate. CI and the edit hook run it. |
+| `kit identity`, `kit modules` | The agent's identity alone, for a repository without dev-kit; the modules, for CI. |
 
-Update a project to a newer dev-kit: `git submodule update --remote .shared && .shared/bin/kit init`,
-then a pull request "chore: bump dev-kit".
+## How updates arrive
+
+A project pins one dev-kit commit. To move it:
+
+```sh
+git submodule update --remote .shared && .shared/bin/kit init
+```
+
+Then open a pull request "chore: update dev-kit". `kit init` rewrites the managed files to match.
 
 ## What a project gets
 
-Two kinds of files:
-
-- **Scaffold** — created once when missing, then owned by the project:
-  `kit.edn`, `LICENSE` (MIT), the project part of `AGENTS.md`;
-  with `--scaffold` also `README.md` (problem · approach · measurements · what I learned ·
-  limitations · reproduce), `adr/`, `docs/experiments/`.
-- **Managed** — owned by dev-kit, rewritten by `init`, verified by `doctor` locally, at session
-  start and in CI:
+- **Scaffold**, created once when missing and owned by the project from then on:
+  - `kit.edn`, `LICENSE` (MIT), and the project part of `AGENTS.md`;
+  - with `--scaffold`, also `README.md`, `adr/` and `docs/experiments/`.
+- **Managed**, owned by dev-kit: `init` rewrites these files, and `doctor` checks them locally, at session start and in CI.
 
 | In the project | Comes from |
 |---|---|
-| `AGENTS.md`, the block between `dev-kit:begin` / `dev-kit:end` | `rules/shared.md` (+ `rules/clojure.md`) |
-| `.claude/settings.json` | `claude/settings.base.json` + board settings from `kit.edn` |
-| `.claude/skills/*` (links) | `claude/skills/` — `repo-task-delivery`, `gh-project-workflow`, `adr` |
-| `.claude/agents/*.md` (copies) | `claude/agents/` — `ops`, `log-reader`; `smell-reviewer` with Clojure |
+| `AGENTS.md`, between `dev-kit:begin` / `dev-kit:end` | `rules/shared.md` (+ `rules/clojure.md`) |
+| `.claude/settings.json`: permissions and hooks (delivery guard, friction recorder, formatting) | `claude/settings.base.json` + board settings from `kit.edn` |
+| `.claude/skills/*` (links) | `claude/skills/`: `repo-task-delivery`, `gh-project-workflow`, `adr` |
+| `.claude/agents/*.md` (copies) | `claude/agents/`: `ops`, `log-reader`; `smell-reviewer` with the Clojure module |
 | `.github/workflows/ci.yml` | `managed/ci.yml`, which runs `ci/action.yml` from the submodule |
-| `.github/ISSUE_TEMPLATE/task.yml`, `.github/pull_request_template.md` | `managed/github/`: the issue form with the stages of ADR-0002 and the PR template with the sections the owner reviews |
-| `.github/CODEOWNERS` | `* @<login> …` from `:owners` in `kit.edn`: one of them reviews every change |
-| git `core.hooksPath` | `githooks/` — zprint check before commit |
-| `.zprint.edn` (link), `:config-paths` in `.clj-kondo/config.edn` | `clojure/` (module `clojure`) |
-| `env` in `.claude/settings.local.json` — per machine, git-ignored, skipped by `doctor --ci` | `:agent` in `kit.edn` / `kit-defaults.edn` (below) |
+| `.github/ISSUE_TEMPLATE/task.yml`, `.github/pull_request_template.md` | `managed/github/` |
+| `.github/CODEOWNERS` | `:owners` in `kit.edn` |
+| git `core.hooksPath` | `githooks/`: the zprint check before a commit |
+| `.zprint.edn`, `.clj-kondo/config.edn` `:config-paths` | `clojure/` (module `clojure`) |
+| `env` in `.claude/settings.local.json` (per machine, git-ignored) | `:agent` in `kit.edn` / `kit-defaults.edn` |
 
-Why `AGENTS.md` and not `CLAUDE.md`: one instruction file for every agent (Claude Code reads
-`AGENTS.md` when no `CLAUDE.md` exists; Codex and OpenCode read it natively). The shared rules
-are written into it as text rather than imported, because only Claude Code understands `@` imports.
+**Why `AGENTS.md` and not `CLAUDE.md`.** It is one file for every agent. Claude Code reads `AGENTS.md` when there is no `CLAUDE.md`, and Codex and OpenCode read it natively. The shared rules are written into it as text, because only Claude Code understands `@` imports.
 
-Why CI runs from the submodule: the checks always match the dev-kit version the project pins,
-and the workflow file in the project never changes.
-
-## The agent's GitHub identity
-
-The agent works under its own GitHub account (`:agent` in `kit-defaults.edn`), so GitHub tells
-its actions from the owner's. The repositories live in the organization `shundeev` (ADR-0003).
-Each `main` ruleset requires one approving review and names the team `shundeev/owners` as the
-required reviewer of every file, so a pull request merges only with the approval of a team
-member; the agent's approval never counts, and nobody can approve their own. A push after the
-approval dismisses it. The owner is the only bypass actor, in pull-request mode: they merge
-their own pull requests that way, and still cannot push to `main` directly. `.github/CODEOWNERS`
-(from `:owners`) names the same team. CODEOWNERS alone was not enough: GitHub counts the
-author's own code ownership, so the agent's approval completed a pull request the owner had
-opened (#22). A colleague joins by being added to the team.
-
-- Once per machine the account is logged into its own gh config, `~/.config/gh-agent`. `kit init`
-  run in a terminal does it: it starts gh's browser login, the owner finishes it signed in as the
-  agent, and init checks which account came back (a wrong one is logged out on the next run).
-  The token stays in that directory; it never goes into chat, issues or a repository. A Claude
-  session never starts the login.
-- `kit init` writes the identity into `.claude/settings.local.json` and git-ignores it. Claude
-  Code applies that `env` to the session, its hooks and its commands: `gh` reads the agent's
-  config, git sends `git@github.com:` remotes over HTTPS with gh as the only credential helper,
-  and commits are authored by the agent. The owner's terminal keeps the owner's login and SSH.
-  The SessionStart hook writes the file too (`kit init --local`), so a fresh clone or worktree
-  is set up by its first session; the env applies from the next one.
-- `kit doctor` warns when the agent is not logged in on this machine. Inside a Claude session it
-  fails when gh would act as anyone but the agent — a session on another gh config (the owner's),
-  a logged-out or foreign agent config, a `GH_TOKEN` / `GITHUB_TOKEN` override — and says what
-  is left: restart the session, or `kit init` in a terminal.
-- Without the login, a session cannot use GitHub at all (`gh` is logged out, `git push` finds no
-  credentials); it never falls back to the owner's account.
-- `:agent nil` in a project's `kit.edn` switches this off.
-- PRs opened by the agent request a review from `:owners` and are assigned to the person behind
-  the agent: `kit init` reads that person's own gh login on the machine (`GHWF_HUMAN`), so a
-  colleague's agent assigns the colleague.
-
-Not a security boundary on its own: the owner's gh config and SSH key stay readable from a
-session until the sandbox (ADR-0001, choice 3) denies them.
+**The rules block stays under 100 lines**, and the selftest checks it. A rule the agent keeps missing becomes a hook, not emphasis (ADR-0001).
 
 ## kit.edn
 
@@ -126,18 +86,15 @@ session until the sandbox (ADR-0001, choice 3) denies them.
  :modules  #{}}          ; #{:clojure} for the shared zprint/clj-kondo setup
 ```
 
-Defaults (board, base branch, code owners, agent account) come from `kit-defaults.edn`; `:board`,
-`:base`, `:owners`, `:agent` and `:claude-settings` (merged into the generated settings) can be
-overridden per project.
+Defaults come from `kit-defaults.edn`: the board, the base branch, the code owners and the agent's account. A project can override `:board`, `:base`, `:owners`, `:agent` and `:claude-settings`; the last is merged into the generated settings.
 
 ## Developing dev-kit
 
 ```sh
-test/selftest.sh     # builds a throwaway project, runs init/doctor/repairs, hooks and flow guards
+test/selftest.sh     # a throwaway project: init/doctor/repairs, hooks, flow scripts, kit retro
 ```
 
-The delivery scripts, the guard hook and the subagents were first built for
-[Sprecha](https://github.com/the-kind-robots/learning-app) and generalised here.
+The decisions are in `adr/`. The delivery scripts, the guard hook and the subagents were first built for [Sprecha](https://github.com/the-kind-robots/learning-app).
 
 ## License
 

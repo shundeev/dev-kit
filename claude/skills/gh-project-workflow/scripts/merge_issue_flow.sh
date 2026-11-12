@@ -31,7 +31,8 @@ Options:
   --done-status <option>        Default: Done
   --help                        Show this help
 
-Environment: GHWF_MERGE_WAIT, seconds to wait for GitHub to merge (default 900).
+Environment: GHWF_MERGE_WAIT, seconds to wait for GitHub to merge (default 900);
+GHWF_MERGE_POLL, seconds between looks (default 10).
 USAGE
 }
 
@@ -101,11 +102,20 @@ fi
 
 # Only a confirmed merge may delete the branch: cleaning up after a failed merge closes
 # the pull request with the work still in it.
-pr_state="$(gh pr view "$pr_url" --json state --jq '.state')"
+# A branch can fall behind while it waits, when another pull request merges first; auto-merge
+# then waits for ever, since the base requires up-to-date branches. So the loop updates it (#72).
+poll="${GHWF_MERGE_POLL:-10}"
+read_state() { read -r pr_state merge_state <<<"$(gh pr view "$pr_url" --json state,mergeStateStatus \
+  --jq '"\(.state) \(.mergeStateStatus)"')"; }
+read_state
 waited=0
 while [[ "$pr_state" != "MERGED" && "$waited" -lt "$merge_wait" ]]; do
-  sleep 10; waited=$((waited + 10))
-  pr_state="$(gh pr view "$pr_url" --json state --jq '.state')"
+  if [[ "${merge_state:-}" == "BEHIND" ]]; then
+    echo "The branch fell behind $base_branch while waiting: merging $base_branch into it; the approval stays."
+    gh pr update-branch "$pr_url" || true
+  fi
+  sleep "$poll"; waited=$((waited + (poll > 0 ? poll : 1)))
+  read_state
 done
 [[ "$pr_state" == "MERGED" ]] \
   || die "Pull request is $pr_state, not merged yet; auto-merge stays on and branch '$branch_name' is kept. Run this again later: $pr_url"

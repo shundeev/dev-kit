@@ -260,7 +260,9 @@
   [dir]
   (vec (for [f     (sort (map str (fs/glob dir "*.jsonl")))
              line  (with-open [r (io/reader f)] (doall (line-seq r)))
-             :let  [e (try (let [e (json/parse-string line true)] (assoc e :at (instant (:at e))))
+             :let  [e (try (let [e (json/parse-string line true)]
+                             ;; an event without a turn id belongs to no turn
+                             (cond-> (assoc e :at (instant (:at e))) (str/blank? (str (:turn e))) (dissoc :turn)))
                            (catch Exception _ nil))]
              :when (and (:at e) (:session e))]
          e)))
@@ -300,7 +302,7 @@
                   calls)
                 ("PostToolUse" "PostToolUseFailure" "PermissionDenied" "HookDenied")
                 (if-let [i (first (keep-indexed (same [:id]) calls))]
-                  (update calls i assoc :outcome (:event e) :reason (:reason e))
+                  (update calls i assoc :outcome (:event e) :reason (:reason e) :done (:at e))
                   calls)
                 calls)))
           []
@@ -366,7 +368,29 @@
                   (assoc (item :repeat (shape "Bash" (:input (first run))) (first run)) :n (count run))))
      :messages (for [e     events
                      :when (= "UserPromptSubmit" (:event e))]
-                 {:at (:at e) :text (:prompt e) :task (latest (:turn e))})}))
+                 {:at (:at e) :text (:prompt e) :task (latest (:turn e))})
+     ;; where the time went (#65): spans {:what :task :from :to}
+     :time     (let [end  (fn [t] (:at (or (stop t) (failed t) (last (filter #(= t (:turn %)) events)))))
+                     asks (filter #(= "UserPromptSubmit" (:event %)) events)
+                     task (fn [c] (or (:task c) (named (:turn c))))]
+                 (concat
+                  (for [t turns] {:what :turn :task (latest t) :from (first-at t) :to (end t)})
+                  ;; a window the owner answered, from the window to the run
+                  (for [{:keys [window done tool] :as c} calls
+                        :when (and window done (not (dialog tool)))]
+                    {:what :window :task (task c) :from (:at window) :to done})
+                  ;; a question: AskUserQuestion until answered; "needs input" until the owner's next message
+                  (for [c     calls
+                        :when (and (= "AskUserQuestion" (:tool c)) (:done c))]
+                    {:what :question :task (task c) :from (:at c) :to (:done c)})
+                  (for [[t e] stop
+                        :when (:needs_input e)
+                        :let  [answer (:at (first (filter #(before? (:at e) (:at %)) asks)))]
+                        :when answer]
+                    {:what :question :task (latest t) :from (:at e) :to answer})
+                  (for [{:keys [window done tool input] :as c} calls
+                        :when (and done (nil? window) (not (dialog tool)))]
+                    {:what :command :task (task c) :from (:at c) :to done :shape (shape tool input)})))}))
 
 
 ;; ------------------------------------------------------------------ GitHub
@@ -487,6 +511,40 @@
 (defn one-line [s] (str/trim (str/replace (str s) #"\s+" " ")))
 
 
+(defn seconds [spans] (reduce + (map #(.getSeconds (Duration/between (:from %) (:to %))) spans)))
+
+
+(defn minutes
+  "A duration as people read it: 45s, 12m, 1h 05m."
+  [secs]
+  (let [m (quot secs 60)]
+    (cond (< secs 60) (str secs "s")
+          (>= m 60)   (format "%dh %02dm" (quot m 60) (rem m 60))
+          :else       (str m "m"))))
+
+
+(defn time-lines
+  "Where the task's time went: its turns, waiting on the owner, the commands."
+  [spans]
+  (let [of      (fn [what] (filter #(= what (:what %)) spans))
+        longest (->> (of :command) (filter #(>= (seconds [%]) 60)) (sort-by #(- (seconds [%]))) (take 3))]
+    (when (seq spans)
+      [""
+       (if (seq (of :turn))
+         (str "Time of the task: " (count (of :turn)) " turns, " (minutes (seconds (of :turn))) " in all")
+         ;; a turn that worked on several tasks belongs to none of them
+         "Time of the task: its turns also served other tasks, so their time is not split")
+       (str "- waiting on the owner: " (count (of :window))
+            " confirmation windows, " (minutes (seconds (of :window)))
+            "; " (count (of :question))
+            " questions, " (minutes (seconds (of :question))))
+       (str "- commands: "
+            (minutes (seconds (of :command)))
+            (when (seq longest)
+              (str "; the longest: "
+                   (str/join ", " (for [c longest] (str (:shape c) " " (minutes (seconds [c]))))))))])))
+
+
 (defn mark? [text] (re-find #"(?iu)^\s*(трение|friction)\s*:" (str text)))
 
 
@@ -502,7 +560,8 @@
             said      (filter mine? (mapcat :messages found))
             marks     (filter #(mark? (:text %)) said)
             others    (remove #(mark? (:text %)) said)
-            times     (sort (map :at (concat own said)))
+            spans     (filter mine? (mapcat :time found))
+            times     (sort (concat (map :at (concat own said)) (map :from spans)))
             fortnight (tally (remove #(before? (:at %) (.minus ^Instant now (Duration/ofDays 14))) items))]
         (concat
          [(if (seq times)
@@ -519,6 +578,7 @@
            (concat ["| Kind | Cause | This task | 14 days |" "|---|---|---|---|"]
                    (for [[[k c] n] (ordered (tally own))]
                      (str "| " (label k) " | " c " | " n " | " (get fortnight [k c] 0) " |"))))
+         (time-lines spans)
          (when-let [recurring (seq (ordered (filter #(>= (val %) 3) fortnight)))]
            (concat ["" "Recurring in the last 14 days (3 or more, whichever task):"]
                    (for [[[k c] n] recurring] (str "- " (label k) " · " c ": " n))))
