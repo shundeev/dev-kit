@@ -99,6 +99,18 @@
             "onFailure": "block"
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write|NotebookEdit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bb \"${CLAUDE_PROJECT_DIR:-.}/bin/kit\" gate --hook",
+            "timeout": 20,
+            "onFailure": "block",
+            "statusMessage": "Checking the design approval..."
+          }
+        ]
       }
     ]
   },

@@ -61,13 +61,19 @@ component is an M: stop, resize it and ask for G1.
   - every claim a guarantee rests on: test it, do not take it from docs or forums (#22). Known
     facts live in `docs/facts.md` once it exists (#28);
   - each manual step for the owner: automate it, or plan it as numbered steps in the PR.
-- For M, post the design on the issue and name what the owner decides.
+- For M, post the design on the issue as a comment starting with `## Design`, and name what the
+  owner decides.
 
 ## 5. G1 — the owner approves the design (M)
 
 - No code until the owner adds the label `design-approved` to the issue; `adr/` is the
   exception. The agent never sets the label. A design changed after approval needs a new one.
-- Today this is a rule; #26 backs it with CI and a hook.
+- Enforced: CI's `kit gate` fails the PR, and the edit hook refuses changes on the issue branch,
+  while the approval is missing. The approval counts only when set by someone with write access
+  who is not the agent, after the issue body and every `## Design` comment last changed. So a
+  design and its addenda are comments starting with `## Design`.
+- The gate reads the Size from the issue's `size:*` label (the start script sets it with the board
+  field). No label counts as M. An XS/S PR over 200 changed lines fails until the issue is resized.
 
 ## 6. Plan and execute
 

@@ -8,6 +8,8 @@ on:
 
 permissions:
   contents: read
+  issues: read          # the design approval gate reads the PR's issue (#26)
+  pull-requests: read
 
 jobs:
   selftest:
@@ -29,3 +31,9 @@ jobs:
 
       - name: Selftest
         run: test/selftest.sh
+
+      - name: Design approval and size gate (ADR-0002, #26)
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bb bin/kit gate --branch "${{ github.head_ref }}" --pr "${{ github.event.pull_request.number }}"
