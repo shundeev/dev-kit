@@ -1,0 +1,147 @@
+{
+  "name": "cc-safety-net",
+  "version": "2.7.12",
+  "description": "A coding agent CLI hook - block destructive commands and secret file access",
+  "keywords": [
+    "amp",
+    "claude-code",
+    "cursor",
+    "deepseek-harness",
+    "devin",
+    "devin-cli",
+    "droid",
+    "factory-droid",
+    "grok",
+    "grok-build",
+    "opencode",
+    "pi-package",
+    "plugin",
+    "safety",
+    "security"
+  ],
+  "homepage": "https://ccsafetynet.com",
+  "bugs": {
+    "url": "https://github.com/kenryu42/cc-safety-net/issues"
+  },
+  "license": "MIT",
+  "author": {
+    "name": "J Liew",
+    "email": "jliew@420024lab.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kenryu42/cc-safety-net.git"
+  },
+  "bin": {
+    "cc-safety-net": "dist/bin/cc-safety-net.js",
+    "ccsn": "dist/bin/cc-safety-net.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./api": {
+      "types": "./dist/api.d.ts",
+      "import": "./dist/api.js"
+    },
+    "./opencode/v2": {
+      "types": "./dist/opencode-v2.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "audit:dependencies": "bun audit --ignore=GHSA-ch52-4w7c-c8xp",
+    "build": "bun run clean && bun scripts/project-bun.ts scripts/build.ts",
+    "build:plugin": "bun scripts/project-bun.ts scripts/build-plugin-tree.ts",
+    "build:types": "tsc --project tsconfig.build.json --emitDeclarationOnly --declaration",
+    "verify:package": "bun run scripts/verify-package.ts",
+    "verify:repository-plugin": "bun run scripts/verify-repository-plugin.ts",
+    "verify:coverage": "bun run scripts/verify-coverage.ts",
+    "clean": "rm -rf dist",
+    "check": "bun run lint && bun run lint:comments && bun run format:check && bun run typecheck && bun run knip && bun run check-duplicates && bun run test:coverage && bun run verify:coverage",
+    "check:ci": "bun run check",
+    "lint": "oxlint src tests scripts knip.ts",
+    "lint:ci": "bun run lint && bun run format:check",
+    "lint:comments": "bun scripts/check-comments.ts",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.gui.json --noEmit",
+    "knip": "knip-bun --production",
+    "check-duplicates": "jscpd src tests --threshold 0 --exit-code 1 --no-tips --reporters ai --ignore '**/*.svg' --ignore-pattern 'import\\s[\\s\\S]*?from\\s[^;]*;'",
+    "test": "bun test --timeout 30000",
+    "test:e2e:stability": "bun test tests/e2e --timeout 30000 --randomize --rerun-each 3",
+    "test:e2e:live": "CC_SAFETY_NET_E2E_LIVE=1 bun test tests/e2e-live",
+    "test:coverage": "AGENT=1 bun test tests --timeout 30000 --path-ignore-patterns 'tests/e2e-live/**' --coverage --coverage-reporter=text --coverage-reporter=lcov",
+    "cc-safety-net": "bun run src/entries/bin.ts",
+    "gui:dev": "bun scripts/gui-dev.ts",
+    "eval": "claude plugin eval . --ablation with-without --judge-model sonnet --allow-tools \"Bash(npx -y cc-safety-net:*)\" \"Bash(npx cc-safety-net:*)\"",
+    "lint:fix": "oxlint --fix src tests scripts knip.ts",
+    "format": "oxfmt src tests scripts knip.ts .oxfmtrc.json .oxlintrc.json package.json kimi.plugin.json tsconfig.json tsconfig.build.json tsconfig.gui.json .claude-plugin .codex-plugin .cursor-plugin assets/cc-safety-net.schema.json docs/residual-risk-registry.json hooks",
+    "format:check": "oxfmt --check src tests scripts knip.ts .oxfmtrc.json .oxlintrc.json package.json kimi.plugin.json tsconfig.json tsconfig.build.json tsconfig.gui.json .claude-plugin .codex-plugin .cursor-plugin assets/cc-safety-net.schema.json docs/residual-risk-registry.json hooks"
+  },
+  "devDependencies": {
+    "@ampcode/plugin": "0.0.0-20260724002649-ga3413e7",
+    "@opencode-ai/plugin": "^1.18.29",
+    "@opencode/plugin": "2.0.6",
+    "@opencode/schema": "2.0.6",
+    "@types/bun": "latest",
+    "effect": "4.0.0-rc.112",
+    "jscpd": "^5.0.14",
+    "knip": "^6.32.0",
+    "lefthook": "^2.1.10",
+    "oxc-parser": "0.142.0",
+    "oxfmt": "0.70.0",
+    "oxlint": "1.85.0",
+    "oxlint-tsgolint": "7.0.2002",
+    "typescript": "7.0.2"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": "^1.18.29",
+    "@opencode/plugin": "^2.0.6"
+  },
+  "peerDependenciesMeta": {
+    "@opencode-ai/plugin": {
+      "optional": true
+    },
+    "@opencode/plugin": {
+      "optional": true
+    }
+  },
+  "overrides": {
+    "@opentelemetry/core": "2.8.0",
+    "effect": "$effect",
+    "glob": "^14.0.3",
+    "ip-address": "^10.7.4",
+    "js-yaml": "^4.3.1",
+    "minimatch": "^11.0.3",
+    "picomatch@^2.3.1": "2.3.2",
+    "picomatch@^4.0.1": "^4.0.5",
+    "smol-toml": "^1.9.0",
+    "toml": "^5.0.1",
+    "undici@^6": "^6.29.1",
+    "undici@^8": "^8.12.2",
+    "yaml": "^2.9.0",
+    "zod": "^4.6.6"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "bun@1.4.4",
+  "dsh": {
+    "bundle": {
+      "patch": "./dist/deepseek-harness/cordis.patch.yml"
+    }
+  },
+  "pi": {
+    "extensions": [
+      "./dist/pi/index.js"
+    ]
+  },
+  "gitHead": "e3df63b8ee54bfe01b5063d7f07aeb60d358cf48"
+}

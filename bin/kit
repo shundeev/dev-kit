@@ -406,7 +406,9 @@
      {:kind :file :path ".github/pull_request_template.md"
       :content (slurp (str (fs/path kit-dir "managed" "github" "pull_request_template.md")))}
      {:kind :file :path ".claude/hooks/pretooluse.sh"
-      :content (str/replace (slurp (str (fs/path kit-dir "managed" "pretooluse.sh"))) "{{kit}}" mount)}]
+      :content (str/replace (slurp (str (fs/path kit-dir "managed" "pretooluse.sh"))) "{{kit}}" mount)}
+     ;; the safety guard's policy (#20): the one file Claude Code, Codex and OpenCode all read
+     {:kind :file :path ".cc-safety-net/policy.json" :content (json-text {"version" 1 "safety" {"level" "standard"}})}]
     (when-let [a (:agent cfg)]
       [{:kind :ignored :path local-settings :local true}
        {:kind :local-env :path local-settings :env (agent-env a) :local true}])
@@ -564,25 +566,38 @@
           (str "update Claude Code to " (str/join "." min-claude-version) " or later")]]))))
 
 
+(defn node-problems
+  "The safety guard (#20) runs on Node 22 or later; without it every guarded call is refused."
+  []
+  (let [v (sh "node" "--version")
+        major (some->> v (re-find #"^v(\d+)\.") second parse-long)]
+    (when-not (and major (>= major 22))
+      [[:fail (str "Node 22 or later is needed for the safety guard, which refuses every guarded call without it ("
+                   (or v "node not found") ")")
+        "install Node 22 or later (e.g. nvm install 22), then restart the Claude session"]])))
+
+
 (defn tool-problems
   [cfg]
-  (for [[tool why] (cond-> [["git" "everything"]
-                            ["gh" "the issue flow scripts"]
-                            ["jq" "the delivery-guard hook and flow scripts"]]
-                     (clojure? cfg) (into [["clj-kondo" "lint"] ["zprint" "format check"]]))
-        :when (nil? (sh "bash" "-c" (str "command -v " tool)))]
-    [:fail (str tool " is not installed (needed for " why ")") (str "install " tool)]))
+  (concat
+    (for [[tool why] (cond-> [["git" "everything"]
+                              ["gh" "the issue flow scripts"]
+                              ["jq" "the delivery-guard hook and flow scripts"]]
+                       (clojure? cfg) (into [["clj-kondo" "lint"] ["zprint" "format check"]]))
+          :when (nil? (sh "bash" "-c" (str "command -v " tool)))]
+      [:fail (str tool " is not installed (needed for " why ")") (str "install " tool)])
+    (node-problems)))
 
 
 (defn ownership-problems
-  "Where init would replace what dev-kit did not write (#14): a file without dev-kit's marker, a real file where a
-  link goes, a hooks path of another tool. .claude/settings.json carries no marker (JSON has no comments): before the
-  first init it moves into kit.edn instead, and from then on it is generated."
+  "Where init would replace what dev-kit did not write (#14): a file that is neither what dev-kit writes nor marked
+  as dev-kit's, a real file where a link goes, a hooks path of another tool. JSON carries no marker: a JSON file of
+  dev-kit's counts by its content (#20), and .claude/settings.json found before the first init moves into kit.edn."
   [items]
-  (for [{:keys [kind path key value] :as item} items
+  (for [{:keys [kind path key value content] :as item} items
         :let [f       (some-> path rel)
               problem (case kind
-                        :file (when (and (fs/regular-file? f) (not= path ".claude/settings.json")
+                        :file (when (and (fs/regular-file? f) (not= path ".claude/settings.json") (not= content (slurp f))
                                          (not (str/includes? (slurp f) "Managed by dev-kit")))
                                 (if (str/starts-with? path ".claude/agents/")
                                   "is an agent of the project's own with dev-kit's name: rename it"
