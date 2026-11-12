@@ -90,7 +90,7 @@ has allow "Bash(bash .claude/skills/gh-project-workflow/scripts/merge_issue_flow
   && ! has ask "Bash(bash .claude/skills/gh-project-workflow/scripts/merge_issue_flow.sh *)" \
   && ok "the merge script runs without a prompt" || bad "the merge script still asks"
 for rule in "Bash(gh pr merge *)" \
-            "Bash(gh api *)" "Bash(git reset --hard *)" "Bash(git clean *)" "Bash(git branch -D *)"; do
+            "Bash(git reset --hard *)" "Bash(git clean *)" "Bash(git branch -D *)"; do
   has ask "$rule" && ok "asks: $rule" || bad "asks: $rule"
 done
 for rule in "Bash(git push --force *)" "Bash(git push * --force *)" "Bash(git push * --force)" "Bash(git push -f *)" \
@@ -358,6 +358,20 @@ contains "denies gh pr create from main" '"permissionDecision":"deny"' "$(guard 
 [ -z "$(guard 'gh issue create --help')" ] && ok "allows --help" || bad "--help denied"
 contains "asks on DELIVERY_GUARD=off" '"permissionDecision":"ask"' "$(guard 'DELIVERY_GUARD=off gh issue create -t x')"
 [ -z "$(guard 'git status')" ] && ok "ignores unrelated commands" || bad "unrelated command judged"
+# #54: a gh api call that only reads runs without a window; one that can change GitHub asks the owner.
+for c in "gh api repos/u473t8/x" "gh api repos/u473t8/x --paginate --jq '.[] | .name'" \
+         "gh api graphql -f query='{viewer{login}}'" "gh api -X GET repos/u473t8/x -f per_page=100"; do
+  out="$(guard "$c")"
+  if [ -z "$out" ]; then ok "gh api read passes: $c"; else bad "gh api read judged: $c" "$out"; fi
+done
+for c in "gh api -X POST repos/u473t8/x/issues -f title=t" "gh api repos/u473t8/x/issues -f title=t" \
+         "gh api --method=DELETE repos/u473t8/x/git/refs/heads/y" "gh api -XPATCH repos/u473t8/x" \
+         "gh api graphql -f query='mutation { addStar(input: {}) { clientMutationId } }'" \
+         "gh api graphql -F query=@q.graphql" 'echo "gone: $(gh api -X DELETE repos/u473t8/x/git/refs/heads/y)"'; do
+  contains "gh api write asks the owner: $c" '"permissionDecision":"ask"' "$(guard "$c")"
+done
+if jq -e '.permissions.ask | index("Bash(gh api *)")' .claude/settings.json >/dev/null; then bad "settings still ask for every gh api call"
+else ok "settings no longer ask for every gh api call"; fi
 
 echo "- fail closed"
 jq -e '.hooks.PreToolUse[0].hooks[0].onFailure == "block"' .claude/settings.json >/dev/null && ok "PreToolUse hook fails closed" || bad "PreToolUse onFailure"
@@ -574,7 +588,7 @@ jq -nc --arg f "$TW/new/dir/a.clj" '{session_id:"s1",prompt_id:"p1",tool_name:"W
   | rec PreToolUse
 contains "a file's task: the branch of the nearest directory that exists" '"id":"t2"' "$(grep 42-some-task <<<"$(flog)")"
 jq -nc '{session_id:"s1",prompt_id:"p1",tool_name:"Bash",tool_input:{command:"gh api x"}}' | rec PermissionRequest
-contains "a window keeps the ask rules in force" '"Bash(gh api *)"' "$(grep PermissionRequest <<<"$(flog)")"
+contains "a window keeps the ask rules in force" '"Bash(gh pr merge *)"' "$(grep PermissionRequest <<<"$(flog)")"
 jq -nc '{session_id:"s1",prompt_id:"p1",prompt:"трение: x"}' | rec UserPromptSubmit
 contains "the owner's message is kept" '"prompt":"трение: x"' "$(flog)"
 jq -nc '{session_id:"s1",prompt_id:"p1",last_assistant_message:"Done.\nneeds input: the label"}' | rec Stop
@@ -591,7 +605,7 @@ jq -nc --arg w "$TW" '{session_id:"s1",tool_name:"Bash",tool_use_id:"t4",tool_in
 contains "a cd to no directory falls back to the cwd" '"branch":"42-some-task"' "$(grep '"t4"' <<<"$(flog)")"
 echo '{broken' > "$P/.claude/settings.local.json"
 jq -nc '{session_id:"s1",prompt_id:"p2",tool_name:"Bash",tool_input:{command:"gh api y"}}' | rec PermissionRequest
-contains "a broken settings file does not lose the other rules" '"Bash(gh api *)"' "$(grep '"p2"' <<<"$(flog)")"
+contains "a broken settings file does not lose the other rules" '"Bash(gh pr merge *)"' "$(grep '"p2"' <<<"$(flog)")"
 rm "$P/.claude/settings.local.json"
 FC="$WORK/state-parallel"; big="$(head -c 30000 /dev/zero | tr '\0' x)"
 for i in $(seq 1 40); do

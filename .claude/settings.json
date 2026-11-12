@@ -55,7 +55,6 @@
     ],
     "ask": [
       "Bash(gh pr merge *)",
-      "Bash(gh api *)",
       "Bash(gh issue close *)",
       "Bash(gh issue delete *)",
       "Bash(gh pr close *)",
