@@ -139,6 +139,18 @@ while IFS= read -r st; do
        done ;;
   esac
 
+  # zsh, the agent's usual shell, leaves an unquoted $v as one word (#64). A command that needs
+  # it split is refused with the fix, instead of running with the wrong words.
+  if [ "${SHELL##*/}" = zsh ]; then
+    var='\$(\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)'
+    if printf '%s' "$st" | grep -Eq "^(set --[[:space:]]+$var|$var|for[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+in[[:space:]]+$var)([[:space:];]|$)"; then
+      decide deny "Refused: zsh does not split an unquoted variable into words, so '$st' would get one word where it needs several.
+
+Split it explicitly: \${=v} in zsh (set -- \${=t}; for x in \${=list}), use an array,
+or run the loop in a bash script (bash script.sh), where words split as written."
+    fi
+  fi
+
   case "$head" in
     gh|*/gh) ;;
     *) continue ;;

@@ -358,6 +358,18 @@ contains "denies gh pr create from main" '"permissionDecision":"deny"' "$(guard 
 [ -z "$(guard 'gh issue create --help')" ] && ok "allows --help" || bad "--help denied"
 contains "asks on DELIVERY_GUARD=off" '"permissionDecision":"ask"' "$(guard 'DELIVERY_GUARD=off gh issue create -t x')"
 [ -z "$(guard 'git status')" ] && ok "ignores unrelated commands" || bad "unrelated command judged"
+# #64: in zsh an unquoted $v stays one word, so a command that needs it split is refused.
+zguard() { jq -nc --arg c "$1" '{tool_input:{command:$c}}' | SHELL=/bin/zsh bash .shared/claude/hooks/delivery-guard.sh; }
+for c in 'set -- $t' 'env $E bash x.sh' 'for n in $list; do echo $n; done' '$cmd --flag' 'for n in ${list}; do :; done'; do
+  contains "zsh: refuses a command relying on splitting: $c" '"permissionDecision":"deny"' "$(zguard "$c")"
+done
+contains "  the refusal names the fix" '${=' "$(zguard 'set -- $t')"
+for c in 'set -- ${=t}' 'for n in ${=list}; do :; done' 'echo "$v"' 'for x in $(seq 3); do :; done' 'env A=1 bash x.sh' 'echo $v'; do
+  out="$(zguard "$c")"
+  if [ -z "$out" ]; then ok "zsh: passes $c"; else bad "zsh: judged $c" "$out"; fi
+done
+out="$(jq -nc '{tool_input:{command:"set -- $t"}}' | SHELL=/bin/bash bash .shared/claude/hooks/delivery-guard.sh)"
+if [ -z "$out" ]; then ok "bash splits words itself: no refusal"; else bad "refused in bash" "$out"; fi
 # #54: a gh api call that only reads runs without a window; one that can change GitHub asks the owner.
 for c in "gh api repos/u473t8/x" "gh api repos/u473t8/x --paginate --jq '.[] | .name'" \
          "gh api graphql -f query='{viewer{login}}'" "gh api -X GET repos/u473t8/x -f per_page=100"; do
