@@ -633,6 +633,11 @@ expect_exit 0 "garbage on stdin: exit 0" bash -c "echo 'not json' | XDG_STATE_HO
 expect_exit 0 "an unwritable log: exit 0" bash -c "echo '{}' | XDG_STATE_HOME=/proc/no bash .shared/claude/hooks/friction.sh Stop"
 if [ "$(stat -c %a "$FR/dev-kit/friction")" = 700 ] && [ "$(stat -c %a "$FR"/dev-kit/friction/*.jsonl | sort -u)" = 600 ]; then
   ok "the log is the owner's alone (700, 600)"; else bad "log permissions" "$(ls -la "$FR/dev-kit/friction")"; fi
+jq -nc --arg c "D=$WORK; cd \$D/tw && git status" '{session_id:"s1",tool_name:"Bash",tool_use_id:"t5",tool_input:{command:$c},cwd:"/"}' | rec PreToolUse
+contains "a cd through a variable set in the same command" '"branch":"42-some-task"' "$(grep '"t5"' <<<"$(flog)")"
+jq -nc '{session_id:"s1",tool_name:"Bash",tool_use_id:"t6",tool_input:{command:"cd ${TWDIR} && git status"},cwd:"/"}' \
+  | TWDIR="$TW" XDG_STATE_HOME="$FR" CLAUDE_PROJECT_DIR="$P" bash .shared/claude/hooks/friction.sh PreToolUse
+contains "a cd through an environment variable" '"branch":"42-some-task"' "$(grep '"t6"' <<<"$(flog)")"
 TS="$WORK/my tw"; git init -q -b 43-space-task "$TS"; git -C "$TS" remote add origin git@github.com:u473t8/fake.git
 jq -nc --arg c "cd \"$TS\" && git status" '{session_id:"s1",tool_name:"Bash",tool_use_id:"t3",tool_input:{command:$c},cwd:"/"}' | rec PreToolUse
 contains "a quoted cd path with a space" '"branch":"43-space-task"' "$(grep '"t3"' <<<"$(flog)")"
@@ -752,6 +757,15 @@ if grep -qF "git status" <<<"$out"; then bad "  a command 30 min apart counted a
 contains "  recurring: all tasks and projects of the last 14 days, not October" "Confirmation: yes · ask rule: Bash(gh api *): 7" "$out"
 contains "  another project's friction counts in the 14 days" "Tool error · npm: 3" "$out"
 contains "  the owner's mark, on one line" "трение: ссылка открылась в двух браузерах" "$out"
+# #65: where the task's time went. Turns run from the owner's message to Stop, StopFailure or the turn's
+# last event; a Stop without a turn id is no turn.
+contains "  time: the task's turns" "Time of the task: 10 turns, 42m in all" "$out"
+contains "  time: waiting on the owner, windows and questions" "waiting on the owner: 7 confirmation windows, 5m; 2 questions, 24m" "$out"
+contains "  time: commands, and the longest" "commands: 2m; the longest: bb kit gate 1m, git log 1m" "$out"
+expect_exit 0 "retro: a task worked on only in a turn that served two tasks" retro 62 --now 2026-11-12T17:00:00Z
+contains "  says the turn time is not split" "its turns also served other tasks" "$LAST"
+contains "  still counts its commands" "commands: 1m; the longest: make 1m" "$LAST"
+contains "  under a minute reads in seconds" "waiting on the owner: 0 confirmation windows, 0s" "$LAST"
 contains "  the owner's messages: the mid-turn one, and those of turns naming no task go to the last task" "Owner messages: 10" "$out"
 if grep -qE "почему так|secret|import|/w/|/tmp/|host/tok" <<<"$out"; then bad "  printed a message, a path, a flag value or code" "$out"
 else ok "  no messages, paths, flag values or code"; fi
