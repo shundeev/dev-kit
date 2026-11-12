@@ -135,20 +135,140 @@ expect_exit 1 "doctor catches a missing hooksPath" bb $kit doctor
 expect_exit 0 "doctor --ci skips local git config" bb $kit doctor --ci
 bb $kit init >/dev/null
 
+echo "- init converges, validates kit.edn, keeps project files (#14)"
+fresh() { # fresh <dir>: a new project with dev-kit mounted, no kit.edn; cd into it
+  git init -q -b main "$1" && cd "$1" || exit 1
+  git remote add origin https://github.com/u473t8/kit-selftest.git
+  git -c protocol.file.allow=always submodule add -q "$KIT" .shared
+  (cd "$KIT" && tar --exclude=.git -cf - .) | (cd .shared && tar -xf -)
+  git commit -qm "chore: add dev-kit"
+}
+blocks() { echo "$(grep -c '^<!-- dev-kit:begin' AGENTS.md)/$(grep -c '^<!-- dev-kit:end' AGENTS.md)"; }
+
+fresh "$WORK/m1"; bb $kit init --showcase Site >/dev/null 2>&1
+cat AGENTS.md AGENTS.md > "$WORK/a" && mv "$WORK/a" AGENTS.md
+expect_exit 0 "init: a duplicated block becomes one" bb $kit init
+[ "$(blocks)" = 1/1 ] && ok "  one begin, one end" || bad "  markers" "$(grep -n 'dev-kit:' AGENTS.md)"
+grep -q "# This project" AGENTS.md && ok "  the project part is kept" || bad "  project part lost"
+expect_exit 0 "  doctor passes" bb $kit doctor --ci
+sed -i 's/Edit it in dev-kit, not here\./Do not edit by hand./' AGENTS.md
+expect_exit 0 "init: a begin marker in another wording is still found" bb $kit init
+[ "$(blocks)" = 1/1 ] && ok "  still one block" || bad "  markers" "$(grep -n 'dev-kit:' AGENTS.md)"
+sed -i 's/$/\r/' AGENTS.md
+expect_exit 0 "init: an AGENTS.md with CRLF line ends" bb $kit init
+[ "$(grep -vc $'\r$' AGENTS.md)" = 0 ] && ok "  keeps CRLF on every line" || bad "  mixed line ends" "$(grep -vn $'\r$' AGENTS.md | head -3)"
+expect_exit 0 "  a rerun" bb $kit init
+contains "  changes nothing" "nothing to change" "$LAST"
+sed -i 's/\r$//' AGENTS.md; bb $kit init >/dev/null 2>&1
+sed -i '/^<!-- dev-kit:begin/d' AGENTS.md; cp AGENTS.md "$WORK/agents-before"
+expect_exit 1 "init: an end marker without its begin is refused" bb $kit init
+contains "  names the line" "AGENTS.md: line" "$LAST"
+[ "$(grep -c 'AGENTS.md: line' <<<"$LAST")" = 1 ] && ! grep -q "nothing to change" <<<"$LAST" \
+  && ok "  once, and not after 'nothing to change'" || bad "  output" "$LAST"
+cmp -s AGENTS.md "$WORK/agents-before" && ok "  AGENTS.md is left as it was" || bad "  AGENTS.md changed" "$(grep -n 'dev-kit:' AGENTS.md)"
+expect_exit 1 "  doctor fails the same way" bb $kit doctor --ci
+contains "  with the line" "AGENTS.md: line" "$LAST"
+
+fresh "$WORK/v1"
+expect_exit 1 "init: without --showcase it is refused" bb $kit init
+contains "  names the flag" "--showcase" "$LAST"
+[ ! -e kit.edn ] && ok "  no kit.edn written" || bad "  kit.edn written" "$(cat kit.edn)"
+expect_exit 1 "init: an unknown module is refused" bb $kit init --showcase Site --modules Clojure
+contains "  lists the known ones" "known modules: clojure" "$LAST"
+[ ! -e kit.edn ] && ok "  no kit.edn written" || bad "  kit.edn written" "$(cat kit.edn)"
+expect_exit 0 "init: --modules \"\" means none" bb $kit init --showcase Site --modules ""
+grep -q ':modules  #{}' kit.edn && ok "  kit.edn is readable, with no modules" || bad "  kit.edn" "$(cat kit.edn)"
+sed -i 's/ :showcase "Site"/ :showcase nil/' kit.edn
+expect_exit 1 "doctor: a kit.edn without :showcase fails" bb $kit doctor --ci
+contains "  names the key" ":showcase" "$LAST"
+sed -i 's/ :showcase nil/ :showcase "Site"/; s/:modules  #{}/:modules  #{:Clojure}/' kit.edn
+expect_exit 1 "doctor: an unknown module in kit.edn fails" bb $kit doctor --ci
+contains "  names it" ":Clojure" "$LAST"
+sed -i 's/#{:Clojure}/#{}/; s/^{:repo/{:agent {:login "other"}\n :repo/' kit.edn
+expect_exit 1 "doctor: a partial :agent fails instead of mixing two accounts" bb $kit doctor --ci
+contains "  names what is missing" ":email" "$LAST"
+sed -i 's/^{:agent {:login "other"}/{:board {:number 7}/' kit.edn
+bb $kit init >/dev/null 2>&1
+[ "$(jq -r '.env.GHWF_OWNER + " " + .env.GHWF_PROJECT_NUMBER' .claude/settings.json)" = "u473t8 7" ] \
+  && ok "init: a partial :board keeps the default owner" || bad "partial :board" "$(jq -c .env .claude/settings.json)"
+printf '{:repo "a/b"\n :x ]\n}\n' > kit.edn
+expect_exit 1 "doctor: an unreadable kit.edn fails with where" bb $kit doctor --ci
+contains "  names the file and the line" "kit.edn line 2" "$LAST"
+grep -qE "Exception|----- Error" <<<"$LAST" && bad "  a stack trace" "$LAST" || ok "  no stack trace"
+
+for c in "empty:" "comment-only:;; project linters come later"; do
+  fresh "$WORK/k-${c%%:*}"; mkdir -p .clj-kondo; printf '%s\n' "${c#*:}" > .clj-kondo/config.edn
+  expect_exit 0 "init: a clj-kondo config that is ${c%%:*} becomes the map" bb $kit init --showcase Site --modules clojure
+  bb -e '(assert (= ["../.shared/clojure/clj-kondo"] (:config-paths (clojure.edn/read-string (slurp ".clj-kondo/config.edn")))))' \
+    2>/dev/null && ok "  with :config-paths" || bad "  config" "$(cat .clj-kondo/config.edn)"
+done
+grep -q "project linters come later" .clj-kondo/config.edn && ok "  the comment is kept" || bad "  comment lost"
+fresh "$WORK/k-vector"; mkdir -p .clj-kondo; echo '[]' > .clj-kondo/config.edn
+expect_exit 1 "init: a clj-kondo config that is not a map fails that item" bb $kit init --showcase Site --modules clojure
+contains "  says to make it a map" "make it a map" "$LAST"
+[ "$(git config --local core.hooksPath)" = ".shared/githooks" ] && ok "  the other items still ran" || bad "  hooksPath unset"
+
+fresh "$WORK/c1"; bb $kit init --showcase Site >/dev/null 2>&1
+echo "# mine" > CLAUDE.md
+expect_exit 1 "doctor: a CLAUDE.md that hides AGENTS.md fails" bb $kit doctor --ci
+contains "  says what to do" "move its content into AGENTS.md" "$LAST"
+rm CLAUDE.md; echo "# mine" > CLAUDE.local.md
+expect_exit 1 "doctor: so does a CLAUDE.local.md" bb $kit doctor
+rm CLAUDE.local.md; echo "# above" > "$WORK/CLAUDE.md"
+expect_exit 1 "doctor: and a CLAUDE.md in a folder above the project" bb $kit doctor
+contains "  names it" "$WORK/CLAUDE.md" "$LAST"
+expect_exit 0 "  doctor --ci looks only at the project's own files" bb $kit doctor --ci
+mkdir -p "$HOME/.claude"
+echo '{"pluginConfigs":{"cc-plugin-agents-md@builtin":{"options":{"instructionFiles":"claude-md-and-agents-md"}}}}' > "$HOME/.claude/settings.json"
+expect_exit 0 "doctor: unless Claude Code is set to read both" bb $kit doctor
+rm "$HOME/.claude/settings.json" "$WORK/CLAUDE.md"
+fresh "$HOME/proj"; bb $kit init --showcase Site >/dev/null 2>&1; echo "# user" > "$HOME/.claude/CLAUDE.md"
+expect_exit 0 "doctor: the user's own ~/.claude/CLAUDE.md does not count" bb $kit doctor
+ln -s "$HOME" "$WORK/home-link"
+out="$(env HOME="$WORK/home-link" bb $kit doctor 2>&1)"
+grep -q "hides AGENTS.md" <<<"$out" && bad "  HOME through a link: flagged" "$out" || ok "  nor when HOME is reached through a link"
+rm "$HOME/.claude/CLAUDE.md"
+
+fresh "$WORK/r0"; bb $kit init --showcase Site >/dev/null 2>&1; mv kit.edn "$WORK/kit.edn.r0"
+expect_exit 0 "init: without kit.edn again, dev-kit's own settings.json is not taken as the project's" bb $kit init --showcase Site
+grep -q ":claude-settings" kit.edn && bad "  folded into kit.edn" "$(head -c 300 kit.edn)" || ok "  kit.edn has no :claude-settings"
+
+fresh "$WORK/r1"; mkdir -p .claude/agents .github/workflows
+echo '{"permissions":{"allow":["Bash(make *)"]}}' > .claude/settings.json
+printf 'name: mine\non: push\njobs: {}\n' > .github/workflows/ci.yml
+printf -- '---\nname: ops\n---\nmy own ops agent\n' > .claude/agents/ops.md
+git config --local core.hooksPath .husky
+expect_exit 1 "init: project files where dev-kit writes are refused" bb $kit init --showcase Site
+for f in .github/workflows/ci.yml .claude/agents/ops.md core.hooksPath "move it away" "rename it" "git config --unset core.hooksPath"; do contains "  names: $f" "$f" "$LAST"; done
+[ ! -e kit.edn ] && grep -q "name: mine" .github/workflows/ci.yml && grep -q "my own ops" .claude/agents/ops.md \
+  && [ "$(git config --local core.hooksPath)" = .husky ] && ok "  nothing is written" || bad "  something was written"
+mv .github/workflows/ci.yml .github/workflows/project.yml; mv .claude/agents/ops.md .claude/agents/my-ops.md
+git config --local --unset core.hooksPath
+expect_exit 0 "init: after the moves it goes through" bb $kit init --showcase Site
+contains "  says where the settings went" ":claude-settings" "$LAST"
+jq -e '.permissions.allow | index("Bash(make *)")' .claude/settings.json >/dev/null && ok "  the project's permission is kept" || bad "  permission lost"
+grep -qF 'Bash(make *)' kit.edn && ok "  and lives in kit.edn" || bad "  kit.edn" "$(cat kit.edn)"
+expect_exit 0 "  a rerun" bb $kit init
+contains "  changes nothing" "nothing to change" "$LAST"
+cd "$P" || exit 1
+
 echo "- code owners"
 [ "$(grep -v '^#' .github/CODEOWNERS)" = "* @shundeev/owners" ] && ok "CODEOWNERS makes the owners team review every file" || bad "CODEOWNERS" "$(cat .github/CODEOWNERS 2>&1)"
 grep -qx '\* @shundeev/owners' "$KIT/.github/CODEOWNERS" && ok "dev-kit itself has the same code owner" || bad "dev-kit's own CODEOWNERS"
 echo '* @someone-else' > .github/CODEOWNERS
 expect_exit 1 "doctor --ci catches an edited CODEOWNERS" bb $kit doctor --ci
 contains "doctor names CODEOWNERS" ".github/CODEOWNERS: differs" "$LAST"
+expect_exit 1 "init does not overwrite a CODEOWNERS without dev-kit's marker (#14)" bb $kit init
+contains "  names it" ".github/CODEOWNERS holds a file dev-kit did not write" "$LAST"
+rm .github/CODEOWNERS
 cp kit.edn "$WORK/kit.edn.bak"
 owners() { bb -e "(spit \"kit.edn\" (pr-str (assoc (clojure.edn/read-string (slurp \"kit.edn\")) :owners $1)))"; }
 owners '["kit-owner" "colleague"]'
 bb $kit init >/dev/null
 [ "$(grep -v '^#' .github/CODEOWNERS)" = "* @kit-owner @colleague" ] && ok "every code owner from kit.edn is listed; any one approval counts" || bad "owners override" "$(cat .github/CODEOWNERS)"
 owners '[]'
-expect_exit 2 "init refuses a project without code owners" bb $kit init
-contains "and says what to put in kit.edn" ":owners in kit.edn is empty" "$LAST"
+expect_exit 1 "init refuses a project without code owners" bb $kit init
+contains "and says what to put in kit.edn" ":owners must list who reviews every change" "$LAST"
 mv "$WORK/kit.edn.bak" kit.edn
 bb $kit init >/dev/null
 
@@ -351,6 +471,16 @@ rm .claude/agents/ops.md
 out="$(bash .shared/claude/hooks/session-start.sh)"
 contains "reports a broken setup to the agent" ".claude/agents/ops.md: missing" "$out"
 bb $kit init >/dev/null
+# #3: a newer dev-kit upstream is named at the session's start, with the next step.
+UP="$WORK/upstream.git"; git clone -q --bare .shared "$UP"
+git clone -q "$UP" "$WORK/up-work" && git -C "$WORK/up-work" commit -q --allow-empty -m "feat: newer dev-kit" \
+  && git -C "$WORK/up-work" push -q origin HEAD:refs/heads/main
+old_origin="$(git -C .shared remote get-url origin)"; git -C .shared remote set-url origin "$UP"
+contains "the session start says dev-kit is behind" "dev-kit is 1 commit behind" "$(bash .shared/claude/hooks/session-start.sh 2>&1)"
+contains "  and names the update" "update dev-kit" "$(bash .shared/claude/hooks/session-start.sh 2>&1)"
+git -C .shared remote set-url origin "$WORK/no-such-remote"
+if bash .shared/claude/hooks/session-start.sh 2>&1 | grep -q behind; then bad "offline: claimed to be behind"; else ok "offline: says nothing about updates"; fi
+git -C .shared remote set-url origin "$old_origin"
 
 echo "- delivery guard"
 guard() { jq -nc --arg c "$1" '{tool_input:{command:$c}}' | bash .shared/claude/hooks/delivery-guard.sh; }
@@ -466,7 +596,18 @@ expect_exit 1 "finish: no open PR and no body file stops before the commit" flow
 printf 'did it\n' > "$WORK/bad-msg.txt"
 expect_exit 1 "finish: commit message without type(GH-n) refused" flow finish_issue_flow.sh --commit-message-file "$WORK/bad-msg.txt" --pr-body-file "$WORK/empty-adr.md"
 
-printf 'What changed\n\nADR: none\n' > "$WORK/body.md"; : > "$FAKE_GH_LOG"
+git switch -q -c hotfix; expect_exit 1 "finish: a branch without an issue number stops before the commit" flow finish_issue_flow.sh --pr-body-file "$WORK/empty-adr.md"
+contains "  names the way out" "start_issue_flow.sh" "$LAST"
+git switch -q 12-landing; git branch -q -D hotfix
+printf '## Review\n<!-- hint -->\n\n## User-level test\nRan it.\n\nADR: none\n' > "$WORK/no-review.md"
+expect_exit 1 "finish: a Review section with only the hint stops before the commit (#21)" flow finish_issue_flow.sh --pr-body-file "$WORK/no-review.md"
+contains "  with the same words as CI" "fill in ## Review" "$LAST"
+[ "$(head_now)" = "$before" ] && ok "  nothing committed" || bad "  committed anyway"
+printf '## What changed\n- x\n\n## Review\nLooked at it.\n\n## User-level test\nRan it.\n\nADR: none\n' > "$WORK/body.md"
+expect_exit 1 "finish: a type outside Conventional Commits stops before the commit" flow finish_issue_flow.sh --type update --pr-body-file "$WORK/body.md"
+contains "  names the way out" "pass --type" "$LAST"
+[ "$(head_now)" = "$before" ] && ok "  nothing committed" || bad "  committed anyway"
+: > "$FAKE_GH_LOG"
 expect_exit 0 "finish: a closed PR does not count; a new one is opened" flow finish_issue_flow.sh --pr-body-file "$WORK/body.md"
 grep -q '^pr create' "$FAKE_GH_LOG" && ok "  gh pr create called" || bad "  no pr create" "$(cat "$FAKE_GH_LOG")"
 grep -q 'pr list .*--state open' "$FAKE_GH_LOG" && ok "  only open PRs looked up" || bad "  lookup not limited to open PRs"
@@ -586,15 +727,20 @@ gate() { PATH="$KIT/test/fake-gh:$PATH" FAKE_GH_DIR="$G" FAKE_GH_LOG="$G/log" GI
 issue() {
   jq -n --argjson labels "$1" --arg by "$2" --arg at "$3" --arg edited "$4" --arg dc "$5" --arg de "$6" \
     '{data: {repository: {issue: {
+       state: "OPEN",
        lastEditedAt: (if $edited == "null" then null else $edited end),
        labels: {nodes: ($labels | map({name: .}))},
        timelineItems: {nodes: [{actor: {login: $by}, label: {name: "design-approved"}, createdAt: $at}]},
        comments: {nodes: [{author: {login: "someone"}, createdAt: $dc, body: "## Design (proposed)",
                            lastEditedAt: (if $de == "null" then null else $de end)}]}}}}}' > "$G/gate-issue.json"
 }
-files() { jq -n --argjson n "$1" '[{filename: "src/a.clj", additions: $n, deletions: 0},
-                                    {filename: "package-lock.json", additions: 900, deletions: 0}]' > "$G/pr-files.json"; }
-echo admin > "$G/perm-the-owner"; echo write > "$G/perm-$default_login"; files 50
+# pr-files.json holds what `gh api --paginate …/files --jq '.[]'` prints: one file per line.
+files() { jq -nc --argjson n "$1" '{filename: "src/a.clj", status: "modified", additions: $n, deletions: 0},
+                                   {filename: "package-lock.json", status: "modified", additions: 900, deletions: 0}' > "$G/pr-files.json"; }
+GOOD_BODY=$'## What changed\n- x\n\n## Review\n<!-- hint -->\nSelf-review: fine.\n\n## User-level test\nRan it.\n\nADR: none'
+# pr <title> [body]: what `gh api …/pulls/<n>` prints after the gate's filter
+pr() { jq -nc --arg t "$1" --arg b "${2-$GOOD_BODY}" '{title: $t, body: $b}' > "$G/pr.json"; }
+echo admin > "$G/perm-the-owner"; echo write > "$G/perm-$default_login"; files 50; pr "feat(GH-26): add x"
 T0=2026-11-12T10:00:00Z; T1=2026-11-12T11:00:00Z; T2=2026-11-12T12:00:00Z
 issue '["design-approved","size:M"]' the-owner $T1 null $T0 null
 expect_exit 0 "gate: an approved M issue passes" gate --branch 26-x --pr 7
@@ -619,7 +765,54 @@ contains "  lock files are not counted" "150 lines" "$LAST"
 files 250
 expect_exit 1 "gate: an S PR over the threshold fails" gate --branch 26-x --pr 7
 contains "  says to resize" "size:M" "$LAST"
-expect_exit 0 "gate: a branch without an issue number is skipped" gate --branch feature-x --pr 7
+
+echo "- pull request shape and accepted ADRs (#21)"
+issue '["size:S"]' the-owner $T1 null $T0 null; files 10
+expect_exit 0 "pr gate: a well-formed S PR passes" gate --branch 26-x --pr 7
+grep -q -- '--paginate' "$G/log" && ok "  reads every page of the file list" || bad "  one page only" "$(grep files "$G/log")"
+expect_exit 1 "pr gate: a branch without an issue number fails" gate --branch feature-x --pr 7
+contains "  names the way out" "start_issue_flow.sh" "$LAST"
+jq '.data.repository.issue.state = "CLOSED"' "$G/gate-issue.json" > "$G/i" && mv "$G/i" "$G/gate-issue.json"
+expect_exit 1 "pr gate: a closed issue fails" gate --branch 26-x --pr 7
+contains "  says the issue is closed" "#26 is closed" "$LAST"
+issue '["size:S"]' the-owner $T1 null $T0 null
+pr "add x"; expect_exit 1 "pr gate: a title without type(GH-n) fails" gate --branch 26-x --pr 7
+contains "  with the command that renames it" "gh pr edit 7 --title" "$LAST"
+pr "feat(GH-25): add x"; expect_exit 1 "pr gate: a title naming another issue fails" gate --branch 26-x --pr 7
+pr "update(GH-26): add x"; expect_exit 1 "pr gate: a type outside Conventional Commits fails" gate --branch 26-x --pr 7
+pr "feat(GH-26): add x" "${GOOD_BODY%ADR: none}"; expect_exit 1 "pr gate: a body without an ADR line fails" gate --branch 26-x --pr 7
+contains "  names the line" "ADR: none" "$LAST"
+pr "feat(GH-26): add x" "${GOOD_BODY/ADR: none/ADR: none — a process change, decided in ADR-0001}"
+expect_exit 0 "pr gate: an ADR line with a reason after it passes" gate --branch 26-x --pr 7
+pr "feat(GH-26): add x" "${GOOD_BODY/ADR: none/ADR: maybe}"; expect_exit 1 "pr gate: an ADR line that names no ADR fails" gate --branch 26-x --pr 7
+pr "feat(GH-26): add x" "${GOOD_BODY/Self-review: fine./}"; expect_exit 1 "pr gate: a Review section with only the hint fails" gate --branch 26-x --pr 7
+contains "  names the section" "Review" "$LAST"
+pr "feat(GH-26): add x" "${GOOD_BODY/\#\# User-level test/\#\# Testing}"; expect_exit 1 "pr gate: a missing User-level test section fails" gate --branch 26-x --pr 7
+contains "  names the section" "User-level test" "$LAST"
+pr "add x" "no sections"; expect_exit 1 "pr gate: every problem is listed, not only the first" gate --branch 26-x --pr 7
+[ "$(grep -c '  FAIL  ' <<<"$LAST")" -ge 4 ] && ok "  four problems, four lines" || bad "  lines" "$LAST"
+pr "feat(GH-26): add x"
+adr() { jq -nc --arg s "$1" --arg f "${2:-adr/0001-a.md}" --arg p "${3:-}" \
+  '{filename: $f, status: $s, additions: 1, deletions: 1} + (if $p == "" then {} else {previous_filename: $p} end)' > "$G/pr-files.json"; }
+adr added adr/0005-new.md; expect_exit 0 "pr gate: a new ADR passes" gate --branch 26-x --pr 7
+adr modified; expect_exit 1 "pr gate: an edited accepted ADR fails" gate --branch 26-x --pr 7
+contains "  says what to do instead" "Supersedes: ADR-0001" "$LAST"
+adr removed; expect_exit 1 "pr gate: a deleted accepted ADR fails" gate --branch 26-x --pr 7
+adr renamed adr/0001-b.md adr/0001-a.md; expect_exit 1 "pr gate: a renamed accepted ADR fails" gate --branch 26-x --pr 7
+adr modified adr/README.md; expect_exit 0 "pr gate: the ADR index is not an ADR" gate --branch 26-x --pr 7
+echo '{"data":{"repository":{"issue":null}}}' > "$G/gate-issue.json"; files 10
+expect_exit 1 "pr gate: a branch number that is no issue fails" gate --branch 26-x --pr 7
+contains "  says so" "#26 is not an issue" "$LAST"
+touch "$G/gh-fails"; expect_exit 1 "pr gate: GitHub unreachable fails" gate --branch 26-x --pr 7
+grep -qE "Exception|----- Error" <<<"$LAST" && bad "  with a stack trace" "$LAST" || contains "  with what to do" "rerun the job" "$LAST"
+rm -f "$G/gh-fails"; issue '["size:S"]' the-owner $T1 null $T0 null
+for i in $(seq 1 101); do jq -nc --arg f "src/f$i.clj" '{filename: $f, status: "modified", additions: 2, deletions: 0}'; done > "$G/pr-files.json"
+expect_exit 1 "pr gate: 101 files are counted in full" gate --branch 26-x --pr 7
+contains "  202 lines" "202 lines" "$LAST"
+for f in managed/ci.yml .github/workflows/selftest.yml; do
+  grep -qE '^ +types: \[opened, synchronize, reopened, edited\]' "$KIT/$f" \
+    && ok "$f reruns when the title or body is edited" || bad "$f misses the edited type"
+done
 
 echo "- design approval hook (fake gh)"
 H="$WORK/hookrepo"; git init -q -b main "$H"; cd "$H" || exit 1

@@ -19,12 +19,14 @@ runs:
         bb "${{ github.action_path }}/../bin/kit" doctor --ci
         bb "${{ github.action_path }}/../bin/kit" modules >> "$GITHUB_OUTPUT"
 
-    - name: Design approval and size gate (ADR-0002, dev-kit#26)
+    - name: Pull request gate (ADR-0002, dev-kit#26, #21)
       if: github.event_name == 'pull_request'
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
-      run: bb "${{ github.action_path }}/../bin/kit" gate --branch "${{ github.head_ref }}" --pr "${{ github.event.pull_request.number }}"
+      # The branch comes from GITHUB_HEAD_REF, not ${{ github.head_ref }} in the script: a branch name is
+      # the author's text and may hold $(…) (script injection). The PR number is a number.
+      run: bb "${{ github.action_path }}/../bin/kit" gate --pr "${{ github.event.pull_request.number }}"
 
     - name: Install clj-kondo and zprint
       if: steps.kit.outputs.clojure == 'true'

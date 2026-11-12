@@ -37,11 +37,11 @@ git add -A && git commit -m "chore: add dev-kit"
 
 | Command | What it does |
 |---|---|
-| `kit init` | Lays everything out. It is safe to rerun and never overwrites project-owned files. `--local` touches only the per-machine items; the session start runs it. |
-| `kit doctor` | Checks that everything is in place and matches the pinned dev-kit. Each problem comes with the command that fixes it. `--ci` skips the local-only checks. |
+| `kit init` | Lays everything out. It is safe to rerun and never overwrites project-owned files: a file of the project's own where dev-kit writes stops it with what to move, and nothing is written until `kit.edn` is valid. A `.claude/settings.json` found at the first run moves into `kit.edn` as `:claude-settings`. `--local` touches only the per-machine items; the session start runs it. |
+| `kit doctor` | Checks that everything is in place and matches the pinned dev-kit, that `kit.edn` is valid, and that no `CLAUDE.md` hides AGENTS.md from Claude Code. Each problem comes with the command that fixes it. `--ci` skips the local-only checks. |
 | `kit retro N` | The friction data of merged issue N, for its retrospective. From the friction log the hooks keep on this machine (`~/.local/state/dev-kit/friction`, never committed): confirmation windows by the rule behind them, questions, interruptions, «трение:» marks, refusals, errors, repeated commands and where the time went. From GitHub: reviews, waiting on the owner and CI. Counts only. |
 | `kit retro --missing` | Merged issues of the last 14 days without a retrospective. New work waits for them. |
-| `kit gate …` | The design-approval and size gate. CI and the edit hook run it. |
+| `kit gate …` | The pull request gate: the branch of an open issue, the title, the `ADR:` line, filled **Review** and **User-level test**, accepted ADRs unchanged, the design approval and the size. CI runs it, again when a title or body is edited; the finish script runs its shape rules before it opens a PR; the edit hook runs the design approval. |
 | `kit identity`, `kit modules` | The agent's identity alone, for a repository without dev-kit; the modules, for CI. |
 
 ## How updates arrive
@@ -53,6 +53,8 @@ git submodule update --remote .shared && .shared/bin/kit init
 ```
 
 Then open a pull request "chore: update dev-kit". `kit init` rewrites the managed files to match.
+
+You do not have to watch for updates: the session start says when the pinned commit is behind dev-kit's `main`, and the agent opens the update as an XS task.
 
 ## What a project gets
 
