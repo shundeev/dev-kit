@@ -93,6 +93,8 @@ for rule in "Bash(gh pr merge *)" \
             "Bash(git reset --hard *)" "Bash(git clean *)" "Bash(git branch -D *)"; do
   has ask "$rule" && ok "asks: $rule" || bad "asks: $rule"
 done
+# #74: closing an issue reopens in one click and happens on the owner's word or from the flow scripts.
+if has ask "Bash(gh issue close *)"; then bad "closing an issue still asks the owner"; else ok "closing an issue does not ask"; fi
 for rule in "Bash(git push --force *)" "Bash(git push * --force *)" "Bash(git push * --force)" "Bash(git push -f *)" \
             "Bash(git push * -f)" "Bash(git push * +*)" "Bash(gh repo delete *)"; do
   has deny "$rule" && ok "denies: $rule" || bad "denies: $rule"
