@@ -86,7 +86,7 @@ PRs merge by squash; these rules govern the branch history the reviewer reads.
 - Unrelated changes never share a commit; one change is never split across several.
 - No fixup, typo, WIP or "address review" commits survive to the merge: fold them with
   `git commit --fixup <sha>` + `GIT_SEQUENCE_EDITOR=: git rebase --autosquash main`.
-- Rewritten history is pushed with `git push --force-with-lease`, only to your own issue branch.
+- Rewritten history goes out with `git push --force-with-lease`, to your own issue branch only (#38).
 
 ## After the merge
 

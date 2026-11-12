@@ -74,6 +74,40 @@ inner=$(printf '%s\n' "$stripped" | grep -o '\$([^()]*)' | sed -E 's/^\$\(//; s/
 statements=$(printf '%s\n%s\n' "$stripped" "$inner" | sed -E 's/(&&|\|\||[;|&])/\n/g')
 
 branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+wd=.  # the directory statements run in: follows `cd /…` from statement to statement
+
+# A forced push rewrites history. The agent may rewrite its own issue branches (#38), never
+# another branch: `main` is protected on the server, other branches are not. Prints the
+# target a forced push would rewrite when that is not a <number>-<slug> branch.
+push_refused() { # push_refused <dir> <words after git…>
+  local dir=$1 force="" r dst
+  local -a refs=()
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -C) dir=$2; shift 2 ;;
+      push) shift; break ;;
+      *) return 0 ;;
+    esac
+  done
+  local positional=0
+  for w in "$@"; do
+    case "$w" in
+      --force-with-lease|--force-with-lease=*|--force-if-includes) force=yes ;;
+      -*) ;;
+      *) positional=$((positional + 1)); [ "$positional" -gt 1 ] && refs+=("$w") ;;
+    esac
+  done
+  [ -n "$force" ] || return 0
+  [ "${#refs[@]}" -gt 0 ] || refs=(HEAD)
+  for r in "${refs[@]}"; do
+    dst=${r#+}
+    case "$dst" in *:*) dst=${dst#*:} ;; esac
+    dst=${dst#refs/heads/}
+    [ "$dst" = HEAD ] && dst=$(git -C "$dir" symbolic-ref --short -q HEAD 2>/dev/null || echo HEAD)
+    case "$dst" in [0-9]*-*) ;; *) printf '%s' "$dst"; return 0 ;; esac
+  done
+}
 
 # `gh api` reads or writes depending on its flags (#54). Prints what the call would change and
 # succeeds when it can change GitHub: a method other than GET; fields without a method, which
@@ -137,6 +171,17 @@ while IFS= read -r st; do
     *) for w in "$@"; do
          case "$w" in --help|-h) continue 2 ;; esac
        done ;;
+  esac
+
+  case "$head" in
+    cd) case "$sub" in /*) wd=$sub ;; esac ;;
+    git)
+      if target=$(push_refused "$wd" "${@:2}") && [ -n "$target" ]; then
+        decide deny "Refused: a forced push to '$target', which is not an issue branch. The agent rewrites
+only its own issue branches, named <number>-<slug> (#38); main is also protected on the server.
+
+Push without rewriting, or rewrite the issue branch the work is on."
+      fi ;;
   esac
 
   # zsh, the agent's usual shell, leaves an unquoted $v as one word (#64). A command that needs
