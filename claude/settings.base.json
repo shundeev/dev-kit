@@ -143,6 +143,17 @@
             "command": "bash -c 'h=\"${CLAUDE_PROJECT_DIR:-.}/{{kit}}/claude/hooks/friction.sh\"; [ -r \"$h\" ] && exec bash \"$h\" PostToolUse; exit 0'"
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 30,
+            "statusMessage": "Formatting with the project's zprint configuration...",
+            "command": "bash -c 'h=\"${CLAUDE_PROJECT_DIR:-.}/{{kit}}/claude/hooks/format.sh\"; [ -r \"$h\" ] && exec bash \"$h\"; exit 0'"
+          }
+        ]
       }
     ],
     "PostToolUseFailure": [
