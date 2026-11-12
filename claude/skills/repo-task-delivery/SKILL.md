@@ -91,6 +91,8 @@ component is an M: stop, resize it and ask for G1.
 
 - Self-review the diff (`git diff --stat` first). For M also run `/code-review` and `/simplify`;
   for Clojure, the `smell-reviewer` agent.
+- For M, also an independent review: a separate agent gets the code and the spec, not the
+  author's conclusions, and reproduces each finding (#55's two found 14 defects; #63).
 - Fix or answer every finding, and list them under **Review** in the PR.
 
 ## 8. User-level test
