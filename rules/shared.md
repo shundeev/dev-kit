@@ -42,6 +42,8 @@ These rules apply to every agent working in this repository (Claude Code, Codex,
 
 - A report to the owner says what changed for them and what is needed from them, in plain words,
   item by item; the details stay in the PR. No jargon tables.
+- A report on a new mechanism starts with the problem it solves and what changes for the owner,
+  then says how it works (#63).
 - Every report after a push ends with the pull request's link.
 - Anything the owner has to do by hand (a setting, a login, a click) goes into a comment on its PR
   as numbered steps: where to click, what to type, what the result looks like, what to do if it
