@@ -44,6 +44,7 @@ tells you what is left: restart the session, or run `kit init` in your terminal 
 | `.shared/bin/kit modules` | `clojure=true/false`, for CI. |
 | `.shared/bin/kit identity [--dir PATH]` | Writes only the agent's GitHub identity (below) into a repository's `.claude/settings.local.json`: for dev-kit itself, or a repository that does not mount dev-kit yet. |
 | `.shared/bin/kit retro N` | The friction data of merged issue N for its retrospective. From the friction log the hooks keep on this machine (`~/.local/state/dev-kit/friction`, never committed): the owner's confirmation windows by the ask rule behind them, questions, interruptions, «трение:» marks, refusals, errors and repeated commands, for the task and for the last 14 days. From GitHub: the design approval, reviews, waiting on the owner, CI and manual steps. Counts only; `--messages` lists the owner's messages locally. Read-only. |
+| `.shared/bin/kit retro --missing` | The issues merged in the last 14 days without a `## Retrospective` comment, and the command that collects their data; exit 1 when there are some. The start script and the session start use it (#56). |
 
 Update a project to a newer dev-kit: `git submodule update --remote .shared && .shared/bin/kit init`,
 then a pull request "chore: bump dev-kit".

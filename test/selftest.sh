@@ -632,6 +632,41 @@ jq -nc '{session_id:"s1",prompt_id:"p1",tool_name:"Bash",tool_use_id:"t9",tool_i
 contains "the entry hook still prints the refusal" '"permissionDecision":"deny"' "$(cat "$WORK/deny.out")"
 contains "a hook's refusal is recorded with its call" '"event":"HookDenied"' "$(grep '"t9"' <<<"$(flog)")"
 
+echo "- retrospective gate (#56, fake gh)"
+MG="$WORK/missing"; mkdir -p "$MG"
+missing() { jq -n '{data: {search: {nodes: [
+  {number: 31, title: "Has its retro", comments: {nodes: [{body: "## Retrospective\n\nx"}]},
+   closedByPullRequestsReferences: {nodes: [{mergedAt: "2026-11-10T10:00:00Z"}]}},
+  {number: 32, title: "Lacks its retro", comments: {nodes: [{body: "done"}]},
+   closedByPullRequestsReferences: {nodes: [{mergedAt: "2026-11-11T10:00:00Z"}]}},
+  {number: 33, title: "Closed without a PR", comments: {nodes: []}, closedByPullRequestsReferences: {nodes: []}}]}}}' > "$MG/missing.json"; }
+fake() { env PATH="$KIT/test/fake-gh:$PATH" FAKE_GH_DIR="$MG" FAKE_GH_LOG="$MG/log" "$@"; }
+missing
+expect_exit 1 "retro --missing names a merged issue without its retrospective" fake bb "$KIT/bin/kit" retro --missing --repo u473t8/fake
+contains "  the issue" "#32 Lacks its retro" "$LAST"
+contains "  the command that collects its data" "kit retro 32" "$LAST"
+if grep -qE '#31|#33' <<<"$LAST"; then bad "  named one with a retrospective or without a PR" "$LAST"; else ok "  not those with a retrospective or without a PR"; fi
+jq '.data.search.nodes |= map(select(.number != 32))' "$MG/missing.json" > "$MG/m" && mv "$MG/m" "$MG/missing.json"
+expect_exit 0 "retro --missing: every merged issue has its retrospective" fake bb "$KIT/bin/kit" retro --missing --repo u473t8/fake
+if [ -z "$LAST" ]; then ok "  prints nothing"; else bad "  printed" "$LAST"; fi
+missing; : > "$MG/log"
+expect_exit 1 "start refuses new work while a merged issue lacks its retrospective" \
+  fake bash .claude/skills/gh-project-workflow/scripts/start_issue_flow.sh --title x --priority High
+contains "  names it" "#32" "$LAST"
+contains "  names the owner's waiver" "--skip-retro" "$LAST"
+if grep -q '^issue create' "$MG/log"; then bad "  created an issue"; else ok "  created nothing"; fi
+: > "$MG/log"
+fake bash .claude/skills/gh-project-workflow/scripts/start_issue_flow.sh --title x --priority High --skip-retro >/dev/null 2>&1
+if grep -q 'search(' "$MG/log"; then bad "--skip-retro still checked"; else ok "--skip-retro passes the check"; fi
+touch "$MG/gh-fails"
+out="$(fake bash .claude/skills/gh-project-workflow/scripts/start_issue_flow.sh --title x --priority High 2>&1)"
+contains "GitHub unreachable: the start script says it could not check" "could not check" "$out"
+rm "$MG/gh-fails"
+contains "a session starts by naming merged issues without a retrospective" "#32" \
+  "$(fake bash .shared/claude/hooks/session-start.sh 2>&1)"
+if jq -e '.permissions.ask | index("Bash(* --skip-retro*)")' .claude/settings.json >/dev/null; then ok "--skip-retro asks the owner"
+else bad "no ask rule for --skip-retro"; fi
+
 echo "- retrospective data (fake gh, friction log)"
 RT="$WORK/retro"; mkdir -p "$RT/state/dev-kit"; cp -r "$KIT/test/fixtures/retro/friction" "$RT/state/dev-kit/"
 retro() { PATH="$KIT/test/fake-gh:$PATH" FAKE_GH_DIR="$RT" FAKE_GH_LOG="$RT/log" GITHUB_REPOSITORY=u473t8/fake \

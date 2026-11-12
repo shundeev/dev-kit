@@ -36,6 +36,8 @@ Options:
   --skip-branch                 Do not create the development branch at all
   --no-checkout                 Create and link the branch, leave the calling worktree alone
                                 (mutually exclusive with --skip-branch)
+  --skip-retro                  Start although a merged issue lacks its retrospective. Only the owner
+                                waives this: a permission rule asks them first (#56)
   --help                        Show this help
 USAGE
 }
@@ -280,6 +282,7 @@ branch_name=""
 reuse_existing=1
 skip_branch=0
 no_checkout=0
+skip_retro=0
 labels_json=""
 
 while [[ $# -gt 0 ]]; do
@@ -380,6 +383,10 @@ while [[ $# -gt 0 ]]; do
       no_checkout=1
       shift
       ;;
+    --skip-retro)
+      skip_retro=1
+      shift
+      ;;
     --help|-h)
       usage
       exit 0
@@ -411,6 +418,18 @@ if [[ -n "$milestone_title" ]]; then
   open_milestones="$(gh api "repos/$repo/milestones?state=open" --paginate --jq '.[].title')"
   grep -Fxq -- "$milestone_title" <<<"$open_milestones" \
     || die "Milestone '$milestone_title' is not an open milestone of '$repo'. Open: $(paste -sd '/' <<<"$open_milestones")"
+fi
+
+# A merged task's retrospective comes before new work (#28, #56). Checked before anything is
+# created. When GitHub cannot be asked, say so and go on: the check guards the process, not data.
+if [[ "$skip_retro" -eq 0 ]]; then
+  kit="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../../.." && pwd)/bin/kit"
+  retro_out="$(bb "$kit" retro --missing --repo "$repo" 2>&1)" && rc=0 || rc=$? # set -e must not end the run here
+  case $rc in
+    0) ;;
+    1) die "$retro_out" ;;
+    *) echo "Warning: could not check for merged issues without a retrospective: $retro_out" >&2 ;;
+  esac
 fi
 
 graphql_budget_before="$(graphql_remaining)"
