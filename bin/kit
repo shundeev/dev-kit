@@ -560,15 +560,16 @@
       (str (label item) " (" problem ")"))))
 
 
-(defn infer-repo
-  []
-  (when-let [url (sh "git" "remote" "get-url" "origin")]
-    (second (re-find #"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$" url))))
+(defn origin-repo
+  "owner/name of the GitHub origin of the git repository at dir, or nil."
+  [dir]
+  (when-let [url (sh-in dir "git" "remote" "get-url" "origin")]
+    (second (re-find #"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?/?$" url))))
 
 
 (defn create-config!
   [{:keys [repo showcase modules]}]
-  (let [repo (or repo (infer-repo) (die "no origin remote; pass --repo owner/name"))
+  (let [repo (or repo (origin-repo root) (die "no origin remote; pass --repo owner/name"))
         mods (into #{} (map keyword) (some-> modules (str/split #",")))]
     (write! config-file
             (str ";; dev-kit settings for this project, read by " mount "/bin/kit (see " mount "/README.md).\n"
@@ -748,9 +749,12 @@
 
 
 (defn gate-repo
+  "The repository gate and retro act on: --repo, CI's, the current folder's origin, then the session's
+  GHWF_REPO and kit.edn. The folder comes before the session (#81)."
   [{:keys [repo]} cfg]
-  (or repo (not-empty (System/getenv "GITHUB_REPOSITORY")) (not-empty (System/getenv "GHWF_REPO")) (:repo cfg)
-      (die "gate: no repository; pass --repo owner/name")))
+  (or repo (not-empty (System/getenv "GITHUB_REPOSITORY")) (origin-repo ".") (not-empty (System/getenv "GHWF_REPO"))
+      (:repo cfg)
+      (die "no repository: this folder has no GitHub origin and GHWF_REPO is not set; run inside the clone, or pass --repo owner/name")))
 
 
 (defn managed-paths

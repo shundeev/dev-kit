@@ -549,6 +549,34 @@ if grep -q '^pr merge' "$FAKE_GH_LOG"; then bad "  merged again"; else ok "  no 
 grep -q '^project item-add' "$FAKE_GH_LOG" && ok "  the card is moved to Done" || bad "  no board update"
 git rev-parse -q --verify refs/heads/14-auto >/dev/null && bad "  local branch left" || ok "  local branch deleted"
 unset GHWF_MERGE_WAIT
+
+echo "- the repository of the folder, not the session's (#81)"
+# A session opened in one project (GHWF_REPO=u473t8/fake, set by flow) works in another repository's
+# folder: its origin is on GitHub, pushes go to the local remote.
+FR="$WORK/folder"; git init -q -b 7-x "$FR"; cd "$FR" || exit 1
+git remote add origin git@github.com:u473t8/folder.git; git remote set-url --push origin "$REMOTE"
+echo x > g; git add g; git commit -qm "chore: base"
+repo_calls() { grep -oE 'u473t8/(fake|folder)' "$FAKE_GH_LOG" | sort -u | tr '\n' ' '; }
+: > "$FAKE/pr-list"; : > "$FAKE/pr-list-merged"; : > "$FAKE_GH_LOG"
+expect_exit 1 "merge: no pull request is looked for in the folder's repository" flow merge_issue_flow.sh
+contains "  the error names the repository" "u473t8/folder" "$LAST"
+contains "  and the option that changes it" "--repo" "$LAST"
+[ "$(repo_calls)" = "u473t8/folder " ] && ok "  every call names the folder's repository" || bad "  repositories" "$(repo_calls)"
+: > "$FAKE_GH_LOG"; flow start_issue_flow.sh --title "Folder task" --issue 7 --priority Low --no-checkout >/dev/null 2>&1
+[ "$(repo_calls)" = "u473t8/folder " ] && ok "start: acts on the folder's repository" || bad "start: repositories" "$(repo_calls)"
+echo y >> g; git add g; : > "$FAKE_GH_LOG"; echo "Folder task" > "$FAKE/issue-title"
+flow finish_issue_flow.sh --pr-body-file "$WORK/body.md" >/dev/null 2>&1
+grep -qE '^pr create .*u473t8/folder' "$FAKE_GH_LOG" && ok "finish: opens the PR in the folder's repository" \
+  || bad "finish: repositories" "$(repo_calls)"
+kitf() { env -u GITHUB_REPOSITORY PATH="$KIT/test/fake-gh:$PATH" GHWF_REPO=u473t8/fake bb "$KIT/bin/kit" "$@"; }  # CI sets GITHUB_REPOSITORY
+: > "$FAKE_GH_LOG"; kitf retro --missing >/dev/null 2>&1
+[ "$(repo_calls)" = "u473t8/folder " ] && ok "kit retro: asks about the folder's repository" || bad "kit retro: repositories" "$(repo_calls)"
+: > "$FAKE_GH_LOG"; kitf gate --g1 7 >/dev/null 2>&1
+grep -q 'n=folder' "$FAKE_GH_LOG" && ! grep -q 'n=fake' "$FAKE_GH_LOG" && ok "kit gate: reads the folder's issue" \
+  || bad "kit gate: queries" "$(cat "$FAKE_GH_LOG")"
+NR="$WORK/no-remote"; git init -q -b 8-y "$NR"; cd "$NR" || exit 1
+expect_exit 1 "merge: no origin and no GHWF_REPO is refused" env -u GHWF_REPO PATH="$KIT/test/fake-gh:$PATH" bash "$SCR/merge_issue_flow.sh"
+contains "  with the way out" "pass --repo owner/name" "$LAST"
 cd "$P" || exit 1
 
 echo "- design approval gate (fake gh)"

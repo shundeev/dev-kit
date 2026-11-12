@@ -28,7 +28,7 @@ Options:
                                 "ADR: none" or "ADR: adr/NNNN-....md". "Closes #<issue>" is added if missing.
   --add <path>                  Stage this path before committing (repeatable)
   --no-commit                   Commit nothing; push and open the PR for commits already on the branch
-  --repo <owner/repo>           Default: GHWF_REPO, then the origin remote
+  --repo <owner/repo>           Default: the folder's origin on GitHub, then GHWF_REPO
   --owner <login>               Board owner (default: GHWF_OWNER)
   --project-number <number>     Board number (default: GHWF_PROJECT_NUMBER)
   --base <branch>               Default: GHWF_DEFAULT_BASE or main
@@ -41,14 +41,6 @@ USAGE
 die() {
   echo "Error: $*" >&2
   exit 1
-}
-
-infer_repo_from_origin() {
-  local origin_url
-  origin_url="$(git remote get-url origin 2>/dev/null || true)"
-  if [[ "$origin_url" =~ github.com[:/]([^/]+/[^/.]+)(\.git)?$ ]]; then
-    printf '%s' "${BASH_REMATCH[1]}"
-  fi
 }
 
 # board.sh resolves the item, the field and its option through the project.
@@ -65,7 +57,7 @@ set_status() {
   fi
 }
 
-repo="${GHWF_REPO:-}"
+repo=""
 owner="${GHWF_OWNER:-}"
 project_number="${GHWF_PROJECT_NUMBER:-}"
 base_branch="${GHWF_DEFAULT_BASE:-main}"
@@ -113,8 +105,7 @@ case "$commit_type" in
   *) die "--type '$commit_type' is not a Conventional Commits type" ;;
 esac
 
-[[ -n "$repo" ]] || repo="$(infer_repo_from_origin)"
-[[ -n "$repo" ]] || die "--repo or GHWF_REPO is required"
+repo="$(resolve_repo "$repo")" || exit 1
 
 branch_name="$(git rev-parse --abbrev-ref HEAD)"
 [[ "$branch_name" != "HEAD" ]] || die "Detached HEAD is not supported"

@@ -1,5 +1,26 @@
 # shellcheck shell=bash
-# Sourced by the flow scripts: sets a single-select field of an issue's item on a project board.
+# Sourced by the flow scripts: the repository they act on, and the fields of an issue's item on a
+# project board.
+
+# resolve_repo <--repo value or empty>: prints owner/name. The folder comes before the session
+# (#81): a session opened in one project may work in another repository's worktree, and its
+# GHWF_REPO then names the wrong repository.
+resolve_repo() {
+  local repo="${1:-}" url
+  if [[ -z "$repo" ]]; then
+    url="$(git remote get-url origin 2>/dev/null || true)"
+    url="${url%/}"; url="${url%.git}"
+    [[ "$url" =~ github\.com[:/]([^/]+/[^/]+)$ ]] && repo="${BASH_REMATCH[1]}"
+  fi
+  [[ -n "$repo" ]] || repo="${GHWF_REPO:-}"
+  if [[ -z "$repo" ]]; then
+    echo "Error: no repository: this folder has no GitHub origin and GHWF_REPO is not set; run inside the clone, or pass --repo owner/name" >&2
+    return 1
+  fi
+  printf '%s' "$repo"
+}
+
+# board_set_field sets a single-select field of an issue's item on a project board.
 #
 # gh's by-URL mode (`gh project item-edit N --url <issue> --field F --value V`) finds the item
 # through the issue, and an issue in an organization does not list a project owned by a user.
