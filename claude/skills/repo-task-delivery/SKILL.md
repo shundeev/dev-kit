@@ -24,7 +24,9 @@ are Requirements, Invariants, Design, Plan and Done when. The pull request body 
 
 Find the issue or file it first. Search the open issues, since one issue may host several PRs.
 File through `gh-project-workflow` (the start script), never `gh issue create`, with Priority
-and Size; starting work means Status **In progress**. No file is edited before the issue and its
+and Size (Priority: **Urgent**, broken for the owner now or blocking all work; **High**, the owner
+waits on it or it removes recurring friction; **Medium**, a planned improvement; **Low**, nice to
+have); starting work means Status **In progress**. No file is edited before the issue and its
 branch exist, XS included.
 
 | Size | Ceremony | Example |
@@ -155,4 +157,6 @@ component is an M: stop, resize it and ask for G1.
   holds for every project goes to dev-kit, not to the agent's memory. A fact learned about GitHub
   or a tool goes where a decision depends on it (code, test, rule, ADR), or nowhere. A detail that
   can become a mechanism becomes one instead of a note.
-- Follow-up work is a new task, except obvious closeout caused by the merged change.
+- Follow-up work is a new task, except obvious closeout caused by the merged change: the board
+  card, the branch and worktree, a live check the PR promised, a typo in the merged text. A new
+  feature the change suggests is a new task.

@@ -1,6 +1,6 @@
 ---
 name: smell-reviewer
-description: Read-only review of a branch's Clojure diff for three design smells — single call site, value built and taken apart at once, object handed its own field. Returns high-confidence findings only, grouped. Never edits.
+description: Read-only review of a branch's Clojure diff for three design smells — single call site, value built and taken apart at once, object handed its own field. Returns high-confidence findings only, grouped. Never edits. Use it on a Clojure diff before the PR (stage 7); not for other languages or for finding bugs.
 tools: Read, Grep, Glob, LSP, Bash
 ---
 

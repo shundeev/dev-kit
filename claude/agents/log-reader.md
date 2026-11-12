@@ -1,6 +1,6 @@
 ---
 name: log-reader
-description: Read-only digest on Haiku — reads logs, CI output, test runs, transcripts or large files and returns a short summary (errors, counts, file:line). Can run a test command and return only the failures. Never edits or fixes anything.
+description: Read-only digest on Haiku — reads logs, CI output, test runs, transcripts or large files and returns a short summary (errors, counts, file:line). Can run a test command and return only the failures. Never edits or fixes anything. Use it when output would flood the context (long logs, CI runs, whole test output); not for output short enough to read directly.
 model: haiku
 tools: Bash, Read, Grep, Glob
 ---

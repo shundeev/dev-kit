@@ -1,6 +1,6 @@
 ---
 name: ops
-description: Mechanical delivery chores on Haiku — issue open/close and board status via the gh-project-workflow scripts, git status/commit/push of already-staged work, PR creation, branch cleanup after merge. Hand it an exact operation; it decides nothing.
+description: Mechanical delivery chores on Haiku — issue open/close and board status via the gh-project-workflow scripts, git status/commit/push of already-staged work, PR creation, branch cleanup after merge. Hand it an exact operation; it decides nothing. Use it for a chore whose commands are known; not for diagnosing a failure, choosing what to do, or editing files.
 model: haiku
 tools: Bash, Read, Grep, Glob
 ---

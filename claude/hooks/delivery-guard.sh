@@ -9,6 +9,14 @@
 # Gate on the invariant ("an issue exists for this work"), not on the verb: `gh pr create`
 # is correct from an issue branch and wrong from the base branch.
 #
+# Known gaps. It judges only the command text the agent submits:
+# - a command run inside a script, or by another tool, is not seen;
+# - words are split by heuristics: heredoc bodies are dropped and quoting is not parsed, so a
+#   `--head` inside a quoted title is not taken for a branch;
+# - a push to main is left to the server's ruleset and the settings' deny rules; a forced push is
+#   judged here only for its target branch (#38);
+# - `gh api` is judged by its method and fields (#54), not by what the endpoint does.
+#
 # Ported from the Sprecha repository (the-kind-robots/learning-app).
 set -uo pipefail
 set -f  # no globbing when statements are word-split below
