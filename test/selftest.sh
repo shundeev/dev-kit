@@ -597,6 +597,11 @@ rm "$G/gh-fails"; git switch -q main
 [ -z "$(hook src/a.clj)" ] && ok "hook: a branch without an issue is not gated" || bad "hook gated main"
 cd "$P" || exit 1
 
+echo "- pinned actions (#7)"
+unpinned="$(grep -hE '^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*[^.[:space:]]' "$KIT/managed/ci.yml" "$KIT/ci/action.yml" "$KIT"/.github/workflows/*.yml \
+  | grep -vE '@[0-9a-f]{40}([[:space:]]|$)' || true)"
+if [ -z "$unpinned" ]; then ok "every external action is pinned to a commit"; else bad "actions not pinned to a commit" "$unpinned"; fi
+
 echo "- formatting hook (#61)"
 fmt() { jq -nc --arg f "$1" '{tool_input:{file_path:$f}}' | bash .shared/claude/hooks/format.sh; }
 FP="$WORK/fmt"; mkdir -p "$FP/proj/src" "$FP/bare"
