@@ -16,6 +16,11 @@ fi
 # without asking, so a fresh clone or a new worktree is set up by its first session.
 bb "$kit_dir/bin/kit" init --local >/dev/null 2>&1 || true
 
+# A merged task without its retrospective blocks new work (#56): say so before the work starts.
+# Silent when GitHub cannot be asked; the start script says it then.
+missing="$(bb "$kit_dir/bin/kit" retro --missing 2>/dev/null)"
+[ $? -eq 1 ] && echo "dev-kit: $missing"
+
 report="$(bb "$kit_dir/bin/kit" doctor --quiet 2>&1)"
 if [ -n "$report" ]; then
   echo "dev-kit doctor found problems with this project's setup. Tell the owner before starting work:"
