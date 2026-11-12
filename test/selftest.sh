@@ -358,6 +358,18 @@ contains "denies gh pr create from main" '"permissionDecision":"deny"' "$(guard 
 [ -z "$(guard 'gh issue create --help')" ] && ok "allows --help" || bad "--help denied"
 contains "asks on DELIVERY_GUARD=off" '"permissionDecision":"ask"' "$(guard 'DELIVERY_GUARD=off gh issue create -t x')"
 [ -z "$(guard 'git status')" ] && ok "ignores unrelated commands" || bad "unrelated command judged"
+# #64: in zsh an unquoted $v stays one word, so a command that needs it split is refused.
+zguard() { jq -nc --arg c "$1" '{tool_input:{command:$c}}' | SHELL=/bin/zsh bash .shared/claude/hooks/delivery-guard.sh; }
+for c in 'set -- $t' 'env $E bash x.sh' 'for n in $list; do echo $n; done' '$cmd --flag' 'for n in ${list}; do :; done'; do
+  contains "zsh: refuses a command relying on splitting: $c" '"permissionDecision":"deny"' "$(zguard "$c")"
+done
+contains "  the refusal names the fix" '${=' "$(zguard 'set -- $t')"
+for c in 'set -- ${=t}' 'for n in ${=list}; do :; done' 'echo "$v"' 'for x in $(seq 3); do :; done' 'env A=1 bash x.sh' 'echo $v'; do
+  out="$(zguard "$c")"
+  if [ -z "$out" ]; then ok "zsh: passes $c"; else bad "zsh: judged $c" "$out"; fi
+done
+out="$(jq -nc '{tool_input:{command:"set -- $t"}}' | SHELL=/bin/bash bash .shared/claude/hooks/delivery-guard.sh)"
+if [ -z "$out" ]; then ok "bash splits words itself: no refusal"; else bad "refused in bash" "$out"; fi
 # #54: a gh api call that only reads runs without a window; one that can change GitHub asks the owner.
 for c in "gh api repos/u473t8/x" "gh api repos/u473t8/x --paginate --jq '.[] | .name'" \
          "gh api graphql -f query='{viewer{login}}'" "gh api -X GET repos/u473t8/x -f per_page=100"; do
@@ -572,6 +584,29 @@ contains "hook: GitHub unreachable means refused, with the retry" "gate --g1 26"
 rm "$G/gh-fails"; git switch -q main
 [ -z "$(hook src/a.clj)" ] && ok "hook: a branch without an issue is not gated" || bad "hook gated main"
 cd "$P" || exit 1
+
+echo "- formatting hook (#61)"
+fmt() { jq -nc --arg f "$1" '{tool_input:{file_path:$f}}' | bash .shared/claude/hooks/format.sh; }
+FP="$WORK/fmt"; mkdir -p "$FP/proj/src" "$FP/bare"
+long='(defn f [a b] (let [x (+ a b) y (* a b) z (str "a string that makes this form much wider than one hundred twenty" x y)] (println x y z)))'
+if command -v zprint >/dev/null; then
+  cp "$KIT/clojure/.zprint.edn" "$FP/proj/.zprint.edn"
+  printf '%s\n' "$long" > "$FP/proj/src/a.clj"; printf '%s\n' "$long" > "$FP/bare/b.clj"
+  out="$(fmt "$FP/proj/src/a.clj")"
+  w="$(awk '{ if (length > m) m = length } END { print m }' "$FP/proj/src/a.clj")"
+  if [ -z "$out" ] && [ "$w" -gt 80 ] && [ "$w" -le 120 ]; then
+    ok "formats with the project's .zprint.edn (width 120, not zprint's 80)"
+  else bad "not formatted with the project's configuration" "$(cat "$FP/proj/src/a.clj")"; fi
+  fmt "$FP/bare/b.clj"
+  if [ "$(cat "$FP/bare/b.clj")" = "$long" ]; then ok "no .zprint.edn above the file: left as written"
+  else bad "formatted without a project configuration" "$(cat "$FP/bare/b.clj")"; fi
+else
+  echo "  skip  formatting hook: zprint is not installed"
+fi
+expect_exit 0 "formatting hook: a file that is not Clojure is left alone" bash -c "echo '{\"tool_input\":{\"file_path\":\"/x/a.md\"}}' | bash .shared/claude/hooks/format.sh"
+jq -e '[.hooks.PostToolUse[].hooks[].command | select(test("format.sh"))] | length == 1' .claude/settings.json >/dev/null \
+  && ok "settings run the formatting hook after edits" || bad "no formatting hook in the settings"
+[ "$(readlink "$KIT/.zprint.edn")" = clojure/.zprint.edn ] && ok "dev-kit formats itself with its own configuration" || bad "dev-kit has no root .zprint.edn link"
 
 echo "- friction recorder (#55)"
 FR="$WORK/state"; mkdir -p "$FR"
