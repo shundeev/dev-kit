@@ -4,7 +4,8 @@
 # after its --jq filter.
 #   pr-list         output of `pr list --state open … --jq .[0].url` (empty file: no open PR)
 #   pr-list-merged  the same for `--state merged`
-#   pr-state        output of `pr view … --jq .state`
+#   pr-state        output of `pr view … --json state…`
+#   pr-state.seq    when present, one answer per call for the same query, the last line repeating
 #   pr-review       output of `pr view --json reviewDecision,mergeStateStatus …`, e.g. "APPROVED CLEAN"
 #   no-auto-merge   when present, `pr merge --auto` fails as in a repository without auto-merge
 #   gate-issue.json the full response of `api graphql` (the gate's issue query)
@@ -17,6 +18,15 @@
 set -u
 printf '%s\n' "$*" >> "$FAKE_GH_LOG"
 answer() { cat "$FAKE_GH_DIR/$1" 2>/dev/null || true; }
+answer_seq() { # answer_seq <name>: the next line of <name>.seq, else <name>
+  local seq="$FAKE_GH_DIR/$1.seq"
+  if [ -s "$seq" ]; then
+    head -n1 "$seq"
+    [ "$(wc -l < "$seq")" -gt 1 ] && sed -i 1d "$seq"
+  else
+    answer "$1"
+  fi
+}
 case "${1:-} ${2:-}" in
   "pr list")
     case "$*" in
@@ -33,7 +43,7 @@ case "${1:-} ${2:-}" in
   "pr view")
     case "$*" in
       *reviewDecision*) answer pr-review ;;
-      *) answer pr-state ;;
+      *) answer_seq pr-state ;;
     esac ;;
   "issue view")
     case "$*" in

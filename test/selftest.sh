@@ -529,6 +529,17 @@ git rev-parse -q --verify refs/heads/12-landing >/dev/null && bad "  local branc
 git ls-remote --exit-code --heads origin 12-landing >/dev/null 2>&1 && bad "  remote branch left" || ok "  remote branch deleted"
 [ "$(git rev-parse --abbrev-ref HEAD)" = HEAD ] && ok "  this worktree detached on the base" || bad "  not detached"
 
+# #72: a branch that falls behind while the script waits is updated, then merges.
+git switch -q -c 15-wait origin/main && git push -q -u origin 15-wait
+echo "https://github.com/u473t8/fake/pull/97" > "$FAKE/pr-list"; echo "APPROVED CLEAN" > "$FAKE/pr-review"
+printf 'OPEN BLOCKED\nOPEN BEHIND\nOPEN BLOCKED\nMERGED CLEAN\n' > "$FAKE/pr-state.seq"; : > "$FAKE_GH_LOG"
+export GHWF_MERGE_POLL=0 GHWF_MERGE_WAIT=10
+expect_exit 0 "merge: a branch that falls behind while waiting is updated and merges" flow merge_issue_flow.sh
+unset GHWF_MERGE_POLL; export GHWF_MERGE_WAIT=0  # as the tests around it expect
+calls="$(grep -E '^pr (update-branch|merge)' "$FAKE_GH_LOG" | cut -d' ' -f1,2 | tr '\n' ',')"
+[ "$calls" = "pr merge,pr update-branch," ] && ok "  auto-merge, then an update when it fell behind" || bad "  calls" "$calls"
+rm -f "$FAKE/pr-state.seq"; : > "$FAKE/pr-list"; git switch -q --detach origin/main
+
 git switch -q -c 14-auto origin/main && git push -q -u origin 14-auto
 : > "$FAKE/pr-list"; echo "https://github.com/u473t8/fake/pull/98" > "$FAKE/pr-list-merged"; : > "$FAKE_GH_LOG"
 expect_exit 0 "merge: a PR already merged by GitHub gets the closeout only" flow merge_issue_flow.sh
