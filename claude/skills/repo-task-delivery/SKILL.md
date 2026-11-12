@@ -62,7 +62,9 @@ component is an M: stop, resize it and ask for G1.
     experiment when unclear), never taken from forums or memory (#22). The proven fact is written
     where the decision depends on it: in the mechanism's code or test, the process step, or the
     ADR, with links to the documentation and the evidence. There is no separate list of facts;
-  - each manual step for the owner: automate it, or plan it as numbered steps in the PR.
+  - each manual step for the owner: automate it, or plan it as numbered steps in the PR;
+  - work that runs on real data: a throwaway probe over that data comes before the tests and the
+    code (#55, #60). What it shows goes into the design; the probe itself goes away.
 - For M, post the design on the issue as a comment starting with `## Design`, and name what the
   owner decides.
 
@@ -81,6 +83,9 @@ component is an M: stop, resize it and ask for G1.
 
 - The Plan's numbered steps are the approved scope. A step that turns out wrong stops the work
   and goes to the owner: no silent deviation.
+- Work is solved from its root causes. A new one found mid-work goes to the issue as a `## Design`
+  addendum, and the code it affects is rewritten from it, not patched on (#60). The PR lists the
+  root causes it rests on.
 - Tests first: show each new case failing on the old code, including cases added after the
   first green run.
 - Stay inside the issue's scope. A finding outside it is a comment on the issue, or a new issue
@@ -90,7 +95,8 @@ component is an M: stop, resize it and ask for G1.
 ## 7. Review and simplify
 
 - Self-review the diff (`git diff --stat` first). For M also run `/code-review` and `/simplify`;
-  for Clojure, the `smell-reviewer` agent.
+  for Clojure, the `smell-reviewer` agent. The PR shows, for M, the lines of code before and after
+  the simplify pass (#60).
 - For M, also an independent review: a separate agent gets the code and the spec, not the
   author's conclusions, and reproduces each finding (#55's two found 14 defects; #63).
 - Fix or answer every finding, and list them under **Review** in the PR.
@@ -128,6 +134,9 @@ component is an M: stop, resize it and ask for G1.
 
 ## 11. Retrospective
 
+- New work waits for it (ADR-0004, #56): `start_issue_flow.sh` refuses to start while an issue
+  merged in the last 14 days lacks its `## Retrospective` comment, and a session's start names
+  them. Only the owner waives it: `--skip-retro` asks them first.
 - After the merge, collect the data: `bb .shared/bin/kit retro <issue>` (in dev-kit itself
   `bb bin/kit retro <issue> --repo shundeev/dev-kit`). It counts the friction that dev-kit's hooks
   recorded as it happened, and adds GitHub's: the owner's confirmation windows by the ask rule
