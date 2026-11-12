@@ -8,7 +8,7 @@ runs:
   using: composite
   steps:
     - name: Install babashka
-      uses: DeLaGuardo/setup-clojure@13.7.0
+      uses: DeLaGuardo/setup-clojure@6d46099eae24853c33c0482f2bb54edf4f1a4c74 # 13.7.0
       with:
         bb: 1.13.229
 
@@ -28,7 +28,7 @@ runs:
 
     - name: Install clj-kondo and zprint
       if: steps.kit.outputs.clojure == 'true'
-      uses: DeLaGuardo/setup-clojure@13.7.0
+      uses: DeLaGuardo/setup-clojure@6d46099eae24853c33c0482f2bb54edf4f1a4c74 # 13.7.0
       with:
         clj-kondo: 2026.10.26
         zprint: 1.3.0
