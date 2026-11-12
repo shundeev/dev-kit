@@ -135,20 +135,140 @@ expect_exit 1 "doctor catches a missing hooksPath" bb $kit doctor
 expect_exit 0 "doctor --ci skips local git config" bb $kit doctor --ci
 bb $kit init >/dev/null
 
+echo "- init converges, validates kit.edn, keeps project files (#14)"
+fresh() { # fresh <dir>: a new project with dev-kit mounted, no kit.edn; cd into it
+  git init -q -b main "$1" && cd "$1" || exit 1
+  git remote add origin https://github.com/u473t8/kit-selftest.git
+  git -c protocol.file.allow=always submodule add -q "$KIT" .shared
+  (cd "$KIT" && tar --exclude=.git -cf - .) | (cd .shared && tar -xf -)
+  git commit -qm "chore: add dev-kit"
+}
+blocks() { echo "$(grep -c '^<!-- dev-kit:begin' AGENTS.md)/$(grep -c '^<!-- dev-kit:end' AGENTS.md)"; }
+
+fresh "$WORK/m1"; bb $kit init --showcase Site >/dev/null 2>&1
+cat AGENTS.md AGENTS.md > "$WORK/a" && mv "$WORK/a" AGENTS.md
+expect_exit 0 "init: a duplicated block becomes one" bb $kit init
+[ "$(blocks)" = 1/1 ] && ok "  one begin, one end" || bad "  markers" "$(grep -n 'dev-kit:' AGENTS.md)"
+grep -q "# This project" AGENTS.md && ok "  the project part is kept" || bad "  project part lost"
+expect_exit 0 "  doctor passes" bb $kit doctor --ci
+sed -i 's/Edit it in dev-kit, not here\./Do not edit by hand./' AGENTS.md
+expect_exit 0 "init: a begin marker in another wording is still found" bb $kit init
+[ "$(blocks)" = 1/1 ] && ok "  still one block" || bad "  markers" "$(grep -n 'dev-kit:' AGENTS.md)"
+sed -i 's/$/\r/' AGENTS.md
+expect_exit 0 "init: an AGENTS.md with CRLF line ends" bb $kit init
+[ "$(grep -vc $'\r$' AGENTS.md)" = 0 ] && ok "  keeps CRLF on every line" || bad "  mixed line ends" "$(grep -vn $'\r$' AGENTS.md | head -3)"
+expect_exit 0 "  a rerun" bb $kit init
+contains "  changes nothing" "nothing to change" "$LAST"
+sed -i 's/\r$//' AGENTS.md; bb $kit init >/dev/null 2>&1
+sed -i '/^<!-- dev-kit:begin/d' AGENTS.md; cp AGENTS.md "$WORK/agents-before"
+expect_exit 1 "init: an end marker without its begin is refused" bb $kit init
+contains "  names the line" "AGENTS.md: line" "$LAST"
+[ "$(grep -c 'AGENTS.md: line' <<<"$LAST")" = 1 ] && ! grep -q "nothing to change" <<<"$LAST" \
+  && ok "  once, and not after 'nothing to change'" || bad "  output" "$LAST"
+cmp -s AGENTS.md "$WORK/agents-before" && ok "  AGENTS.md is left as it was" || bad "  AGENTS.md changed" "$(grep -n 'dev-kit:' AGENTS.md)"
+expect_exit 1 "  doctor fails the same way" bb $kit doctor --ci
+contains "  with the line" "AGENTS.md: line" "$LAST"
+
+fresh "$WORK/v1"
+expect_exit 1 "init: without --showcase it is refused" bb $kit init
+contains "  names the flag" "--showcase" "$LAST"
+[ ! -e kit.edn ] && ok "  no kit.edn written" || bad "  kit.edn written" "$(cat kit.edn)"
+expect_exit 1 "init: an unknown module is refused" bb $kit init --showcase Site --modules Clojure
+contains "  lists the known ones" "known modules: clojure" "$LAST"
+[ ! -e kit.edn ] && ok "  no kit.edn written" || bad "  kit.edn written" "$(cat kit.edn)"
+expect_exit 0 "init: --modules \"\" means none" bb $kit init --showcase Site --modules ""
+grep -q ':modules  #{}' kit.edn && ok "  kit.edn is readable, with no modules" || bad "  kit.edn" "$(cat kit.edn)"
+sed -i 's/ :showcase "Site"/ :showcase nil/' kit.edn
+expect_exit 1 "doctor: a kit.edn without :showcase fails" bb $kit doctor --ci
+contains "  names the key" ":showcase" "$LAST"
+sed -i 's/ :showcase nil/ :showcase "Site"/; s/:modules  #{}/:modules  #{:Clojure}/' kit.edn
+expect_exit 1 "doctor: an unknown module in kit.edn fails" bb $kit doctor --ci
+contains "  names it" ":Clojure" "$LAST"
+sed -i 's/#{:Clojure}/#{}/; s/^{:repo/{:agent {:login "other"}\n :repo/' kit.edn
+expect_exit 1 "doctor: a partial :agent fails instead of mixing two accounts" bb $kit doctor --ci
+contains "  names what is missing" ":email" "$LAST"
+sed -i 's/^{:agent {:login "other"}/{:board {:number 7}/' kit.edn
+bb $kit init >/dev/null 2>&1
+[ "$(jq -r '.env.GHWF_OWNER + " " + .env.GHWF_PROJECT_NUMBER' .claude/settings.json)" = "u473t8 7" ] \
+  && ok "init: a partial :board keeps the default owner" || bad "partial :board" "$(jq -c .env .claude/settings.json)"
+printf '{:repo "a/b"\n :x ]\n}\n' > kit.edn
+expect_exit 1 "doctor: an unreadable kit.edn fails with where" bb $kit doctor --ci
+contains "  names the file and the line" "kit.edn line 2" "$LAST"
+grep -qE "Exception|----- Error" <<<"$LAST" && bad "  a stack trace" "$LAST" || ok "  no stack trace"
+
+for c in "empty:" "comment-only:;; project linters come later"; do
+  fresh "$WORK/k-${c%%:*}"; mkdir -p .clj-kondo; printf '%s\n' "${c#*:}" > .clj-kondo/config.edn
+  expect_exit 0 "init: a clj-kondo config that is ${c%%:*} becomes the map" bb $kit init --showcase Site --modules clojure
+  bb -e '(assert (= ["../.shared/clojure/clj-kondo"] (:config-paths (clojure.edn/read-string (slurp ".clj-kondo/config.edn")))))' \
+    2>/dev/null && ok "  with :config-paths" || bad "  config" "$(cat .clj-kondo/config.edn)"
+done
+grep -q "project linters come later" .clj-kondo/config.edn && ok "  the comment is kept" || bad "  comment lost"
+fresh "$WORK/k-vector"; mkdir -p .clj-kondo; echo '[]' > .clj-kondo/config.edn
+expect_exit 1 "init: a clj-kondo config that is not a map fails that item" bb $kit init --showcase Site --modules clojure
+contains "  says to make it a map" "make it a map" "$LAST"
+[ "$(git config --local core.hooksPath)" = ".shared/githooks" ] && ok "  the other items still ran" || bad "  hooksPath unset"
+
+fresh "$WORK/c1"; bb $kit init --showcase Site >/dev/null 2>&1
+echo "# mine" > CLAUDE.md
+expect_exit 1 "doctor: a CLAUDE.md that hides AGENTS.md fails" bb $kit doctor --ci
+contains "  says what to do" "move its content into AGENTS.md" "$LAST"
+rm CLAUDE.md; echo "# mine" > CLAUDE.local.md
+expect_exit 1 "doctor: so does a CLAUDE.local.md" bb $kit doctor
+rm CLAUDE.local.md; echo "# above" > "$WORK/CLAUDE.md"
+expect_exit 1 "doctor: and a CLAUDE.md in a folder above the project" bb $kit doctor
+contains "  names it" "$WORK/CLAUDE.md" "$LAST"
+expect_exit 0 "  doctor --ci looks only at the project's own files" bb $kit doctor --ci
+mkdir -p "$HOME/.claude"
+echo '{"pluginConfigs":{"cc-plugin-agents-md@builtin":{"options":{"instructionFiles":"claude-md-and-agents-md"}}}}' > "$HOME/.claude/settings.json"
+expect_exit 0 "doctor: unless Claude Code is set to read both" bb $kit doctor
+rm "$HOME/.claude/settings.json" "$WORK/CLAUDE.md"
+fresh "$HOME/proj"; bb $kit init --showcase Site >/dev/null 2>&1; echo "# user" > "$HOME/.claude/CLAUDE.md"
+expect_exit 0 "doctor: the user's own ~/.claude/CLAUDE.md does not count" bb $kit doctor
+ln -s "$HOME" "$WORK/home-link"
+out="$(env HOME="$WORK/home-link" bb $kit doctor 2>&1)"
+grep -q "hides AGENTS.md" <<<"$out" && bad "  HOME through a link: flagged" "$out" || ok "  nor when HOME is reached through a link"
+rm "$HOME/.claude/CLAUDE.md"
+
+fresh "$WORK/r0"; bb $kit init --showcase Site >/dev/null 2>&1; mv kit.edn "$WORK/kit.edn.r0"
+expect_exit 0 "init: without kit.edn again, dev-kit's own settings.json is not taken as the project's" bb $kit init --showcase Site
+grep -q ":claude-settings" kit.edn && bad "  folded into kit.edn" "$(head -c 300 kit.edn)" || ok "  kit.edn has no :claude-settings"
+
+fresh "$WORK/r1"; mkdir -p .claude/agents .github/workflows
+echo '{"permissions":{"allow":["Bash(make *)"]}}' > .claude/settings.json
+printf 'name: mine\non: push\njobs: {}\n' > .github/workflows/ci.yml
+printf -- '---\nname: ops\n---\nmy own ops agent\n' > .claude/agents/ops.md
+git config --local core.hooksPath .husky
+expect_exit 1 "init: project files where dev-kit writes are refused" bb $kit init --showcase Site
+for f in .github/workflows/ci.yml .claude/agents/ops.md core.hooksPath "move it away" "rename it" "git config --unset core.hooksPath"; do contains "  names: $f" "$f" "$LAST"; done
+[ ! -e kit.edn ] && grep -q "name: mine" .github/workflows/ci.yml && grep -q "my own ops" .claude/agents/ops.md \
+  && [ "$(git config --local core.hooksPath)" = .husky ] && ok "  nothing is written" || bad "  something was written"
+mv .github/workflows/ci.yml .github/workflows/project.yml; mv .claude/agents/ops.md .claude/agents/my-ops.md
+git config --local --unset core.hooksPath
+expect_exit 0 "init: after the moves it goes through" bb $kit init --showcase Site
+contains "  says where the settings went" ":claude-settings" "$LAST"
+jq -e '.permissions.allow | index("Bash(make *)")' .claude/settings.json >/dev/null && ok "  the project's permission is kept" || bad "  permission lost"
+grep -qF 'Bash(make *)' kit.edn && ok "  and lives in kit.edn" || bad "  kit.edn" "$(cat kit.edn)"
+expect_exit 0 "  a rerun" bb $kit init
+contains "  changes nothing" "nothing to change" "$LAST"
+cd "$P" || exit 1
+
 echo "- code owners"
 [ "$(grep -v '^#' .github/CODEOWNERS)" = "* @shundeev/owners" ] && ok "CODEOWNERS makes the owners team review every file" || bad "CODEOWNERS" "$(cat .github/CODEOWNERS 2>&1)"
 grep -qx '\* @shundeev/owners' "$KIT/.github/CODEOWNERS" && ok "dev-kit itself has the same code owner" || bad "dev-kit's own CODEOWNERS"
 echo '* @someone-else' > .github/CODEOWNERS
 expect_exit 1 "doctor --ci catches an edited CODEOWNERS" bb $kit doctor --ci
 contains "doctor names CODEOWNERS" ".github/CODEOWNERS: differs" "$LAST"
+expect_exit 1 "init does not overwrite a CODEOWNERS without dev-kit's marker (#14)" bb $kit init
+contains "  names it" ".github/CODEOWNERS holds a file dev-kit did not write" "$LAST"
+rm .github/CODEOWNERS
 cp kit.edn "$WORK/kit.edn.bak"
 owners() { bb -e "(spit \"kit.edn\" (pr-str (assoc (clojure.edn/read-string (slurp \"kit.edn\")) :owners $1)))"; }
 owners '["kit-owner" "colleague"]'
 bb $kit init >/dev/null
 [ "$(grep -v '^#' .github/CODEOWNERS)" = "* @kit-owner @colleague" ] && ok "every code owner from kit.edn is listed; any one approval counts" || bad "owners override" "$(cat .github/CODEOWNERS)"
 owners '[]'
-expect_exit 2 "init refuses a project without code owners" bb $kit init
-contains "and says what to put in kit.edn" ":owners in kit.edn is empty" "$LAST"
+expect_exit 1 "init refuses a project without code owners" bb $kit init
+contains "and says what to put in kit.edn" ":owners must list who reviews every change" "$LAST"
 mv "$WORK/kit.edn.bak" kit.edn
 bb $kit init >/dev/null
 
