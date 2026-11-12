@@ -690,6 +690,84 @@ if grep -q '^pr merge' "$FAKE_GH_LOG"; then bad "  merged again"; else ok "  no 
 grep -q '^project item-add' "$FAKE_GH_LOG" && ok "  the card is moved to Done" || bad "  no board update"
 git rev-parse -q --verify refs/heads/14-auto >/dev/null && bad "  local branch left" || ok "  local branch deleted"
 unset GHWF_MERGE_WAIT
+
+echo "- start script and board updates (#12, #41, fake gh)"
+B="$WORK/board"; mkdir -p "$B"
+export FAKE_GH_DIR="$B" FAKE_GH_LOG="$B/log" GHWF_MERGE_WAIT=0
+echo '{"data":{"search":{"nodes":[]}}}' > "$B/missing.json"
+# node <title> <type Issue|DraftIssue> <number> <state OPEN|CLOSED|""> <status>: one board item as the start script's query returns it
+node() { jq -nc --arg t "$1" --arg ty "$2" --arg n "$3" --arg st "$4" --arg s "$5" \
+  '{id: ("PVTI_" + $t), isArchived: false, status: (if $s == "" then null else {name: $s} end),
+    content: ({__typename: $ty, title: $t} + (if $ty == "Issue" then {number: ($n|tonumber), url: ("https://github.com/u473t8/fake/issues/" + $n), state: $st} else {} end))}'; }
+board() { printf '%s\n' "$@" | jq -cs '{data: {owner: {projectV2: {items: {pageInfo: {hasNextPage: false, endCursor: null}, nodes: .}}}}}' > "$B/project-items.json"; }
+start() { : > "$FAKE_GH_LOG"; PATH="$KIT/test/fake-gh:$PATH" GHWF_REPO=u473t8/fake GHWF_OWNER=u473t8 GHWF_PROJECT_NUMBER=3 \
+  bash "$SCR/start_issue_flow.sh" --priority High --no-checkout "$@"; }
+
+board "$(node Recurring Issue 5 CLOSED Done)" "$(node Recurring Issue 6 OPEN Done)"
+expect_exit 0 "start: a title of closed or Done work files a new issue" start --title Recurring
+contains "  the new one" "Issue Number: 77" "$LAST"
+grep -q -- 'issue list .*--state open' "$FAKE_GH_LOG" && ok "  title search looks at open issues only" || bad "  issue search" "$(grep 'issue list' "$FAKE_GH_LOG")"
+board "$(node Recurring Issue 8 OPEN 'In progress')"
+expect_exit 0 "start: open work with the title is reused" start --title Recurring
+contains "  that issue" "Issue Number: 8" "$LAST"
+board "$(node 'Draft task' DraftIssue 0 '' Backlog)"
+echo '{"data":{"convertProjectV2DraftIssueItemToIssue":{"item":{"content":{"number":78,"url":"https://github.com/u473t8/fake/issues/78"}}}}}' > "$B/convert.json"
+expect_exit 0 "start: a same-title draft is converted" start --title "Draft task"
+contains "  into an issue" "Issue Number: 78" "$LAST"
+grep -q 'itemId=PVTI_Draft task' "$FAKE_GH_LOG" && ok "  through itemId, as the schema has it" || bad "  mutation input" "$(grep convert "$FAKE_GH_LOG")"
+board "$(node Recurring Issue 8 OPEN 'In progress')"
+expect_exit 0 "start: --issue wins over a same-title item" start --title Recurring --issue 9
+contains "  issue 9" "Issue Number: 9" "$LAST"
+expect_exit 0 "start: --issue with --no-reuse-existing files nothing new" start --title Recurring --issue 9 --no-reuse-existing
+grep -q '^issue create' "$FAKE_GH_LOG" && bad "  filed a duplicate" || ok "  no duplicate"
+touch "$B/issue-missing"; expect_exit 1 "start: --issue of no issue is refused" start --title x --issue 404
+contains "  naming the number" "#404" "$LAST"; rm "$B/issue-missing"
+board
+expect_exit 0 "start: without a body the issue is still filed" start --title "No body"
+grep -q '^issue create .*--body' "$FAKE_GH_LOG" && ok "  gh gets an empty --body" || bad "  no --body" "$(grep 'issue create' "$FAKE_GH_LOG")"
+expect_exit 0 "start: a missing label is created" start --title "Labelled" --labels fresh-label
+grep -q '^label create fresh-label' "$FAKE_GH_LOG" && grep -q 'issue create .*--label fresh-label' "$FAKE_GH_LOG" \
+  && ok "  and put on the issue" || bad "  labels" "$(grep -E 'label|issue create' "$FAKE_GH_LOG")"
+bignodes=(); for i in $(seq 1 1500); do bignodes+=("$(node "Old task number $i with a title long enough to fill the board quickly" Issue $((1000+i)) OPEN Done)"); done
+board "${bignodes[@]}"
+expect_exit 0 "start: a board of 1500 items is read" start --title "On a big board"
+grep -q "Argument list too long" <<<"$LAST" && bad "  argument limit" || ok "  with no argument limit"
+board
+echo 'GraphQL: Your token has not been granted the required scopes to execute this query. (INSUFFICIENT_SCOPES)' > "$B/board-fails"
+expect_exit 1 "start: a failed board update stops it (#41)" start --title "Scoped" --showcase Site
+contains "  names the issue" "#77" "$LAST"; contains "  the field and value" "Showcase" "$LAST"
+contains "  GitHub's reason" "INSUFFICIENT_SCOPES" "$LAST"; contains "  and the fix" "gh auth refresh" "$LAST"
+echo 'GraphQL: Could not resolve to a ProjectV2 with the number 3. (NOT_FOUND)' > "$B/board-fails"
+expect_exit 1 "start: no access to the board" start --title "No board"
+contains "  says so" "no access to the board" "$LAST"
+rm -f "$B/board-fails"; start --title "Steady" >/dev/null 2>&1; edits="$(grep -c '^project item-edit' "$FAKE_GH_LOG")"
+printf 'HTTP 502: Bad Gateway\nok\n' > "$B/board-fails.seq"
+expect_exit 0 "start: a passing GitHub error is retried once" start --title "Flaky"
+[ "$(grep -c '^project item-edit' "$FAKE_GH_LOG")" -eq $((edits + 1)) ] && ok "  one call more, and it goes on" \
+  || bad "  edits" "$(grep -c '^project item-edit' "$FAKE_GH_LOG") against $edits"
+rm -f "$B/board-fails.seq"
+expect_exit 1 "start: an option the board lacks names the ones it has" start --title "Odd size" --size XXL
+contains "  the options" "its options: S, M" "$LAST"
+lone="$WORK/lone"; mkdir -p "$lone"; cp "$SCR/start_issue_flow.sh" "$lone/"
+expect_exit 1 "start: a copy without board.sh names the file" bash "$lone/start_issue_flow.sh" --title x --priority High
+contains "  and where to run it from" "board.sh" "$LAST"; contains "  from its skill" "skill directory" "$LAST"
+
+cd "$T" || exit 1; git switch -q -c 31-board origin/main; echo b >> f; git add f
+echo 'GraphQL: Your token has not been granted the required scopes to execute this query. (INSUFFICIENT_SCOPES)' > "$B/board-fails"
+: > "$B/pr-list"; echo "Board task" > "$B/issue-title"
+expect_exit 1 "finish: a failed In review update stops it, after the PR is open" flow finish_issue_flow.sh --pr-body-file "$WORK/body.md"
+contains "  says the PR is open" "is open" "$LAST"; contains "  with the command for the status alone" "board.sh set" "$LAST"
+rm -f "$B/board-fails"; cmd="${LAST##*Set it alone: }"
+expect_exit 0 "  and that command, run as printed, sets it" env PATH="$KIT/test/fake-gh:$PATH" bash -c "$cmd"
+contains "  to In review" "Status: In review" "$LAST"
+echo 'GraphQL: Your token has not been granted the required scopes to execute this query. (INSUFFICIENT_SCOPES)' > "$B/board-fails"
+git switch -q --detach origin/main
+git switch -q -c 32-board origin/main && git push -q -u origin 32-board
+: > "$B/pr-list"; echo "https://github.com/u473t8/fake/pull/98" > "$B/pr-list-merged"; echo "MERGED CLEAN" > "$B/pr-state"
+expect_exit 1 "merge: a failed Done update stops it, after the merge" flow merge_issue_flow.sh
+contains "  with the command for the status alone" "board.sh set" "$LAST"
+rm -f "$B/board-fails" "$B/pr-list-merged"; git switch -q --detach origin/main
+export FAKE_GH_DIR="$FAKE" FAKE_GH_LOG="$FAKE/log"
 cd "$P" || exit 1
 
 echo "- design approval gate (fake gh)"

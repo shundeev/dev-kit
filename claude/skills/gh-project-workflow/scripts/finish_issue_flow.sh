@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+board_sh="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/board.sh"
+[[ -r "$board_sh" ]] || { echo "Error: $board_sh is missing: run this script from its skill directory, .claude/skills/gh-project-workflow/scripts/, where board.sh sits next to it" >&2; exit 1; }
 # shellcheck source=board.sh
-source "$(dirname "${BASH_SOURCE[0]}")/board.sh"
+source "$board_sh"
 
 usage() {
   cat <<'USAGE'
@@ -59,9 +61,9 @@ set_status() {
   issue_url="$(gh issue view "$issue_number" -R "$repo" --json url --jq '.url' 2>/dev/null || true)"
   [[ -n "$issue_url" ]] || { echo "Warning: issue #$issue_number not found, Status not set" >&2; return 0; }
 
-  if ! output="$(board_set_field "$project_number" "$owner" "$issue_url" "$status_field" "$status" 2>&1)"; then
-    echo "Warning: failed to set $status_field to '$status' for #$issue_number: $output" >&2
-  fi
+  # A failed board update ends the run (#41). The PR is open by now, so only the status is left to set.
+  output="$(board_set_field "$project_number" "$owner" "$issue_url" "$status_field" "$status" 2>&1)" \
+    || die "The pull request is open: $pr_url. But the board $status_field of #$issue_number is not '$status': $(board_reason "$output"). Set it alone: $(printf '%q ' bash "$board_sh" set "$project_number" "$owner" "$issue_url" "$status_field" "$status")"
 }
 
 repo="${GHWF_REPO:-}"

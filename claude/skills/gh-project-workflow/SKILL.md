@@ -32,8 +32,12 @@ bash .claude/skills/gh-project-workflow/scripts/start_issue_flow.sh \
 ```
 
 - `--priority` is required; the script refuses to file an issue without one.
-- Reuses an open item with the same title in this repository instead of filing a duplicate;
-  `--issue <n>` puts an existing issue on the board.
+- Reuses open work with the same title in this repository instead of filing a duplicate: an
+  open issue, or a board card not in Done; a same-title draft card is converted into the issue.
+  `--issue <n>` names the work outright: no title is matched, and #n is put on the board (#12).
+- A board update that fails stops the script, the finish and merge scripts too, with GitHub's
+  reason, its likely cause and the fix (#41). One field alone is set with
+  `bash .claude/skills/gh-project-workflow/scripts/board.sh set <board> <owner> <issue-url> <field> <option>`.
 - Creates the branch with `gh issue develop` and checks it out (`<number>-<slug>`);
   `--no-checkout` creates it without touching the working tree, `--skip-branch` creates none.
 - Prints `Issue Number`, `Issue URL` and the branch.

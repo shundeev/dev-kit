@@ -8,8 +8,10 @@
 # permission prompt; its own checks only say what is missing.
 set -euo pipefail
 
+board_sh="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/board.sh"
+[[ -r "$board_sh" ]] || { echo "Error: $board_sh is missing: run this script from its skill directory, .claude/skills/gh-project-workflow/scripts/, where board.sh sits next to it" >&2; exit 1; }
 # shellcheck source=board.sh
-source "$(dirname "${BASH_SOURCE[0]}")/board.sh"
+source "$board_sh"
 
 usage() {
   cat <<'USAGE'
@@ -120,10 +122,12 @@ done
 [[ "$pr_state" == "MERGED" ]] \
   || die "Pull request is $pr_state, not merged yet; auto-merge stays on and branch '$branch_name' is kept. Run this again later: $pr_url"
 
+# A failed board update ends the run with an error (#41), after the closeout below: the merge is done.
+board_error=""
 if [[ -n "$owner" && -n "$project_number" ]]; then
   issue_url="$(gh issue view "$issue_number" -R "$repo" --json url --jq '.url')"
-  board_set_field "$project_number" "$owner" "$issue_url" "$status_field" "$done_status" \
-    || echo "Warning: could not set $status_field to '$done_status' for #$issue_number" >&2
+  output="$(board_set_field "$project_number" "$owner" "$issue_url" "$status_field" "$done_status" 2>&1)" \
+    || board_error="The board $status_field of #$issue_number is not '$done_status': $(board_reason "$output"). Set it alone: $(printf '%q ' bash "$board_sh" set "$project_number" "$owner" "$issue_url" "$status_field" "$done_status")"
 fi
 
 # Leave the issue branch. When the base branch is checked out in another worktree, this one
@@ -141,4 +145,5 @@ if git ls-remote --exit-code --heads origin "$branch_name" >/dev/null 2>&1; then
 fi
 
 echo "Merged: $pr_url"
+[[ -z "$board_error" ]] || die "$board_error"
 echo "Status: $done_status"
