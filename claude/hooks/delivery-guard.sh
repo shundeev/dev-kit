@@ -68,10 +68,50 @@ stripped=$(printf '%s\n' "$cmd" | awk '
       sub(/^<<-?[ \t]*/, "", d); gsub(/[\047"]/, "", d)
       term = "^[ \t]*" d "[ \t]*$"; skip = 1 } }')
 
-# One statement per line, so only statement heads are ever inspected.
-statements=$(printf '%s\n' "$stripped" | sed -E 's/(&&|\|\||[;|&])/\n/g')
+# One statement per line, so only statement heads are ever inspected. The bodies of $(…) run
+# too, so they are judged as statements of their own.
+inner=$(printf '%s\n' "$stripped" | grep -o '\$([^()]*)' | sed -E 's/^\$\(//; s/\)$//' || true)
+statements=$(printf '%s\n%s\n' "$stripped" "$inner" | sed -E 's/(&&|\|\||[;|&])/\n/g')
 
 branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+
+# `gh api` reads or writes depending on its flags (#54). Prints what the call would change and
+# succeeds when it can change GitHub: a method other than GET; fields without a method, which
+# make gh send POST; a GraphQL mutation; a GraphQL query read from a file, which this hook
+# cannot see. A read prints nothing and fails.
+api_write() { # api_write <statement> <words…>
+  local st=$1 w method="" fields="" endpoint="" skip=""
+  shift
+  for w in "$@"; do
+    if [ -n "$skip" ]; then
+      [ "$skip" = method ] && method=$w
+      skip=""; continue
+    fi
+    case "$w" in
+      --method=*) method=${w#--method=} ;;
+      -X|--method) skip=method ;;
+      -X?*) method=${w#-X} ;;
+      -f|-F|--field|--raw-field|--input) fields=yes; skip=value ;;
+      -H|--header|-q|--jq|-t|--template|--hostname|--cache|-p|--preview) skip=value ;;
+      -*|gh|*/gh|api) ;;
+      *) [ -n "$endpoint" ] || endpoint=$w ;;
+    esac
+  done
+  method=$(printf '%s' "$method" | tr '[:lower:]' '[:upper:]')
+  if [ -n "$method" ]; then
+    [ "$method" != GET ] && { printf '%s %s' "$method" "$endpoint"; return 0; }
+    return 1
+  fi
+  if [ "$endpoint" = graphql ]; then
+    case "$st" in
+      *mutation*) printf 'a GraphQL mutation'; return 0 ;;
+      *query=@*) printf 'a GraphQL query read from a file'; return 0 ;;
+    esac
+    return 1
+  fi
+  [ -n "$fields" ] && { printf 'POST %s: fields make gh send POST' "$endpoint"; return 0; }
+  return 1
+}
 
 while IFS= read -r st; do
   case "$st" in
@@ -103,6 +143,13 @@ while IFS= read -r st; do
     gh|*/gh) ;;
     *) continue ;;
   esac
+
+  if [ "$sub" = api ]; then
+    if why=$(api_write "$st" "$@"); then
+      decide ask "This gh api call can change GitHub ($why). Approve it only if it should. A gh api call that only reads runs without asking (#54)."
+    fi
+    continue
+  fi
 
   case "$sub $verb" in
     "issue create")
