@@ -158,7 +158,7 @@ labels="$(bb -e "(require '[clj-yaml.core :as y]) (doseq [f (:body (y/parse-stri
 [ "$labels" = "$(printf 'Requirements (required)\nInvariants\nDesign\nPlan\nDone when (required)')" ] \
   && ok "the issue form has the five ADR-0002 sections; Requirements and Done when are required" || bad "issue form sections" "$labels"
 missing=""
-for s in "## What changed" "## Why" "## Review" "## User-level test" "## Verified" "## Not verified" "## Owner steps"; do
+for s in "## What changed" "## Why" "## Root causes" "## Review" "## User-level test" "## Verified" "## Not verified" "## Owner steps"; do
   grep -qx -- "$s" $prt || missing="$missing, $s"
 done
 [ -z "$missing" ] && ok "the PR template has the sections the owner reviews" || bad "PR template lacks${missing#,}"
@@ -358,6 +358,18 @@ contains "denies gh pr create from main" '"permissionDecision":"deny"' "$(guard 
 [ -z "$(guard 'gh issue create --help')" ] && ok "allows --help" || bad "--help denied"
 contains "asks on DELIVERY_GUARD=off" '"permissionDecision":"ask"' "$(guard 'DELIVERY_GUARD=off gh issue create -t x')"
 [ -z "$(guard 'git status')" ] && ok "ignores unrelated commands" || bad "unrelated command judged"
+# #38: a forced push may rewrite only an issue branch (<number>-<slug>); main is protected on the server too.
+FB="$WORK/force"; git init -q -b 42-some-task "$FB"; git init -q -b main "$WORK/force-main"
+for c in "git push --force-with-lease origin 42-some-task" "cd $FB && git push --force-with-lease" \
+         "git -C $FB push --force-with-lease origin" "git push origin main"; do
+  out="$(guard "$c")"
+  if [ -z "$out" ]; then ok "push passes: $c"; else bad "push judged: $c" "$out"; fi
+done
+for c in "git push --force-with-lease origin main" "git push --force-with-lease origin HEAD:main" \
+         "cd $WORK/force-main && git push --force-with-lease" "git push --force-if-includes --force-with-lease origin feature-x"; do
+  contains "a forced push to a non-issue branch is refused: $c" '"permissionDecision":"deny"' "$(guard "$c")"
+done
+contains "  the refusal says which branches may be rewritten" "<number>-<slug>" "$(guard 'git push --force-with-lease origin main')"
 # #64: in zsh an unquoted $v stays one word, so a command that needs it split is refused.
 zguard() { jq -nc --arg c "$1" '{tool_input:{command:$c}}' | SHELL=/bin/zsh bash .shared/claude/hooks/delivery-guard.sh; }
 for c in 'set -- $t' 'env $E bash x.sh' 'for n in $list; do echo $n; done' '$cmd --flag' 'for n in ${list}; do :; done'; do
