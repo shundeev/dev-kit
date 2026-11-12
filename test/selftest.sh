@@ -573,6 +573,29 @@ rm "$G/gh-fails"; git switch -q main
 [ -z "$(hook src/a.clj)" ] && ok "hook: a branch without an issue is not gated" || bad "hook gated main"
 cd "$P" || exit 1
 
+echo "- formatting hook (#61)"
+fmt() { jq -nc --arg f "$1" '{tool_input:{file_path:$f}}' | bash .shared/claude/hooks/format.sh; }
+FP="$WORK/fmt"; mkdir -p "$FP/proj/src" "$FP/bare"
+long='(defn f [a b] (let [x (+ a b) y (* a b) z (str "a string that makes this form much wider than one hundred twenty" x y)] (println x y z)))'
+if command -v zprint >/dev/null; then
+  cp "$KIT/clojure/.zprint.edn" "$FP/proj/.zprint.edn"
+  printf '%s\n' "$long" > "$FP/proj/src/a.clj"; printf '%s\n' "$long" > "$FP/bare/b.clj"
+  out="$(fmt "$FP/proj/src/a.clj")"
+  w="$(awk '{ if (length > m) m = length } END { print m }' "$FP/proj/src/a.clj")"
+  if [ -z "$out" ] && [ "$w" -gt 80 ] && [ "$w" -le 120 ]; then
+    ok "formats with the project's .zprint.edn (width 120, not zprint's 80)"
+  else bad "not formatted with the project's configuration" "$(cat "$FP/proj/src/a.clj")"; fi
+  fmt "$FP/bare/b.clj"
+  if [ "$(cat "$FP/bare/b.clj")" = "$long" ]; then ok "no .zprint.edn above the file: left as written"
+  else bad "formatted without a project configuration" "$(cat "$FP/bare/b.clj")"; fi
+else
+  echo "  skip  formatting hook: zprint is not installed"
+fi
+expect_exit 0 "formatting hook: a file that is not Clojure is left alone" bash -c "echo '{\"tool_input\":{\"file_path\":\"/x/a.md\"}}' | bash .shared/claude/hooks/format.sh"
+jq -e '[.hooks.PostToolUse[].hooks[].command | select(test("format.sh"))] | length == 1' .claude/settings.json >/dev/null \
+  && ok "settings run the formatting hook after edits" || bad "no formatting hook in the settings"
+[ "$(readlink "$KIT/.zprint.edn")" = clojure/.zprint.edn ] && ok "dev-kit formats itself with its own configuration" || bad "dev-kit has no root .zprint.edn link"
+
 echo "- friction recorder (#55)"
 FR="$WORK/state"; mkdir -p "$FR"
 rec() { XDG_STATE_HOME="$FR" CLAUDE_PROJECT_DIR="$P" bash .shared/claude/hooks/friction.sh "$1"; }
