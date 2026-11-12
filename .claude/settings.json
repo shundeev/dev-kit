@@ -111,6 +111,108 @@
             "statusMessage": "Checking the design approval..."
           }
         ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/claude/hooks/friction.sh\" PreToolUse"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/claude/hooks/friction.sh\" PermissionRequest"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/claude/hooks/friction.sh\" PostToolUse"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/claude/hooks/friction.sh\" PostToolUseFailure"
+          }
+        ]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/claude/hooks/friction.sh\" PermissionDenied"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/claude/hooks/friction.sh\" UserPromptSubmit"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/claude/hooks/friction.sh\" Stop"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/claude/hooks/friction.sh\" SubagentStop"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/claude/hooks/friction.sh\" StopFailure"
+          }
+        ]
       }
     ]
   },

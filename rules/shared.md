@@ -46,6 +46,8 @@ These rules apply to every agent working in this repository (Claude Code, Codex,
   only a person can. When the fix is mechanical, the code does it itself.
 - A lesson or preference that holds for every project goes into dev-kit through an issue and a PR,
   not only into an agent's memory.
+- A message from the owner that starts with «трение:» (or "friction:") registers friction. Answer
+  it in one line and go on; `kit retro` collects it for the task's retrospective.
 
 ## Decisions
 

@@ -559,6 +559,139 @@ rm "$G/gh-fails"; git switch -q main
 [ -z "$(hook src/a.clj)" ] && ok "hook: a branch without an issue is not gated" || bad "hook gated main"
 cd "$P" || exit 1
 
+echo "- friction recorder (#55)"
+FR="$WORK/state"; mkdir -p "$FR"
+rec() { XDG_STATE_HOME="$FR" CLAUDE_PROJECT_DIR="$P" bash .shared/claude/hooks/friction.sh "$1"; }
+flog() { cat "$FR"/dev-kit/friction/*.jsonl 2>/dev/null; }
+# A worktree on an issue branch, reached by a literal path.
+TW="$WORK/tw"; git init -q -b 42-some-task "$TW"; git -C "$TW" remote add origin git@github.com:u473t8/fake.git
+out="$(jq -nc --arg c "cd $TW && git status" \
+  '{session_id:"s1",prompt_id:"p1",tool_name:"Bash",tool_use_id:"t1",tool_input:{command:$c},cwd:"/"}' | rec PreToolUse)"
+if [ -z "$out" ]; then ok "recorder prints nothing"; else bad "recorder printed" "$out"; fi
+contains "a command's task: the branch and origin of its literal cd" \
+  '"id":"t1","input":{"command":"cd '"$TW"' && git status"},"branch":"42-some-task","origin":"u473t8/fake"' "$(flog)"
+jq -nc --arg f "$TW/new/dir/a.clj" '{session_id:"s1",prompt_id:"p1",tool_name:"Write",tool_use_id:"t2",tool_input:{file_path:$f},cwd:"/"}' \
+  | rec PreToolUse
+contains "a file's task: the branch of the nearest directory that exists" '"id":"t2"' "$(grep 42-some-task <<<"$(flog)")"
+jq -nc '{session_id:"s1",prompt_id:"p1",tool_name:"Bash",tool_input:{command:"gh api x"}}' | rec PermissionRequest
+contains "a window keeps the ask rules in force" '"Bash(gh api *)"' "$(grep PermissionRequest <<<"$(flog)")"
+jq -nc '{session_id:"s1",prompt_id:"p1",prompt:"трение: x"}' | rec UserPromptSubmit
+contains "the owner's message is kept" '"prompt":"трение: x"' "$(flog)"
+jq -nc '{session_id:"s1",prompt_id:"p1",last_assistant_message:"Done.\nneeds input: the label"}' | rec Stop
+contains "a stop notes that the agent asked the owner" '"needs_input":true' "$(grep '"Stop"' <<<"$(flog)")"
+if grep -q 'the label' <<<"$(flog)"; then bad "the agent's message was kept"; else ok "the agent's message is not kept"; fi
+expect_exit 0 "garbage on stdin: exit 0" bash -c "echo 'not json' | XDG_STATE_HOME='$FR' bash .shared/claude/hooks/friction.sh PreToolUse"
+expect_exit 0 "an unwritable log: exit 0" bash -c "echo '{}' | XDG_STATE_HOME=/proc/no bash .shared/claude/hooks/friction.sh Stop"
+if [ "$(stat -c %a "$FR/dev-kit/friction")" = 700 ] && [ "$(stat -c %a "$FR"/dev-kit/friction/*.jsonl | sort -u)" = 600 ]; then
+  ok "the log is the owner's alone (700, 600)"; else bad "log permissions" "$(ls -la "$FR/dev-kit/friction")"; fi
+TS="$WORK/my tw"; git init -q -b 43-space-task "$TS"; git -C "$TS" remote add origin git@github.com:u473t8/fake.git
+jq -nc --arg c "cd \"$TS\" && git status" '{session_id:"s1",tool_name:"Bash",tool_use_id:"t3",tool_input:{command:$c},cwd:"/"}' | rec PreToolUse
+contains "a quoted cd path with a space" '"branch":"43-space-task"' "$(grep '"t3"' <<<"$(flog)")"
+jq -nc --arg w "$TW" '{session_id:"s1",tool_name:"Bash",tool_use_id:"t4",tool_input:{command:"cd /no/such/dir && ls"},cwd:$w}' | rec PreToolUse
+contains "a cd to no directory falls back to the cwd" '"branch":"42-some-task"' "$(grep '"t4"' <<<"$(flog)")"
+echo '{broken' > "$P/.claude/settings.local.json"
+jq -nc '{session_id:"s1",prompt_id:"p2",tool_name:"Bash",tool_input:{command:"gh api y"}}' | rec PermissionRequest
+contains "a broken settings file does not lose the other rules" '"Bash(gh api *)"' "$(grep '"p2"' <<<"$(flog)")"
+rm "$P/.claude/settings.local.json"
+FC="$WORK/state-parallel"; big="$(head -c 30000 /dev/zero | tr '\0' x)"
+for i in $(seq 1 40); do
+  jq -nc --arg c "$big" --arg i "$i" '{session_id:"c",tool_name:"Write",tool_use_id:$i,tool_input:{file_path:"/nowhere/f",content:$c}}' \
+    | XDG_STATE_HOME="$FC" bash .shared/claude/hooks/friction.sh PreToolUse &
+done; wait
+whole=$(jq -c . "$FC"/dev-kit/friction/*.jsonl 2>/dev/null | wc -l)
+if [ "$(wc -l < "$FC"/dev-kit/friction/*.jsonl)" = 40 ] && [ "$whole" = 40 ]; then ok "40 parallel calls with 30 KB inputs: 40 whole lines"
+else bad "parallel appends broke lines ($whole whole)"; fi
+if [ "$(jq -r '.input.content | length' "$FC"/dev-kit/friction/*.jsonl | sort -n | tail -1)" -le 2100 ]; then ok "long strings are cut to 2 KB"
+else bad "long strings kept whole"; fi
+touch -d '200 days ago' "$FR/dev-kit/friction/2026-01.jsonl"
+jq -nc '{session_id:"s1"}' | rec Stop
+if [ -e "$FR/dev-kit/friction/2026-01.jsonl" ]; then bad "a log file older than 100 days was kept"
+else ok "a stop drops log files older than 100 days"; fi
+missing=""
+for e in PreToolUse PermissionRequest PostToolUse PostToolUseFailure PermissionDenied UserPromptSubmit Stop SubagentStop StopFailure; do
+  jq -e --arg e "$e" '[.hooks[$e][]?.hooks[].command | select(test("friction.sh"))] | length == 1' .claude/settings.json >/dev/null \
+    || missing="$missing $e"
+done
+if [ -z "$missing" ]; then ok "settings register the recorder on the nine events"; else bad "settings: no recorder on$missing"; fi
+jq -nc '{session_id:"s1",prompt_id:"p1",tool_name:"Bash",tool_use_id:"t9",tool_input:{command:"gh issue create --title x"}}' \
+  | XDG_STATE_HOME="$FR" CLAUDE_PROJECT_DIR="$P" bash .claude/hooks/pretooluse.sh > "$WORK/deny.out"
+contains "the entry hook still prints the refusal" '"permissionDecision":"deny"' "$(cat "$WORK/deny.out")"
+contains "a hook's refusal is recorded with its call" '"event":"HookDenied"' "$(grep '"t9"' <<<"$(flog)")"
+
+echo "- retrospective data (fake gh, friction log)"
+RT="$WORK/retro"; mkdir -p "$RT/state/dev-kit"; cp -r "$KIT/test/fixtures/retro/friction" "$RT/state/dev-kit/"
+retro() { PATH="$KIT/test/fake-gh:$PATH" FAKE_GH_DIR="$RT" FAKE_GH_LOG="$RT/log" GITHUB_REPOSITORY=u473t8/fake \
+            XDG_STATE_HOME="$RT/state" bb "$KIT/bin/kit" retro "$@"; }
+# Issue #55 of u473t8/fake: design comment 10:00, approved 10:20, PR #58 opened 12:30, approved 13:30, merged 14:00.
+# The log (test/fixtures/retro/friction): its branch 55-count-friction, another task's 61-other-task, a turn that
+# names no task, another project (session s2), October outside the 14 days, a half-written last line.
+jq -n --arg agent "$default_login" '{data: {repository: {issue: {
+  number: 55, createdAt: "2026-11-12T09:30:00Z", closedAt: "2026-11-12T14:00:00Z",
+  labels: {nodes: [{name: "design-approved"}, {name: "size:M"}]},
+  timelineItems: {nodes: [{label: {name: "design-approved"}, actor: {login: "the-owner"}, createdAt: "2026-11-12T10:20:00Z"}]},
+  comments: {nodes: [{author: {login: $agent}, body: "## Design\n\nx", createdAt: "2026-11-12T10:00:00Z"}]},
+  closedByPullRequestsReferences: {nodes: [{number: 58, headRefName: "55-count-friction",
+    createdAt: "2026-11-12T12:30:00Z", mergedAt: "2026-11-12T14:00:00Z", additions: 120, deletions: 10, changedFiles: 4,
+    commits: {nodes: [{commit: {authoredDate: "2026-11-12T11:00:00Z", statusCheckRollup: {state: "SUCCESS"}}},
+                      {commit: {authoredDate: "2026-11-12T12:25:00Z", statusCheckRollup: {state: "FAILURE"}}}]},
+    reviews: {nodes: [{author: {login: "the-owner"}, state: "COMMENTED", submittedAt: "2026-11-12T13:00:00Z"},
+                      {author: {login: $agent}, state: "COMMENTED", submittedAt: "2026-11-12T13:10:00Z"},
+                      {author: {login: "the-owner"}, state: "APPROVED", submittedAt: "2026-11-12T13:30:00Z"}]},
+    timelineItems: {nodes: []},
+    comments: {nodes: [{author: {login: $agent}, createdAt: "2026-11-12T12:40:00Z",
+                        body: "## Что сделать руками (владелец)\n\n1. Открой\n2. Нажми\n3. Проверь"}]}}]}}}}}' > "$RT/retro.json"
+expect_exit 0 "retro: prints the friction data of a merged issue" retro 55 --now 2026-11-12T17:00:00Z
+out="$LAST"
+contains "  the span of the task's events, its later messages included" "2026-11-12 10:00 → 2026-11-12 15:00 UTC" "$out"
+contains "  windows by their ask rule: own branch, own turn, own subagent; not another task's, not a turn naming none" \
+  "| Confirmation: yes | ask rule: Bash(gh api *) | 4 | 7 |" "$out"
+contains "  a Read rule matches by path, printed without it" "| Confirmation: yes | ask rule: Read(…) | 1 | 1 |" "$out"
+contains "  a window no ask rule explains" "| Confirmation: yes | Read (no ask rule matches) | 1 | 1 |" "$out"
+contains "  a window and no run: the owner said no; Esc on a window is that no, not an interruption too" "| Confirmation: no | ask rule: Bash(rm *) | 2 | 2 |" "$out"
+contains "  a question" "| Question to the owner | AskUserQuestion | 1 | 1 |" "$out"
+contains "  needs input at the end of a turn" "| Question to the owner | needs input in chat | 1 | 1 |" "$out"
+contains "  a plan that never ran" "| Plan for approval | declined | 1 | 1 |" "$out"
+contains "  a turn without its Stop, followed by another: Esc" "| Owner interrupted (Esc) | — | 1 | 1 |" "$out"
+contains "  a hook's refusal" "| Refused by a hook | gh issue create | 1 | 1 |" "$out"
+contains "  the classifier's refusal, with its category" "| Refused by the classifier | git push — git_destructive | 1 | 1 |" "$out"
+contains "  no run in a turn that ended normally: a deny rule; a lone echo is named" "| Refused by a rule | echo | 1 | 1 |" "$out"
+contains "  a failed command" "| Tool error | bb kit gate | 1 | 1 |" "$out"
+contains "  gh's flag values stay out of the shape" "| Tool error | gh pr view | 1 | 1 |" "$out"
+contains "  inline code stays out of the shape" "| Tool error | python3 -c | 1 | 1 |" "$out"
+contains "  the same command within minutes" "| Same command 3+ times | gh pr view | 3 | 3 |" "$out"
+# The second review of #55: each case below broke the first hook-based version.
+contains "  a stale identical call from an earlier turn keeps no window of a later one" "| Refused by a rule | gh api (REST) | 1 | 1 |" "$out"
+contains "  a rule naming a URL prints without it" "| Confirmation: yes | ask rule: Bash(…) | 1 | 1 |" "$out"
+contains "  a turn that failed is no Esc" "| Turn failed (API error) | — | 1 | 1 |" "$out"
+contains "  the repository's case does not matter" "| Tool error | make | 1 | 1 |" "$out"
+if grep -qF "git status" <<<"$out"; then bad "  a command 30 min apart counted as a repeat"; else ok "  repeats are runs within 10 minutes"; fi
+contains "  recurring: all tasks and projects of the last 14 days, not October" "Confirmation: yes · ask rule: Bash(gh api *): 7" "$out"
+contains "  another project's friction counts in the 14 days" "Tool error · npm: 3" "$out"
+contains "  the owner's mark, on one line" "трение: ссылка открылась в двух браузерах" "$out"
+contains "  the owner's messages: the mid-turn one, and those of turns naming no task go to the last task" "Owner messages: 10" "$out"
+if grep -qE "почему так|secret|import|/w/|/tmp/|host/tok" <<<"$out"; then bad "  printed a message, a path, a flag value or code" "$out"
+else ok "  no messages, paths, flag values or code"; fi
+contains "GitHub: the design approval" "Design approval: 1, 20m after the first \`## Design\` comment" "$out"
+contains "GitHub: the diff" "PR #58: +120 −10 in 4 files, 2 commits; Size M" "$out"
+contains "GitHub: reviews by the owner" "Review rounds with comments: 1; approvals: 1; dismissed: 0" "$out"
+contains "GitHub: waiting on the owner" "PR opened → Approve 1h 00m; Approve → merged 30m" "$out"
+contains "GitHub: CI" "CI: 1 of 2 commits failed" "$out"
+contains "GitHub: the owner's manual steps" "Owner steps: 1 comment, 3 steps" "$out"
+expect_exit 0 "retro --messages lists the owner's messages locally" retro 55 --messages --now 2026-11-12T17:00:00Z
+contains "  the mid-turn one too" "я про план 55" "$LAST"
+expect_exit 0 "retro: a machine with no friction log" \
+  env PATH="$KIT/test/fake-gh:$PATH" FAKE_GH_DIR="$RT" FAKE_GH_LOG="$RT/log" GITHUB_REPOSITORY=u473t8/fake \
+  XDG_STATE_HOME="$WORK/none" bb "$KIT/bin/kit" retro 55 --now 2026-11-12T17:00:00Z
+contains "  says so, GitHub still prints" "Friction log: not available" "$LAST"
+contains "  GitHub's part" "PR #58" "$LAST"
+touch "$RT/gh-fails"
+expect_exit 0 "retro: GitHub unreachable" retro 55 --now 2026-11-12T17:00:00Z
+contains "  says so" "GitHub: not available" "$LAST"
+contains "  the log still counts" "| Tool error | bb kit gate | 1 | 1 |" "$LAST"
+rm "$RT/gh-fails"
+expect_exit 1 "retro: a --now that is not a time names the format" retro 55 --now yesterday
+contains "  names the format" "2026-11-12T10:00:00Z" "$LAST"
+
 echo
 echo "passed $pass, failed $fail"
 [ "$fail" -eq 0 ]

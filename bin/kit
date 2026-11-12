@@ -7,6 +7,8 @@
 ;;   .shared/bin/kit modules
 ;;   .shared/bin/kit identity [--dir PATH]   the agent's GitHub identity alone, for any repository
 ;;   .shared/bin/kit gate     --branch B --pr N | --g1 N | --hook   the design approval gate (ADR-0002)
+;;   .shared/bin/kit retro    N [--repo R] [--messages]   friction data of merged issue N for its
+;;                            retrospective: the friction log the hooks keep on this machine, and GitHub (#55)
 ;;
 ;; Two kinds of files:
 ;;   scaffold — created once if missing, then owned by the project (kit.edn, LICENSE, the
@@ -859,6 +861,8 @@
       "--pr" (recur (rest more) (assoc opts :pr (first more)))
       "--g1" (recur (rest more) (assoc opts :g1 (first more)))
       "--hook" (recur more (assoc opts :hook true))
+      "--now" (recur (rest more) (assoc opts :now (first more)))
+      "--messages" (recur more (assoc opts :messages true))
       (die "unknown option" a))))
 
 
@@ -868,6 +872,20 @@
                                (drop 1)
                                (take-while #(str/starts-with? % ";;"))
                                (map #(str/replace % #"^;; ?" ""))))))
+
+
+(defn retro!
+  "kit retro N …: the code lives in bin/retro.clj, loaded only for this command."
+  [[n & more]]
+  (when-not (and n (re-matches #"\d+" n)) (die "retro: name the issue, e.g. kit retro 55"))
+  (let [opts (parse-args more)]
+    (load-file (str (fs/path kit-dir "bin" "retro.clj")))
+    ((resolve 'retro/run)
+     (assoc opts
+            :issue (parse-long n)
+            :repo (gate-repo opts (gate-config))
+            :agent (get-in (read-defaults) [:agent :login])
+            :gh gh!))))
 
 
 (let [[cmd & args] *command-line-args*]
@@ -880,5 +898,6 @@
     "modules" (println (str "clojure=" (boolean (some-> (read-config) clojure?))))
     "identity" (identity! (parse-args args))
     "gate" (gate! (parse-args args))
+    "retro" (retro! args)
     nil (usage)
     (do (usage) (die "unknown command" cmd))))
