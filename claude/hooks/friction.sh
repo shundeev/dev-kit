@@ -17,6 +17,24 @@
 #   StopFailure        a turn that ended in an error
 #   PermissionDenied   the classifier's reason
 #   HookDenied         a refusal by dev-kit's PreToolUse hook (pretooluse.sh records it), its reason
+# A path after `cd` or `git -C` may go through variables: $NAME or ${NAME} take their value from a
+# NAME=value earlier in the same command, else from the environment; a leading ~ is $HOME. Plain
+# substitution, nothing is run. Fails when a variable has no value.
+expand() { # expand <path>
+  local p=$1 name val
+  case "$p" in "~"*) p="$HOME${p#\~}" ;; esac
+  while [[ $p =~ \$\{?([A-Za-z_][A-Za-z0-9_]*)\}? ]]; do
+    name=${BASH_REMATCH[1]}
+    val=$(jq -r --arg n "$name" '.tool_input.command // "" |
+      [capture("(^|[;&|\\s])" + $n + "=(?<v>[^\\s;&|]+)"; "g") | .v] | last // empty' <<<"$input")
+    [ -n "$val" ] || val=$(printenv "$name")
+    [ -n "$val" ] || return 1
+    val=${val//\"/}; val=${val//\'/}
+    p=${p/"${BASH_REMATCH[0]}"/$val}
+  done
+  printf '%s' "$p"
+}
+
 {
   umask 077
   event="$1"
@@ -32,12 +50,13 @@
         while [ "$dir" != / ] && [ ! -d "$dir" ]; do dir="$(dirname "$dir")"; done
       else
         while IFS= read -r d; do
+          d="$(expand "$d")" || continue
           [ -d "$d" ] && { dir="$d"; break; }
         done < <(jq -r --arg q "'" '.tool_input.command // "" |
           ("(^|[;&|(]\\s*)(cd|git\\s+-C)\\s+") as $at |
-          (capture($at + "\"(?<d>/[^\"]+)\""; "g") | .d),
-          (capture($at + $q + "(?<d>/[^" + $q + "]+)" + $q; "g") | .d),
-          (capture($at + "(?<d>/[^\\s;&|)\"" + $q + "]+)"; "g") | .d)' <<<"$input")
+          (capture($at + "\"(?<d>[/$~][^\"]+)\""; "g") | .d),
+          (capture($at + $q + "(?<d>[/$~][^" + $q + "]+)" + $q; "g") | .d),
+          (capture($at + "(?<d>[/$~][^\\s;&|)\"" + $q + "]+)"; "g") | .d)' <<<"$input")
       fi
       [ -n "$dir" ] || dir="$(jq -r '.cwd // "."' <<<"$input")"
       branch="$(git -C "$dir" symbolic-ref --short -q HEAD 2>/dev/null)"

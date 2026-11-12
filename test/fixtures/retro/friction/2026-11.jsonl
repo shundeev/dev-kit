@@ -102,4 +102,10 @@
 {"at":"2026-11-12T11:02:00Z","event":"PreToolUse","session":"s2","turn":"q1","tool":"Bash","id":"n2","input":{"command":"npm test"},"branch":"main","origin":"other/proj"}
 {"at":"2026-11-12T11:02:00Z","event":"PostToolUseFailure","session":"s2","turn":"q1","id":"n2"}
 {"at":"2026-11-12T11:03:00Z","event":"Stop","session":"s2","turn":"q1","needs_input":false}
+{"at":"2026-11-12T14:00:00Z","event":"UserPromptSubmit","session":"s3","turn":"q2","prompt":"одним ходом"}
+{"at":"2026-11-12T14:01:00Z","event":"PreToolUse","session":"s3","turn":"q2","tool":"Bash","id":"r1","input":{"command":"cd /w/fake-62 && make"},"branch":"62-third-task","origin":"u473t8/fake"}
+{"at":"2026-11-12T14:02:00Z","event":"PostToolUse","session":"s3","turn":"q2","id":"r1"}
+{"at":"2026-11-12T14:02:00Z","event":"PreToolUse","session":"s3","turn":"q2","tool":"Bash","id":"r2","input":{"command":"cd /w/fake-55 && git log -2"},"branch":"55-count-friction","origin":"u473t8/fake"}
+{"at":"2026-11-12T14:02:00Z","event":"PostToolUse","session":"s3","turn":"q2","id":"r2"}
+{"at":"2026-11-12T14:03:00Z","event":"Stop","session":"s3","turn":"q2","needs_input":false}
 {"at":"2026-11-12T16:00:00Z","event":"PreToolUse","session":"s1","tu
