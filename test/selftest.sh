@@ -158,7 +158,7 @@ labels="$(bb -e "(require '[clj-yaml.core :as y]) (doseq [f (:body (y/parse-stri
 [ "$labels" = "$(printf 'Requirements (required)\nInvariants\nDesign\nPlan\nDone when (required)')" ] \
   && ok "the issue form has the five ADR-0002 sections; Requirements and Done when are required" || bad "issue form sections" "$labels"
 missing=""
-for s in "## What changed" "## Why" "## Review" "## User-level test" "## Verified" "## Not verified" "## Owner steps"; do
+for s in "## What changed" "## Why" "## Root causes" "## Review" "## User-level test" "## Verified" "## Not verified" "## Owner steps"; do
   grep -qx -- "$s" $prt || missing="$missing, $s"
 done
 [ -z "$missing" ] && ok "the PR template has the sections the owner reviews" || bad "PR template lacks${missing#,}"

@@ -7,8 +7,14 @@
 ## Why
 <!-- The issue and the reason, in a line or two. -->
 
+## Root causes
+<!-- What the work rests on, each as: what was assumed → what showed it → the conclusion. A cause found
+     mid-work went to the issue as a `## Design` addendum, and the code it touched was rewritten, not patched.
+     Small work: "none beyond the issue". -->
+
 ## Review
-<!-- Self-review and simplification: what was looked at, what changed because of it. -->
+<!-- Self-review and simplification: what was looked at, what changed because of it.
+     For M: the lines of code before and after the simplify pass. -->
 
 ## User-level test
 <!-- The check as a person would run it: the steps and what they showed. -->
