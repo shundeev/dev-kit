@@ -17,8 +17,13 @@ input="$(cat)"
 root="${CLAUDE_PROJECT_DIR:-.}"
 guard="$root/{{kit}}/claude/hooks/delivery-guard.sh"
 
+# Bash goes to the delivery guard; Edit/Write/NotebookEdit to the design approval gate (#26).
+tool="$(printf '%s' "$input" | sed -n 's/.*"tool_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
 if [ -r "$guard" ]; then
-  exec bash "$guard" <<<"$input"
+  case "$tool" in
+    Edit|Write|NotebookEdit|MultiEdit) exec bb "$root/{{kit}}/bin/kit" gate --hook <<<"$input" ;;
+    *) exec bash "$guard" <<<"$input" ;;
+  esac
 fi
 
 # Extract tool_input.command without jq, which may be what is missing.

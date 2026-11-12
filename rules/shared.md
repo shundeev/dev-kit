@@ -13,7 +13,8 @@ These rules apply to every agent working in this repository (Claude Code, Codex,
   plan → review and simplify → user-level test → PR → merge on the owner's Approve →
   retrospective.
   Name the task's Size (XS/S/M/L) and the reason in the first reply; it sets the ceremony.
-  No file is edited before the issue and its branch exist, XS included.
+  No file is edited before the issue and its branch exist, XS included. The design approval is
+  enforced: CI (`kit gate`) and the edit hook refuse code on an M issue without it.
 - Issues are filed by `bash .claude/skills/gh-project-workflow/scripts/start_issue_flow.sh`,
   never by hand: it puts the issue on the board with Status, Priority and Showcase and creates
   its branch. An issue that is not on the board does not exist.

@@ -357,6 +357,12 @@ for c in "git submodule update --init" ".shared/bin/kit init" "git status"; do
   expect_exit 0 "empty kit allows repair: $c" entry "$c" "$WORK/nokit"
 done
 expect_exit 2 "empty kit refuses other commands" entry "ls -la" "$WORK/nokit"
+edit_entry() { jq -nc --arg f "$P/src/x.clj" '{tool_name:"Edit",tool_input:{file_path:$f}}' | CLAUDE_PROJECT_DIR="${1:-$P}" bash .claude/hooks/pretooluse.sh; }
+jq -e '.hooks.PreToolUse[0].matcher | test("Edit") and test("Write") and test("Bash")' .claude/settings.json >/dev/null \
+  && ok "the entry hook also sees Edit and Write" || bad "the entry hook misses edits"
+expect_exit 0 "an edit on a branch without an issue passes the gate" edit_entry
+[ -z "$LAST" ] && ok "  with no refusal" || bad "  refused" "$LAST"
+expect_exit 2 "an edit with dev-kit missing is refused, with the repair" edit_entry "$WORK/nokit"
 contains "refusal names the repair" "git submodule update --init" "$LAST"
 nojq="$WORK/nojq"; mkdir -p "$nojq"
 for t in bash git awk sed cat head tr; do ln -sf "$(command -v $t)" "$nojq/$t"; done
@@ -465,6 +471,65 @@ if grep -q '^pr merge' "$FAKE_GH_LOG"; then bad "  merged again"; else ok "  no 
 grep -q '^project item-add' "$FAKE_GH_LOG" && ok "  the card is moved to Done" || bad "  no board update"
 git rev-parse -q --verify refs/heads/14-auto >/dev/null && bad "  local branch left" || ok "  local branch deleted"
 unset GHWF_MERGE_WAIT
+cd "$P" || exit 1
+
+echo "- design approval gate (fake gh)"
+G="$WORK/gate"; mkdir -p "$G"
+gate() { PATH="$KIT/test/fake-gh:$PATH" FAKE_GH_DIR="$G" FAKE_GH_LOG="$G/log" GITHUB_REPOSITORY=u473t8/fake bb "$KIT/bin/kit" gate "$@"; }
+# issue <labels as JSON> <labeled by> <labeled at> <body edited at|null> <design comment created> <design comment edited|null>
+issue() {
+  jq -n --argjson labels "$1" --arg by "$2" --arg at "$3" --arg edited "$4" --arg dc "$5" --arg de "$6" \
+    '{data: {repository: {issue: {
+       lastEditedAt: (if $edited == "null" then null else $edited end),
+       labels: {nodes: ($labels | map({name: .}))},
+       timelineItems: {nodes: [{actor: {login: $by}, label: {name: "design-approved"}, createdAt: $at}]},
+       comments: {nodes: [{author: {login: "someone"}, createdAt: $dc, body: "## Design (proposed)",
+                           lastEditedAt: (if $de == "null" then null else $de end)}]}}}}}' > "$G/gate-issue.json"
+}
+files() { jq -n --argjson n "$1" '[{filename: "src/a.clj", additions: $n, deletions: 0},
+                                    {filename: "package-lock.json", additions: 900, deletions: 0}]' > "$G/pr-files.json"; }
+echo admin > "$G/perm-the-owner"; echo write > "$G/perm-$default_login"; files 50
+T0=2026-11-12T10:00:00Z; T1=2026-11-12T11:00:00Z; T2=2026-11-12T12:00:00Z
+issue '["design-approved","size:M"]' the-owner $T1 null $T0 null
+expect_exit 0 "gate: an approved M issue passes" gate --branch 26-x --pr 7
+contains "  names who approved" "approved by the-owner" "$LAST"
+issue '["size:M"]' the-owner $T1 null $T0 null
+expect_exit 1 "gate: an M issue without design-approved fails" gate --branch 26-x --pr 7
+contains "  says what to do" "design-approved" "$LAST"
+issue '["design-approved","size:M"]' "$default_login" $T1 null $T0 null
+expect_exit 1 "gate: a label set by the agent does not count" gate --branch 26-x --pr 7
+contains "  names the agent" "set by the agent" "$LAST"
+issue '["design-approved","size:M"]' the-owner $T1 $T2 $T0 null
+expect_exit 1 "gate: the issue body edited after the approval fails" gate --branch 26-x --pr 7
+contains "  says the approval is stale" "after the approval" "$LAST"
+issue '["design-approved","size:M"]' the-owner $T1 null $T0 $T2
+expect_exit 1 "gate: a design comment edited after the approval fails" gate --branch 26-x --pr 7
+issue '["design-approved"]' the-owner $T1 null $T0 null
+expect_exit 0 "gate: no size label counts as M" gate --branch 26-x --pr 7
+contains "  says so" "no size label" "$LAST"
+issue '["size:S"]' the-owner $T1 null $T0 null; files 150
+expect_exit 0 "gate: an S PR within the threshold passes without approval" gate --branch 26-x --pr 7
+contains "  lock files are not counted" "150 lines" "$LAST"
+files 250
+expect_exit 1 "gate: an S PR over the threshold fails" gate --branch 26-x --pr 7
+contains "  says to resize" "size:M" "$LAST"
+expect_exit 0 "gate: a branch without an issue number is skipped" gate --branch feature-x --pr 7
+
+echo "- design approval hook (fake gh)"
+H="$WORK/hookrepo"; git init -q -b main "$H"; cd "$H" || exit 1
+git commit -q --allow-empty -m "chore: base"; git switch -q -c 26-gate
+hook() { jq -nc --arg p "$H/$1" '{tool_name: "Edit", tool_input: {file_path: $p}}' | gate --hook; }
+issue '["size:M"]' the-owner $T1 null $T0 null; : > "$G/log"
+contains "hook: an edit on an unapproved M branch is refused" '"permissionDecision":"deny"' "$(hook src/a.clj)"
+[ -z "$(hook adr/0004-x.md)" ] && ok "hook: adr/ may be written before the approval" || bad "hook refused adr/"
+n=$(wc -l < "$G/log"); hook src/b.clj >/dev/null
+[ "$(wc -l < "$G/log")" = "$n" ] && ok "hook: the verdict is cached" || bad "hook asked GitHub again"
+rm -rf "$(git rev-parse --git-path kit)"; issue '["design-approved","size:M"]' the-owner $T1 null $T0 null
+[ -z "$(hook src/a.clj)" ] && ok "hook: an approved branch may be edited" || bad "hook refused an approved branch"
+rm -rf "$(git rev-parse --git-path kit)"; touch "$G/gh-fails"
+contains "hook: GitHub unreachable means refused, with the retry" "gate --g1 26" "$(hook src/a.clj)"
+rm "$G/gh-fails"; git switch -q main
+[ -z "$(hook src/a.clj)" ] && ok "hook: a branch without an issue is not gated" || bad "hook gated main"
 cd "$P" || exit 1
 
 echo

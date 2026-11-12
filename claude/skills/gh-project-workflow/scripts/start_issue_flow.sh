@@ -57,6 +57,20 @@ graphql_remaining() {
 }
 
 # The field and its option are named; board.sh resolves them through the project.
+# The board's Size, mirrored as a `size:*` label: CI's design approval gate reads labels, it
+# cannot read a user's board (dev-kit#26). Other size labels are removed.
+set_size_label() {
+  [[ -n "$size_option" && -n "$issue_number" ]] || return 0
+  gh label create "size:$size_option" -R "$repo" --color BFD4F2 \
+    --description "Task size (ADR-0002), mirrors the board field" --force >/dev/null 2>&1 || true
+  local old args=()
+  while IFS= read -r old; do
+    [[ -n "$old" && "$old" != "size:$size_option" ]] && args+=(--remove-label "$old")
+  done < <(gh issue view "$issue_number" -R "$repo" --json labels --jq '.labels[].name | select(startswith("size:"))' 2>/dev/null)
+  gh issue edit "$issue_number" -R "$repo" --add-label "size:$size_option" "${args[@]}" >/dev/null \
+    || echo "Warning: could not set the label size:$size_option on #$issue_number" >&2
+}
+
 apply_project_field() {
   local field_name="$1"
   local option_name="$2"
@@ -490,6 +504,7 @@ fi
 apply_project_field "$showcase_field" "$showcase_option" false
 apply_project_field "$priority_field" "$priority_option" true
 apply_project_field "$size_field" "$size_option" false
+set_size_label
 apply_project_field "$status_field" "$status_option" true
 
 development_branch=""

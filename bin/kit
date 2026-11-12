@@ -6,6 +6,7 @@
 ;;   .shared/bin/kit doctor   [--ci] [--quiet]
 ;;   .shared/bin/kit modules
 ;;   .shared/bin/kit identity [--dir PATH]   the agent's GitHub identity alone, for any repository
+;;   .shared/bin/kit gate     --branch B --pr N | --g1 N | --hook   the design approval gate (ADR-0002)
 ;;
 ;; Two kinds of files:
 ;;   scaffold — created once if missing, then owned by the project (kit.edn, LICENSE, the
@@ -642,6 +643,187 @@
       (println (str "  WARN  " problem "  →  in your own terminal: bb " (fs/path kit-dir "bin" "kit")
                     " identity --dir " dir " — it logs " (:login agent) " in")))))
 
+;; ------------------------------------------------------------------ gate (ADR-0002, #26)
+;; G1: an M or L issue, or one without a `size:*` label, needs `design-approved`, added after the
+;; issue body and its `## Design` comments last changed, by someone with write access who is not
+;; the agent. An XS/S pull request stays within a size threshold. CI runs
+;; `kit gate --branch … --pr …`; the PreToolUse hook runs `kit gate --hook` before Edit/Write.
+
+(def size-threshold
+  "Lines changed in an XS/S pull request, lock and kit-managed files not counted. Merged before the
+  gate (#26): S PRs 0–160 lines (dev-kit#43 the largest), M PRs 53–467. 200 sits above every S so
+  far: it catches a clearly under-sized S, not every M."
+  200)
+
+
+(def lock-file #"(^|/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|[^/]+\.lock)$")
+
+
+(defn gh!
+  "Runs gh; stdout, or an exception carrying gh's message."
+  [& args]
+  (let [{:keys [exit out err]} (apply p/sh {:continue true} "gh" args)]
+    (if (zero? exit) out (throw (ex-info (str/trim (str err out)) {})))))
+
+
+(def issue-query
+  (str "query($o:String!,$n:String!,$i:Int!){repository(owner:$o,name:$n){issue(number:$i){"
+       "lastEditedAt labels(first:50){nodes{name}}"
+       " timelineItems(itemTypes:[LABELED_EVENT],last:50){nodes{... on LabeledEvent{actor{login} label{name} createdAt}}}"
+       " comments(last:100){nodes{author{login} body createdAt lastEditedAt}}}}}"))
+
+
+(defn fetch-issue
+  [repo n]
+  (let [[o r] (str/split repo #"/")]
+    (get-in (json/parse-string (gh! "api" "graphql" "-f" (str "query=" issue-query)
+                                    "-f" (str "o=" o) "-f" (str "n=" r) "-F" (str "i=" n)))
+            ["data" "repository" "issue"])))
+
+
+(defn issue-size
+  "The issue's size label (\"XS\" … \"XL\"), or nil."
+  [issue]
+  (some #(second (re-matches #"size:(XS|S|M|L|XL)" (get % "name"))) (get-in issue ["labels" "nodes"])))
+
+
+(defn g1-verdict
+  "[:ok msg] or [:fail reason-with-fix] for the design approval of issue n."
+  [repo n issue agent]
+  (let [labels  (set (map #(get % "name") (get-in issue ["labels" "nodes"])))
+        event   (->> (get-in issue ["timelineItems" "nodes"])
+                     (filter #(= "design-approved" (get-in % ["label" "name"])))
+                     (sort-by #(get % "createdAt"))
+                     last)
+        by      (get-in event ["actor" "login"])
+        at      (get event "createdAt")
+        later?  (fn [t] (and t at (pos? (compare t at))))
+        redo    (str "; the owner approves again: remove `design-approved` from #" n " and add it back")
+        changed (some #(and (str/starts-with? (str (get % "body")) "## Design")
+                            (or (later? (get % "createdAt")) (later? (get % "lastEditedAt"))))
+                      (get-in issue ["comments" "nodes"]))]
+    (cond
+      (not (labels "design-approved"))
+      [:fail (str "#" n " has no `design-approved`: code waits until the owner approves the design by adding it")]
+
+      (nil? event) [:fail (str "#" n " carries `design-approved` but GitHub shows no event for it" redo)]
+
+      (= by agent)
+      [:fail (str "`design-approved` on #" n " was set by the agent (" by "); only a person with write access approves" redo)]
+
+      (not (#{"write" "maintain" "admin"}
+            (str/trim (gh! "api" (str "repos/" repo "/collaborators/" by "/permission") "--jq" ".permission"))))
+      [:fail (str "`design-approved` on #" n " was set by " by ", who has no write access" redo)]
+
+      (later? (get issue "lastEditedAt"))
+      [:fail (str "the body of #" n " was edited after the approval (" at ")" redo)]
+
+      changed [:fail (str "a `## Design` comment on #" n " changed after the approval (" at ")" redo)]
+
+      :else [:ok (str "G1: design of #" n " approved by " by " at " at)])))
+
+
+(defn gate-config [] (merge (read-defaults) (or (read-config) {})))
+
+
+(defn gate-repo
+  [{:keys [repo]} cfg]
+  (or repo (not-empty (System/getenv "GITHUB_REPOSITORY")) (not-empty (System/getenv "GHWF_REPO")) (:repo cfg)
+      (die "gate: no repository; pass --repo owner/name")))
+
+
+(defn managed-paths
+  "Files kit generates in this project: not counted towards a PR's size."
+  [cfg]
+  (if (read-config)
+    (into #{(str mount)} (keep #(when (#{:file :symlink} (:kind %)) (:path %)) (managed-items cfg)))
+    #{}))
+
+
+(defn pr-lines
+  [repo pr excluded]
+  (->> (json/parse-string (gh! "api" (str "repos/" repo "/pulls/" pr "/files?per_page=100")))
+       (remove #(let [f (get % "filename")] (or (re-find lock-file f) (excluded f))))
+       (map #(+ (get % "additions" 0) (get % "deletions" 0)))
+       (reduce + 0)))
+
+
+(defn gate-ci!
+  [{:keys [branch pr] :as opts}]
+  (let [cfg    (gate-config)
+        repo   (gate-repo opts cfg)
+        branch (or branch (not-empty (System/getenv "GITHUB_HEAD_REF")) (die "gate: pass --branch"))
+        n      (second (re-find #"^(\d+)-" branch))]
+    (if-not n
+      (println (str "gate: branch " branch " carries no issue number; skipped"))
+      (let [issue (fetch-issue repo n)
+            size  (issue-size issue)
+            [level msg]
+            (if (#{"XS" "S"} size)
+              (let [lines (pr-lines repo (or pr (die "gate: pass --pr")) (managed-paths cfg))]
+                (if (<= lines size-threshold)
+                  [:ok (str "size " size ": " lines " lines changed, within " size-threshold
+                            " (lock and kit-managed files not counted); G1 not required")]
+                  [:fail (str "#" n " is size:" size " but the PR changes " lines " lines (over " size-threshold
+                              "): resize #" n " to size:M on the board and its label, post the design, and the owner approves it")]))
+              (let [[l m] (g1-verdict repo n issue (get-in cfg [:agent :login]))]
+                [l (str (if size (str "size " size) "no size label, so M") "; " m)]))]
+        (println (str (if (= level :ok) "  ok    " "  FAIL  ") msg))
+        (when (= level :fail) (System/exit 1))))))
+
+
+(defn gate-g1!
+  "The design approval of one issue, as the hook and a person need it."
+  [n opts]
+  (let [cfg   (gate-config)
+        repo  (gate-repo opts cfg)
+        issue (fetch-issue repo n)
+        size  (issue-size issue)]
+    (if (#{"XS" "S"} size)
+      [:ok (str "#" n " is size " size "; G1 not required")]
+      (g1-verdict repo n issue (get-in cfg [:agent :login])))))
+
+
+(defn gate-hook!
+  "PreToolUse for Edit/Write/NotebookEdit: on an issue branch, outside adr/, refuses an edit while the
+  design approval is missing. Verdicts are cached for 10 minutes; GitHub unreachable means refused."
+  [opts]
+  (let [input  (json/parse-string (slurp *in*))
+        file   (or (get-in input ["tool_input" "file_path"]) (get-in input ["tool_input" "notebook_path"]))
+        top    (sh-in "." "git" "rev-parse" "--show-toplevel")
+        branch (sh-in "." "git" "rev-parse" "--abbrev-ref" "HEAD")
+        n      (second (re-find #"^(\d+)-" (str branch)))
+        path   (when (and top file) (str (fs/relativize top (fs/absolutize file))))]
+    (when (and n (not (str/starts-with? (str path) "adr/")))
+      (let [cache (str (fs/absolutize (sh-in "." "git" "rev-parse" "--git-path" (str "kit/g1-" n))))
+            now   (quot (System/currentTimeMillis) 1000)
+            [t level reason] (some-> (slurp-if cache) (str/split #" " 3))
+            [level reason]
+            (if (and t (< (- now (parse-long t)) 600))
+              [(keyword level) reason]
+              (try (let [[l r] (gate-g1! n opts)]
+                     (fs/create-dirs (fs/parent cache))
+                     (spit cache (str now " " (name l) " " r))
+                     [l r])
+                   (catch Exception e
+                     [:error (str "could not check the design approval of #" n " (" (ex-message e)
+                                  "); retry, or check by hand: kit gate --g1 " n)])))]
+        (when (not= level :ok)
+          (println (json/generate-string
+                     {:hookSpecificOutput {:hookEventName "PreToolUse" :permissionDecision "deny"
+                                           :permissionDecisionReason (str "Refused: " reason)}})))))))
+
+
+(defn gate!
+  [{:keys [g1 hook] :as opts}]
+  (cond
+    hook (gate-hook! opts)
+    g1   (let [[level msg] (try (gate-g1! g1 opts) (catch Exception e [:fail (ex-message e)]))]
+           (println (str (if (= level :ok) "  ok    " "  FAIL  ") msg))
+           (when (not= level :ok) (System/exit 1)))
+    :else (gate-ci! opts)))
+
+
 
 (defn parse-args
   [args]
@@ -656,6 +838,10 @@
       "--quiet" (recur more (assoc opts :quiet true))
       "--dir" (recur (rest more) (assoc opts :dir (first more)))
       "--local" (recur more (assoc opts :local true))
+      "--branch" (recur (rest more) (assoc opts :branch (first more)))
+      "--pr" (recur (rest more) (assoc opts :pr (first more)))
+      "--g1" (recur (rest more) (assoc opts :g1 (first more)))
+      "--hook" (recur more (assoc opts :hook true))
       (die "unknown option" a))))
 
 
@@ -676,4 +862,6 @@
     "doctor" (doctor (parse-args args))
     "modules" (println (str "clojure=" (boolean (some-> (read-config) clojure?))))
     "identity" (identity! (parse-args args))
-    (usage)))
+    "gate" (gate! (parse-args args))
+    nil (usage)
+    (do (usage) (die "unknown command" cmd))))

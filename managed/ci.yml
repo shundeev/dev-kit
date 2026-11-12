@@ -13,6 +13,8 @@ on:
 
 permissions:
   contents: read
+  issues: read          # the design approval gate reads the PR's issue (dev-kit#26)
+  pull-requests: read
 
 jobs:
   checks:

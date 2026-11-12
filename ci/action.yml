@@ -19,6 +19,13 @@ runs:
         bb "${{ github.action_path }}/../bin/kit" doctor --ci
         bb "${{ github.action_path }}/../bin/kit" modules >> "$GITHUB_OUTPUT"
 
+    - name: Design approval and size gate (ADR-0002, dev-kit#26)
+      if: github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: bb "${{ github.action_path }}/../bin/kit" gate --branch "${{ github.head_ref }}" --pr "${{ github.event.pull_request.number }}"
+
     - name: Install clj-kondo and zprint
       if: steps.kit.outputs.clojure == 'true'
       uses: DeLaGuardo/setup-clojure@13.7.0
