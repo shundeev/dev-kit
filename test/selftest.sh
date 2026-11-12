@@ -93,6 +93,8 @@ for rule in "Bash(gh pr merge *)" \
             "Bash(git reset --hard *)" "Bash(git clean *)" "Bash(git branch -D *)"; do
   has ask "$rule" && ok "asks: $rule" || bad "asks: $rule"
 done
+# #74: closing an issue reopens in one click and happens on the owner's word or from the flow scripts.
+if has ask "Bash(gh issue close *)"; then bad "closing an issue still asks the owner"; else ok "closing an issue does not ask"; fi
 for rule in "Bash(git push --force *)" "Bash(git push * --force *)" "Bash(git push * --force)" "Bash(git push -f *)" \
             "Bash(git push * -f)" "Bash(git push * +*)" "Bash(gh repo delete *)"; do
   has deny "$rule" && ok "denies: $rule" || bad "denies: $rule"
@@ -529,6 +531,17 @@ git rev-parse -q --verify refs/heads/12-landing >/dev/null && bad "  local branc
 git ls-remote --exit-code --heads origin 12-landing >/dev/null 2>&1 && bad "  remote branch left" || ok "  remote branch deleted"
 [ "$(git rev-parse --abbrev-ref HEAD)" = HEAD ] && ok "  this worktree detached on the base" || bad "  not detached"
 
+# #72: a branch that falls behind while the script waits is updated, then merges.
+git switch -q -c 15-wait origin/main && git push -q -u origin 15-wait
+echo "https://github.com/u473t8/fake/pull/97" > "$FAKE/pr-list"; echo "APPROVED CLEAN" > "$FAKE/pr-review"
+printf 'OPEN BLOCKED\nOPEN BEHIND\nOPEN BLOCKED\nMERGED CLEAN\n' > "$FAKE/pr-state.seq"; : > "$FAKE_GH_LOG"
+export GHWF_MERGE_POLL=0 GHWF_MERGE_WAIT=10
+expect_exit 0 "merge: a branch that falls behind while waiting is updated and merges" flow merge_issue_flow.sh
+unset GHWF_MERGE_POLL; export GHWF_MERGE_WAIT=0  # as the tests around it expect
+calls="$(grep -E '^pr (update-branch|merge)' "$FAKE_GH_LOG" | cut -d' ' -f1,2 | tr '\n' ',')"
+[ "$calls" = "pr merge,pr update-branch," ] && ok "  auto-merge, then an update when it fell behind" || bad "  calls" "$calls"
+rm -f "$FAKE/pr-state.seq"; : > "$FAKE/pr-list"; git switch -q --detach origin/main
+
 git switch -q -c 14-auto origin/main && git push -q -u origin 14-auto
 : > "$FAKE/pr-list"; echo "https://github.com/u473t8/fake/pull/98" > "$FAKE/pr-list-merged"; : > "$FAKE_GH_LOG"
 expect_exit 0 "merge: a PR already merged by GitHub gets the closeout only" flow merge_issue_flow.sh
@@ -597,6 +610,11 @@ rm "$G/gh-fails"; git switch -q main
 [ -z "$(hook src/a.clj)" ] && ok "hook: a branch without an issue is not gated" || bad "hook gated main"
 cd "$P" || exit 1
 
+echo "- pinned actions (#7)"
+unpinned="$(grep -hE '^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*[^.[:space:]]' "$KIT/managed/ci.yml" "$KIT/ci/action.yml" "$KIT"/.github/workflows/*.yml \
+  | grep -vE '@[0-9a-f]{40}([[:space:]]|$)' || true)"
+if [ -z "$unpinned" ]; then ok "every external action is pinned to a commit"; else bad "actions not pinned to a commit" "$unpinned"; fi
+
 echo "- formatting hook (#61)"
 fmt() { jq -nc --arg f "$1" '{tool_input:{file_path:$f}}' | bash .shared/claude/hooks/format.sh; }
 FP="$WORK/fmt"; mkdir -p "$FP/proj/src" "$FP/bare"
@@ -645,6 +663,11 @@ expect_exit 0 "garbage on stdin: exit 0" bash -c "echo 'not json' | XDG_STATE_HO
 expect_exit 0 "an unwritable log: exit 0" bash -c "echo '{}' | XDG_STATE_HOME=/proc/no bash .shared/claude/hooks/friction.sh Stop"
 if [ "$(stat -c %a "$FR/dev-kit/friction")" = 700 ] && [ "$(stat -c %a "$FR"/dev-kit/friction/*.jsonl | sort -u)" = 600 ]; then
   ok "the log is the owner's alone (700, 600)"; else bad "log permissions" "$(ls -la "$FR/dev-kit/friction")"; fi
+jq -nc --arg c "D=$WORK; cd \$D/tw && git status" '{session_id:"s1",tool_name:"Bash",tool_use_id:"t5",tool_input:{command:$c},cwd:"/"}' | rec PreToolUse
+contains "a cd through a variable set in the same command" '"branch":"42-some-task"' "$(grep '"t5"' <<<"$(flog)")"
+jq -nc '{session_id:"s1",tool_name:"Bash",tool_use_id:"t6",tool_input:{command:"cd ${TWDIR} && git status"},cwd:"/"}' \
+  | TWDIR="$TW" XDG_STATE_HOME="$FR" CLAUDE_PROJECT_DIR="$P" bash .shared/claude/hooks/friction.sh PreToolUse
+contains "a cd through an environment variable" '"branch":"42-some-task"' "$(grep '"t6"' <<<"$(flog)")"
 TS="$WORK/my tw"; git init -q -b 43-space-task "$TS"; git -C "$TS" remote add origin git@github.com:u473t8/fake.git
 jq -nc --arg c "cd \"$TS\" && git status" '{session_id:"s1",tool_name:"Bash",tool_use_id:"t3",tool_input:{command:$c},cwd:"/"}' | rec PreToolUse
 contains "a quoted cd path with a space" '"branch":"43-space-task"' "$(grep '"t3"' <<<"$(flog)")"
@@ -764,6 +787,15 @@ if grep -qF "git status" <<<"$out"; then bad "  a command 30 min apart counted a
 contains "  recurring: all tasks and projects of the last 14 days, not October" "Confirmation: yes · ask rule: Bash(gh api *): 7" "$out"
 contains "  another project's friction counts in the 14 days" "Tool error · npm: 3" "$out"
 contains "  the owner's mark, on one line" "трение: ссылка открылась в двух браузерах" "$out"
+# #65: where the task's time went. Turns run from the owner's message to Stop, StopFailure or the turn's
+# last event; a Stop without a turn id is no turn.
+contains "  time: the task's turns" "Time of the task: 10 turns, 42m in all" "$out"
+contains "  time: waiting on the owner, windows and questions" "waiting on the owner: 7 confirmation windows, 5m; 2 questions, 24m" "$out"
+contains "  time: commands, and the longest" "commands: 2m; the longest: bb kit gate 1m, git log 1m" "$out"
+expect_exit 0 "retro: a task worked on only in a turn that served two tasks" retro 62 --now 2026-11-12T17:00:00Z
+contains "  says the turn time is not split" "its turns also served other tasks" "$LAST"
+contains "  still counts its commands" "commands: 1m; the longest: make 1m" "$LAST"
+contains "  under a minute reads in seconds" "waiting on the owner: 0 confirmation windows, 0s" "$LAST"
 contains "  the owner's messages: the mid-turn one, and those of turns naming no task go to the last task" "Owner messages: 10" "$out"
 if grep -qE "почему так|secret|import|/w/|/tmp/|host/tok" <<<"$out"; then bad "  printed a message, a path, a flag value or code" "$out"
 else ok "  no messages, paths, flag values or code"; fi
