@@ -1,0 +1,105 @@
+{"at":"2026-11-12T09:00:00Z","event":"UserPromptSubmit","session":"s1","turn":"p0","prompt":"начинай"}
+{"at":"2026-11-12T09:01:00Z","event":"PreToolUse","session":"s1","turn":"p0","tool":"Bash","id":"t0","input":{"command":"gh api graphql -f query=x"},"branch":"main","origin":"u473t8/fake"}
+{"at":"2026-11-12T09:01:00Z","event":"PermissionRequest","session":"s1","turn":"p0","tool":"Bash","input":{"command":"gh api graphql -f query=x"},"asks":["Bash(gh api *)","Bash(rm *)","Read(/secret/**)","Bash(curl https://host/tok*)"]}
+{"at":"2026-11-12T09:02:00Z","event":"PostToolUse","session":"s1","turn":"p0","id":"t0"}
+{"at":"2026-11-12T09:03:00Z","event":"Stop","session":"s1","turn":"p0","needs_input":false}
+{"at":"2026-11-12T10:00:00Z","event":"UserPromptSubmit","session":"s1","turn":"p1","prompt":"делаем 55"}
+{"at":"2026-11-12T10:01:00Z","event":"PreToolUse","session":"s1","turn":"p1","tool":"Bash","id":"a1","input":{"command":"cd /w/fake-55 && gh api repos/u473t8/fake"},"branch":"55-count-friction","origin":"u473t8/fake"}
+{"at":"2026-11-12T10:01:00Z","event":"PermissionRequest","session":"s1","turn":"p1","tool":"Bash","input":{"command":"cd /w/fake-55 && gh api repos/u473t8/fake"},"asks":["Bash(gh api *)","Bash(rm *)","Read(/secret/**)","Bash(curl https://host/tok*)"]}
+{"at":"2026-11-12T10:02:00Z","event":"PostToolUse","session":"s1","turn":"p1","id":"a1"}
+{"at":"2026-11-12T10:03:00Z","event":"PreToolUse","session":"s1","turn":"p1","tool":"Bash","id":"a2","input":{"command":"gh api graphql -f query=y"},"branch":"main","origin":"u473t8/fake"}
+{"at":"2026-11-12T10:03:00Z","event":"PermissionRequest","session":"s1","turn":"p1","tool":"Bash","input":{"command":"gh api graphql -f query=y"},"asks":["Bash(gh api *)","Bash(rm *)","Read(/secret/**)","Bash(curl https://host/tok*)"]}
+{"at":"2026-11-12T10:04:00Z","event":"PostToolUse","session":"s1","turn":"p1","id":"a2"}
+{"at":"2026-11-12T10:05:00Z","event":"PreToolUse","session":"s1","turn":"p1","tool":"AskUserQuestion","id":"a4","input":{"questions":[{"question":"Which?"}]},"branch":"main","origin":"u473t8/fake"}
+{"at":"2026-11-12T10:06:00Z","event":"PostToolUse","session":"s1","turn":"p1","id":"a4"}
+{"at":"2026-11-12T10:07:00Z","event":"Stop","session":"s1","turn":"p1","needs_input":false}
+{"at":"2026-11-12T10:30:00Z","event":"UserPromptSubmit","session":"s1","turn":"p2","prompt":"дальше"}
+{"at":"2026-11-12T10:31:00Z","event":"PreToolUse","session":"s1","turn":"p2","tool":"Bash","id":"b1","input":{"command":"cd /w/fake-61 && gh api repos/u473t8/fake/pulls"},"branch":"61-other-task","origin":"u473t8/fake"}
+{"at":"2026-11-12T10:31:00Z","event":"PermissionRequest","session":"s1","turn":"p2","tool":"Bash","input":{"command":"cd /w/fake-61 && gh api repos/u473t8/fake/pulls"},"asks":["Bash(gh api *)","Bash(rm *)","Read(/secret/**)","Bash(curl https://host/tok*)"]}
+{"at":"2026-11-12T10:32:00Z","event":"PostToolUse","session":"s1","turn":"p2","id":"b1"}
+{"at":"2026-11-12T10:33:00Z","event":"Stop","session":"s1","turn":"p2","needs_input":false}
+{"at":"2026-11-12T11:00:00Z","event":"UserPromptSubmit","session":"s1","turn":"p3","prompt":"проверь"}
+{"at":"2026-11-12T11:01:00Z","event":"PreToolUse","session":"s1","turn":"p3","tool":"Bash","id":"c1","input":{"command":"cd /w/fake-55 && gh issue create --title x"},"branch":"55-count-friction","origin":"u473t8/fake"}
+{"at":"2026-11-12T11:01:00Z","event":"HookDenied","session":"s1","turn":"p3","id":"c1","reason":"Refused: a raw gh issue create"}
+{"at":"2026-11-12T11:02:00Z","event":"PreToolUse","session":"s1","turn":"p3","tool":"Bash","id":"c2","input":{"command":"cd /w/fake-55 && git push --force origin main"},"branch":"55-count-friction","origin":"u473t8/fake"}
+{"at":"2026-11-12T11:02:00Z","event":"PermissionDenied","session":"s1","turn":"p3","id":"c2","reason":"[git_destructive] force push to main"}
+{"at":"2026-11-12T11:03:00Z","event":"PreToolUse","session":"s1","turn":"p3","tool":"Bash","id":"c3","input":{"command":"cd /w/fake-55 && bb bin/kit gate --g1 55"},"branch":"55-count-friction","origin":"u473t8/fake"}
+{"at":"2026-11-12T11:04:00Z","event":"PostToolUseFailure","session":"s1","turn":"p3","id":"c3"}
+{"at":"2026-11-12T11:05:00Z","event":"PreToolUse","session":"s1","turn":"p3","tool":"Bash","id":"c4","input":{"command":"cd /w/fake-55 && echo blocked"},"branch":"55-count-friction","origin":"u473t8/fake"}
+{"at":"2026-11-12T11:05:00Z","event":"PreToolUse","session":"s1","turn":"p3","tool":"Bash","id":"z1","input":{"command":"cd /w/fake-55 && gh api repos/x/stale"},"branch":"55-count-friction","origin":"u473t8/fake"}
+{"at":"2026-11-12T11:06:00Z","event":"PreToolUse","session":"s1","turn":"p3","tool":"Bash","id":"c5","input":{"command":"cd /w/fake-55 && rm -rf x"},"branch":"55-count-friction","origin":"u473t8/fake"}
+{"at":"2026-11-12T11:06:00Z","event":"PermissionRequest","session":"s1","turn":"p3","tool":"Bash","input":{"command":"cd /w/fake-55 && rm -rf x"},"asks":["Bash(gh api *)","Bash(rm *)","Read(/secret/**)","Bash(curl https://host/tok*)"]}
+{"at":"2026-11-12T11:07:00Z","event":"Stop","session":"s1","turn":"p3","needs_input":true}
+{"at":"2026-11-12T11:30:00Z","event":"UserPromptSubmit","session":"s1","turn":"p4","prompt":"трение: ссылка открылась\nв двух браузерах"}
+{"at":"2026-11-12T11:31:00Z","event":"PreToolUse","session":"s1","turn":"p4","tool":"Bash","id":"d0","input":{"command":"cd /w/fake-55 && git log -1"},"branch":"55-count-friction","origin":"u473t8/fake"}
+{"at":"2026-11-12T11:32:00Z","event":"PostToolUse","session":"s1","turn":"p4","id":"d0"}
+{"at":"2026-11-12T11:33:00Z","event":"PreToolUse","session":"s1","turn":"p4","tool":"ExitPlanMode","id":"d1","input":{"plan":"x"},"branch":"main","origin":"u473t8/fake"}
+{"at":"2026-11-12T11:34:00Z","event":"Stop","session":"s1","turn":"p4","needs_input":false}
+{"at":"2026-11-12T12:00:00Z","event":"UserPromptSubmit","session":"s1","turn":"p5","prompt":"почему так?"}
+{"at":"2026-11-12T12:01:00Z","event":"PreToolUse","session":"s1","turn":"p5","tool":"Bash","id":"e1","input":{"command":"cd /w/fake-55 && ping -c 20 127.0.0.1"},"branch":"55-count-friction","origin":"u473t8/fake"}
+{"at":"2026-11-12T12:05:00Z","event":"UserPromptSubmit","session":"s1","turn":"p6","prompt":"продолжай"}
+{"at":"2026-11-12T12:05:00Z","event":"UserPromptSubmit","session":"s1","turn":"p6","prompt":"я про план 55"}
+{"at":"2026-11-12T12:06:00Z","event":"PreToolUse","session":"s1","turn":"p6","tool":"Bash","id":"f6","input":{"command":"cd /w/fake-55 && gh pr view 58 --json state"},"branch":"55-count-friction","origin":"u473t8/fake"}
+{"at":"2026-11-12T12:06:00Z","event":"PostToolUse","session":"s1","turn":"p6","id":"f6"}
+{"at":"2026-11-12T12:07:00Z","event":"PreToolUse","session":"s1","turn":"p6","tool":"Bash","id":"f7","input":{"command":"cd /w/fake-55 && gh pr view 58 --json state"},"branch":"55-count-friction","origin":"u473t8/fake"}
+{"at":"2026-11-12T12:07:00Z","event":"PostToolUse","session":"s1","turn":"p6","id":"f7"}
+{"at":"2026-11-12T12:08:00Z","event":"PreToolUse","session":"s1","turn":"p6","tool":"Bash","id":"f8","input":{"command":"cd /w/fake-55 && gh pr view 58 --json state"},"branch":"55-count-friction","origin":"u473t8/fake"}
+{"at":"2026-11-12T12:08:00Z","event":"PostToolUse","session":"s1","turn":"p6","id":"f8"}
+{"at":"2026-11-12T12:10:00Z","event":"PreToolUse","session":"s1","turn":"p6","tool":"Bash","id":"g1","input":{"command":"cd /w/fake-55 && git status"},"branch":"55-count-friction","origin":"u473t8/fake"}
+{"at":"2026-11-12T12:10:00Z","event":"PostToolUse","session":"s1","turn":"p6","id":"g1"}
+{"at":"2026-11-12T12:11:00Z","event":"PreToolUse","session":"s1","turn":"p6","tool":"Bash","id":"h1","input":{"command":"gh -R me/secret-repo pr view 58"},"branch":"main","origin":"u473t8/fake"}
+{"at":"2026-11-12T12:11:00Z","event":"PostToolUseFailure","session":"s1","turn":"p6","id":"h1"}
+{"at":"2026-11-12T12:12:00Z","event":"PreToolUse","session":"s1","turn":"p6","tool":"Bash","id":"h2","input":{"command":"python3 -c \"import os\""},"branch":"main","origin":"u473t8/fake"}
+{"at":"2026-11-12T12:12:00Z","event":"PostToolUseFailure","session":"s1","turn":"p6","id":"h2"}
+{"at":"2026-11-12T12:13:00Z","event":"PreToolUse","session":"s1","turn":"p6","tool":"Read","id":"h3","input":{"file_path":"/secret/a"}}
+{"at":"2026-11-12T12:13:00Z","event":"PermissionRequest","session":"s1","turn":"p6","tool":"Read","input":{"file_path":"/secret/a"},"asks":["Bash(gh api *)","Bash(rm *)","Read(/secret/**)","Bash(curl https://host/tok*)"]}
+{"at":"2026-11-12T12:14:00Z","event":"PostToolUse","session":"s1","turn":"p6","id":"h3"}
+{"at":"2026-11-12T12:15:00Z","event":"PreToolUse","session":"s1","turn":"p6","tool":"Read","id":"h4","input":{"file_path":"/tmp/x"}}
+{"at":"2026-11-12T12:15:00Z","event":"PermissionRequest","session":"s1","turn":"p6","tool":"Read","input":{"file_path":"/tmp/x"},"asks":["Bash(gh api *)","Bash(rm *)","Read(/secret/**)","Bash(curl https://host/tok*)"]}
+{"at":"2026-11-12T12:16:00Z","event":"PostToolUse","session":"s1","turn":"p6","id":"h4"}
+{"at":"2026-11-12T12:16:00Z","event":"PreToolUse","session":"s1","turn":"p6","tool":"Bash","id":"z2","input":{"command":"cd /w/fake-55 && gh api repos/x/stale"},"branch":"55-count-friction","origin":"u473t8/fake"}
+{"at":"2026-11-12T12:16:00Z","event":"PermissionRequest","session":"s1","turn":"p6","tool":"Bash","input":{"command":"cd /w/fake-55 && gh api repos/x/stale"},"asks":["Bash(gh api *)","Bash(rm *)","Read(/secret/**)","Bash(curl https://host/tok*)"]}
+{"at":"2026-11-12T12:16:00Z","event":"PostToolUse","session":"s1","turn":"p6","id":"z2"}
+{"at":"2026-11-12T12:16:00Z","event":"PreToolUse","session":"s1","turn":"p6","tool":"Bash","id":"u1","input":{"command":"cd /w/fake-55 && curl https://host/tok123"},"branch":"55-count-friction","origin":"u473t8/fake"}
+{"at":"2026-11-12T12:16:00Z","event":"PermissionRequest","session":"s1","turn":"p6","tool":"Bash","input":{"command":"cd /w/fake-55 && curl https://host/tok123"},"asks":["Bash(gh api *)","Bash(rm *)","Read(/secret/**)","Bash(curl https://host/tok*)"]}
+{"at":"2026-11-12T12:16:00Z","event":"PostToolUse","session":"s1","turn":"p6","id":"u1"}
+{"at":"2026-11-12T12:16:00Z","event":"PreToolUse","session":"s1","turn":"p6","tool":"Bash","id":"v9","input":{},"branch":"55-count-friction","origin":"u473t8/fake"}
+{"at":"2026-11-12T12:16:00Z","event":"PostToolUse","session":"s1","turn":"p6","id":"v9"}
+{"at":"2026-11-12T12:16:00Z","event":"PreToolUse","session":"s1","turn":"p6","tool":"Bash","id":"y1","input":{"command":"cd /w/fake-55 && make"},"branch":"55-count-friction","origin":"U473T8/Fake"}
+{"at":"2026-11-12T12:16:00Z","event":"PostToolUseFailure","session":"s1","turn":"p6","id":"y1"}
+{"at":"2026-11-12T12:17:00Z","event":"PreToolUse","session":"s1","turn":"p6","agent":"sub1","tool":"Bash","id":"s1","input":{"command":"gh api repos/u473t8/fake/issues"},"branch":"main","origin":"u473t8/fake"}
+{"at":"2026-11-12T12:17:00Z","event":"PermissionRequest","session":"s1","turn":"p6","agent":"sub1","tool":"Bash","input":{"command":"gh api repos/u473t8/fake/issues"},"asks":["Bash(gh api *)","Bash(rm *)","Read(/secret/**)","Bash(curl https://host/tok*)"]}
+{"at":"2026-11-12T12:18:00Z","event":"PostToolUse","session":"s1","turn":"p6","agent":"sub1","id":"s1"}
+{"at":"2026-11-12T12:19:00Z","event":"SubagentStop","session":"s1","turn":"p6","agent":"sub1","needs_input":false}
+{"at":"2026-11-12T12:20:00Z","event":"Stop","session":"s1","turn":"p6","needs_input":false}
+{"at":"2026-11-12T12:40:00Z","event":"UserPromptSubmit","session":"s1","turn":"p7","prompt":"ещё"}
+{"at":"2026-11-12T12:40:00Z","event":"PreToolUse","session":"s1","turn":"p7","tool":"Bash","id":"g2","input":{"command":"cd /w/fake-55 && git status"},"branch":"55-count-friction","origin":"u473t8/fake"}
+{"at":"2026-11-12T12:40:00Z","event":"PostToolUse","session":"s1","turn":"p7","id":"g2"}
+{"at":"2026-11-12T12:41:00Z","event":"Stop","session":"s1","turn":"p7","needs_input":false}
+{"at":"2026-11-12T13:10:00Z","event":"UserPromptSubmit","session":"s1","turn":"p8","prompt":"дальше2"}
+{"at":"2026-11-12T13:10:00Z","event":"PreToolUse","session":"s1","turn":"p8","tool":"Bash","id":"g3","input":{"command":"cd /w/fake-55 && git status"},"branch":"55-count-friction","origin":"u473t8/fake"}
+{"at":"2026-11-12T13:10:00Z","event":"PostToolUse","session":"s1","turn":"p8","id":"g3"}
+{"at":"2026-11-12T13:11:00Z","event":"Stop","session":"s1","turn":"p8","needs_input":false}
+{"at":"2026-11-12T13:20:00Z","event":"UserPromptSubmit","session":"s1","turn":"p8b","prompt":"и ещё"}
+{"at":"2026-11-12T13:21:00Z","event":"PreToolUse","session":"s1","turn":"p8b","tool":"Bash","id":"k1","input":{"command":"cd /w/fake-55 && rm -rf y"},"branch":"55-count-friction","origin":"u473t8/fake"}
+{"at":"2026-11-12T13:21:00Z","event":"PermissionRequest","session":"s1","turn":"p8b","tool":"Bash","input":{"command":"cd /w/fake-55 && rm -rf y"},"asks":["Bash(gh api *)","Bash(rm *)","Read(/secret/**)","Bash(curl https://host/tok*)"]}
+{"at":"2026-11-12T13:30:00Z","event":"UserPromptSubmit","session":"s1","turn":"p8c","prompt":"сделай"}
+{"at":"2026-11-12T13:31:00Z","event":"PreToolUse","session":"s1","turn":"p8c","tool":"Bash","id":"m1","input":{"command":"cd /w/fake-55 && git diff"},"branch":"55-count-friction","origin":"u473t8/fake"}
+{"at":"2026-11-12T13:31:00Z","event":"PostToolUse","session":"s1","turn":"p8c","id":"m1"}
+{"at":"2026-11-12T13:32:00Z","event":"StopFailure","session":"s1","turn":"p8c"}
+{"at":"x","event":"Stop","session":"s1"}
+{"at":"2026-11-12T13:40:00Z","event":"Stop","session":"s1","turn":""}
+{"at":"2026-11-12T15:00:00Z","event":"UserPromptSubmit","session":"s1","turn":"p9","prompt":"что-то ещё"}
+{"at":"2026-11-12T15:01:00Z","event":"PreToolUse","session":"s1","turn":"p9","tool":"Bash","id":"l1","input":{"command":"gh api graphql -f query=late"},"branch":"main","origin":"u473t8/fake"}
+{"at":"2026-11-12T15:01:00Z","event":"PermissionRequest","session":"s1","turn":"p9","tool":"Bash","input":{"command":"gh api graphql -f query=late"},"asks":["Bash(gh api *)","Bash(rm *)","Read(/secret/**)","Bash(curl https://host/tok*)"]}
+{"at":"2026-11-12T15:02:00Z","event":"PostToolUse","session":"s1","turn":"p9","id":"l1"}
+{"at":"2026-11-12T15:03:00Z","event":"Stop","session":"s1","turn":"p9","needs_input":false}
+{"at":"2026-11-12T11:00:00Z","event":"UserPromptSubmit","session":"s2","turn":"q1","prompt":"x"}
+{"at":"2026-11-12T11:00:00Z","event":"PreToolUse","session":"s2","turn":"q1","tool":"Bash","id":"n0","input":{"command":"npm test"},"branch":"main","origin":"other/proj"}
+{"at":"2026-11-12T11:00:00Z","event":"PostToolUseFailure","session":"s2","turn":"q1","id":"n0"}
+{"at":"2026-11-12T11:01:00Z","event":"PreToolUse","session":"s2","turn":"q1","tool":"Bash","id":"n1","input":{"command":"npm test"},"branch":"main","origin":"other/proj"}
+{"at":"2026-11-12T11:01:00Z","event":"PostToolUseFailure","session":"s2","turn":"q1","id":"n1"}
+{"at":"2026-11-12T11:02:00Z","event":"PreToolUse","session":"s2","turn":"q1","tool":"Bash","id":"n2","input":{"command":"npm test"},"branch":"main","origin":"other/proj"}
+{"at":"2026-11-12T11:02:00Z","event":"PostToolUseFailure","session":"s2","turn":"q1","id":"n2"}
+{"at":"2026-11-12T11:03:00Z","event":"Stop","session":"s2","turn":"q1","needs_input":false}
+{"at":"2026-11-12T16:00:00Z","event":"PreToolUse","session":"s1","tu

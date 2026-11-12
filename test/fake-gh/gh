@@ -8,6 +8,7 @@
 #   pr-review       output of `pr view --json reviewDecision,mergeStateStatus …`, e.g. "APPROVED CLEAN"
 #   no-auto-merge   when present, `pr merge --auto` fails as in a repository without auto-merge
 #   gate-issue.json the full response of `api graphql` (the gate's issue query)
+#   retro.json      the full response of `api graphql` for the retrospective's query
 #   perm-<login>    output of `api …/collaborators/<login>/permission --jq .permission`
 #   pr-files.json   output of `api …/pulls/<n>/files --paginate`
 #   gh-fails        when present, every `api` call fails, as when GitHub is unreachable
@@ -41,7 +42,11 @@ case "${1:-} ${2:-}" in
   "api "*)
     [ -e "$FAKE_GH_DIR/gh-fails" ] && { echo "error connecting to api.github.com" >&2; exit 1; }
     case "$2" in
-      graphql) answer gate-issue.json ;;
+      graphql)
+        case "$*" in
+          *closedByPullRequestsReferences*) answer retro.json ;;
+          *) answer gate-issue.json ;;
+        esac ;;
       */permission) u="${2%/permission}"; answer "perm-${u##*/}" ;;
       */files*) answer pr-files.json ;;
     esac ;;

@@ -126,10 +126,20 @@ component is an M: stop, resize it and ask for G1.
 
 ## 11. Retrospective
 
-- After the merge, post a `## Retrospective` comment on the issue (#28). It covers the flow,
-  code rules, determinism, friction (the owner's manual steps, waiting, prompts, corrections),
-  mistakes and wrong assumptions, facts learned, and what worked. XS and S may say "nothing to
-  change" in one line.
+- After the merge, collect the data: `bb .shared/bin/kit retro <issue>` (in dev-kit itself
+  `bb bin/kit retro <issue> --repo shundeev/dev-kit`). It counts the friction that dev-kit's hooks
+  recorded as it happened, and adds GitHub's: the owner's confirmation windows by the ask rule
+  behind them, questions, interruptions, the owner's «трение:» marks, refusals, tool errors,
+  repeated commands, reviews, waiting, CI and manual steps. The agent cannot see a confirmation
+  window, so friction comes from this table, not from memory.
+- The hooks tie an event to its task by the git branch of the directory it touched. Name
+  worktrees by literal paths (`cd /abs/path`, `git -C /abs/path`), not by shell variables.
+- Post a `## Retrospective` comment on the issue (#28) that starts with the table. It covers the
+  flow, code rules, determinism, friction, mistakes and wrong assumptions, facts learned, and what
+  worked. XS and S may say "nothing to change" in one line after the table.
+- A cause the table lists as recurring (3 or more in 14 days) is a finding, whatever this task's
+  own count. The owner's other messages are classified locally (`--messages`: corrections,
+  requests to explain, repeated asks); only counts and paraphrases are published.
 - Every finding ends with a proposal, and the owner decides which become issues. A lesson that
   holds for every project goes to dev-kit, not to the agent's memory. A fact learned about GitHub
   or a tool goes where a decision depends on it (code, test, rule, ADR), or nowhere. A detail that
