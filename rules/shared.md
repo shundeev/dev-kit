@@ -4,6 +4,11 @@ These rules apply to every agent working in this repository (Claude Code, Codex,
 
 - When reporting verification, say exactly what was proven and what was not.
 - Project structure and how to run things: README.md.
+- How a tool or service behaves comes from its current official documentation for the version in
+  use, never from forums or memory, and is then checked: read the documentation, run the command;
+  if the result differs, read the documentation closer; if it is still unclear, run an experiment
+  in a scratch setup. Nothing is taken on faith. Link the page that settled it where a decision
+  depends on it.
 
 ## Delivery
 

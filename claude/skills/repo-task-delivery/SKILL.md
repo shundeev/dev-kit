@@ -58,8 +58,10 @@ component is an M: stop, resize it and ask for G1.
   expensive to reverse also becomes an ADR in the same pull request.
 - Check the design against:
   - a new machine, a new repository, a new worktree, offline, and a second person (#18, #22);
-  - every claim a guarantee rests on: test it, do not take it from docs or forums (#22). Known
-    facts live in `docs/facts.md` once it exists (#28);
+  - every claim a guarantee rests on: checked as the rules say (current documentation, a run, an
+    experiment when unclear), never taken from forums or memory (#22). The proven fact is written
+    where the decision depends on it: in the mechanism's code or test, the process step, or the
+    ADR, with links to the documentation and the evidence. There is no separate list of facts;
   - each manual step for the owner: automate it, or plan it as numbered steps in the PR.
 - For M, post the design on the issue as a comment starting with `## Design`, and name what the
   owner decides.
@@ -129,5 +131,7 @@ component is an M: stop, resize it and ask for G1.
   mistakes and wrong assumptions, facts learned, and what worked. XS and S may say "nothing to
   change" in one line.
 - Every finding ends with a proposal, and the owner decides which become issues. A lesson that
-  holds for every project goes to dev-kit, not to the agent's memory.
+  holds for every project goes to dev-kit, not to the agent's memory. A fact learned about GitHub
+  or a tool goes where a decision depends on it (code, test, rule, ADR), or nowhere. A detail that
+  can become a mechanism becomes one instead of a note.
 - Follow-up work is a new task, except obvious closeout caused by the merged change.
