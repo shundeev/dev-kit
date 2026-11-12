@@ -55,7 +55,6 @@
     ],
     "ask": [
       "Bash(* --skip-retro*)",
-      "Bash(gh issue close *)",
       "Bash(gh issue delete *)",
       "Bash(gh pr close *)",
       "Bash(gh pr merge *)",
