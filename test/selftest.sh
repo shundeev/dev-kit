@@ -968,6 +968,70 @@ rm "$G/gh-fails"; git switch -q main
 [ -z "$(hook src/a.clj)" ] && ok "hook: a branch without an issue is not gated" || bad "hook gated main"
 cd "$P" || exit 1
 
+echo "- user-level test in CI (#27)"
+fresh "$WORK/ut"; bb $kit init --showcase Site >/dev/null 2>&1
+ut() { bb -e "(spit \"kit.edn\" (pr-str (assoc (clojure.edn/read-string (slurp \"kit.edn\")) :user-test $1)))"; }
+expect_exit 0 "modules: a project without :user-test" bb $kit modules
+grep -qx 'user_test=false' <<<"$LAST" && ok "  leaves the step off" || bad "  user_test" "$LAST"
+expect_exit 1 "user-test: without :user-test it says what to add" bb $kit user-test
+contains "  the key and its shape" ":user-test {:run" "$LAST"
+ut '{:artifacts "out"}'
+expect_exit 1 "doctor: :user-test without :run fails" bb $kit doctor --ci
+contains "  names the key" ":user-test" "$LAST"
+expect_exit 1 "user-test: refuses it too" bb $kit user-test
+contains "  with the same reason" ":user-test" "$LAST"
+ut '{:run "true" :artifacts "../elsewhere"}'
+expect_exit 1 "doctor: artifacts outside the project fail" bb $kit doctor --ci
+contains "  says where they belong" "inside the project" "$LAST"
+ut '{:run "true" :artifacts "/tmp/out"}'
+expect_exit 1 "doctor: an absolute artifacts path fails" bb $kit doctor --ci
+accepted=""
+# shellcheck disable=SC2088 # a literal ~ is the case: kit.edn holds it as text
+for a in . '*' '!x' 'a b' '~/x' './x'; do
+  ut "{:run \"true\" :artifacts \"$a\"}"
+  bb $kit doctor --ci >/dev/null 2>&1 && accepted="$accepted [$a]"
+done
+[ -z "$accepted" ] && ok "doctor: artifacts upload-artifact would read as a pattern fail (. * !x, a space, ~, ./)" \
+  || bad "doctor accepted artifacts" "$accepted"
+accepted=""
+for u in '"npm test"' '{:run 5}' '{:run "  "}' '[1]'; do
+  ut "$u"
+  bb $kit doctor --ci >/dev/null 2>&1 && accepted="$accepted [$u]"
+done
+[ -z "$accepted" ] && ok "doctor: a :user-test that is not {:run \"<command>\"} fails" || bad "doctor accepted :user-test" "$accepted"
+ut '{:run "mkdir -p out && echo seen > out/shot.txt && echo visitor-ok" :artifacts "out"}'
+expect_exit 0 "doctor: a declared user-level test passes" bb $kit doctor --ci
+expect_exit 0 "modules: a declared user-level test" bb $kit modules
+grep -qx 'user_test=true' <<<"$LAST" && ok "  turns the step on" || bad "  user_test" "$LAST"
+grep -qx 'user_test_artifacts=out' <<<"$LAST" && ok "  names the folder to keep" || bad "  artifacts" "$LAST"
+mkdir -p sub
+expect_exit 0 "user-test: runs the project's command" bash -c "cd sub && bb ../$kit user-test"
+contains "  shows its output" "visitor-ok" "$LAST"
+[ "$(cat out/shot.txt 2>/dev/null)" = seen ] && ok "  from the project's root" || bad "  not from the root" "$(find . -name shot.txt)"
+ut '{:run "echo broken-page >&2; exit 3"}'
+expect_exit 3 "user-test: a failing test fails with its own exit code" bb $kit user-test
+contains "  and shows why" "broken-page" "$LAST"
+expect_exit 0 "modules: without :artifacts" bb $kit modules
+grep -qx 'user_test_artifacts=' <<<"$LAST" && ok "  there is nothing to upload" || bad "  artifacts" "$LAST"
+steps="$(bb -e "
+(require '[clj-yaml.core :as y] '[clojure.string :as str])
+(let [steps (vec (get-in (y/parse-string (slurp \"$KIT/ci/action.yml\")) [:runs :steps]))
+      i (first (keep-indexed (fn [i s] (when (= \"user-test\" (:id s)) i)) steps))
+      run (when i (get steps i)) up (when i (get steps (inc i)))]
+  (println (str \"last=\" (= i (- (count steps) 2))))
+  (println (str \"gated=\" (= (:if run) \"steps.kit.outputs.user_test == 'true'\")))
+  (println (str \"runs=\" (boolean (some-> (:run run) (str/includes? \"user-test\")))))
+  (println (str \"upload=\" (boolean (some-> (:uses up) (str/starts-with? \"actions/upload-artifact@\")))))
+  (println (str \"on-failure=\" (boolean (some-> (:if up) (str/includes? \"!cancelled()\")))))
+  (println (str \"after-it=\" (boolean (some-> (:if up) (str/includes? \"steps.user-test.outcome != 'skipped'\")))))
+  (println (str \"path=\" (get-in up [:with :path]))))" 2>&1)"
+grep -qx 'last=true' <<<"$steps" && grep -qx 'gated=true' <<<"$steps" && grep -qx 'runs=true' <<<"$steps" \
+  && ok "CI: the user-level test runs after every other check, only when kit.edn declares it" || bad "CI user-level test step" "$steps"
+grep -qx 'upload=true' <<<"$steps" && grep -qx 'on-failure=true' <<<"$steps" && grep -qx 'after-it=true' <<<"$steps" \
+  && grep -qxF 'path=${{ steps.kit.outputs.user_test_artifacts }}' <<<"$steps" \
+  && ok "CI: its artifacts are uploaded even when it fails" || bad "CI artifacts step" "$steps"
+cd "$P" || exit 1
+
 echo "- the GitHub side: kit github and the doctor check (#33, fake gh)"
 rs="$KIT/managed/github/ruleset.json"
 pr_rule() { jq -c --arg k "$2" '.rules[] | select(.type == "pull_request") | .parameters[$k]' "$1"; }

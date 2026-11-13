@@ -5,6 +5,7 @@
 ;;   .shared/bin/kit init     --local   per-machine items only (the SessionStart hook runs it)
 ;;   .shared/bin/kit doctor   [--ci] [--quiet]
 ;;   .shared/bin/kit modules
+;;   .shared/bin/kit user-test   the project's user-level test, :user-test in kit.edn (#27)
 ;;   .shared/bin/kit identity [--dir PATH]   the agent's GitHub identity alone, for any repository
 ;;   .shared/bin/kit github   [--check NAME] [--yes] [--repo R]   the repository's main ruleset and access, set up by
 ;;                            the owner in their own terminal (#33); --check defaults to checks
@@ -105,8 +106,10 @@
 
 (defn config-problems
   "What is wrong with kit.edn over the defaults, each naming the key and the fix (#14)."
-  [{:keys [repo showcase modules base owners board agent]}]
-  (let [unknown (when (coll? modules) (remove known-modules modules))]
+  [{:keys [repo showcase modules base owners board agent user-test]}]
+  (let [unknown   (when (coll? modules) (remove known-modules modules))
+        run       (when (map? user-test) (:run user-test))
+        artifacts (when (map? user-test) (:artifacts user-test))]
     (cond-> []
       (not (and (string? repo) (re-matches #"[^/\s]+/[^/\s]+" repo)))
       (conj (str ":repo is " (pr-str repo) ", not \"owner/name\": set it in kit.edn (kit init --repo owner/name in a new project)"))
@@ -129,10 +132,36 @@
       (not (and (string? (:owner board)) (int? (:number board)))) (conj ":board must be {:owner \"login\" :number N}")
 
       (not (or (nil? agent) (and (map? agent) (every? #(string? (get agent %)) [:login :email :gh-config-dir]))))
-      (conj ":agent must be nil, or a map with :login, :email and :gh-config-dir (the agent's account; see kit-defaults.edn)"))))
+      (conj ":agent must be nil, or a map with :login, :email and :gh-config-dir (the agent's account; see kit-defaults.edn)")
+
+      (not (or (nil? user-test) (and (string? run) (not (str/blank? run)))))
+      (conj (str ":user-test must be nil, or {:run \"<command>\" :artifacts \"<folder>\"} with :run the command of the"
+                 " project's user-level test (#27, docs/user-level-tests.md)"))
+
+      ;; A plain path: upload-artifact reads *, !, ~ and the like as patterns, and "." would be the whole checkout.
+      (not (or (nil? artifacts)
+               (and (string? artifacts) (re-matches #"[A-Za-z0-9_][A-Za-z0-9._/-]*" artifacts)
+                    (not-any? #{".."} (str/split artifacts #"/")))))
+      (conj (str ":user-test :artifacts is " (pr-str artifacts) ": it must be a folder inside the project, named with"
+                 " letters, digits, . _ - and /, e.g. \"test-results\"")))))
 
 
 (defn clojure? [cfg] (contains? (set (:modules cfg)) :clojure))
+
+
+(defn user-test!
+  "Runs the project's user-level test, :user-test :run in kit.edn, from the project's root, and exits with its code
+  (#27). CI runs it inside the `checks` job, after the other checks."
+  []
+  (let [cfg (or (read-config) (fail! "no kit.edn: run .shared/bin/kit init first"))
+        _   (some->> (seq (config-problems cfg)) (map #(str "kit.edn: " %)) (str/join "; ") fail!)
+        run (get-in cfg [:user-test :run])]
+    (when-not run
+      (fail! "kit.edn has no :user-test: add :user-test {:run \"<the command of the user-level test>\""
+             ":artifacts \"<the folder it writes>\"} (docs/user-level-tests.md in dev-kit)"))
+    (println (str "user-level test: " run))
+    (flush)
+    (System/exit (:exit @(p/process {:dir (str root) :inherit true} "bash" "-c" run)))))
 
 
 ;; ------------------------------------------------------------------ expected state
@@ -1427,7 +1456,11 @@
     (case cmd
       "init" (let [opts (parse-args args)] (if (:local opts) (init-local) (init opts)))
       "doctor" (doctor (parse-args args))
-      "modules" (println (str "clojure=" (boolean (some-> (read-config) clojure?))))
+      "modules" (let [cfg (read-config)]
+                  (println (str "clojure=" (boolean (some-> cfg clojure?))))
+                  (println (str "user_test=" (boolean (get-in cfg [:user-test :run]))))
+                  (println (str "user_test_artifacts=" (or (get-in cfg [:user-test :artifacts]) ""))))
+      "user-test" (user-test!)
       "identity" (identity! (parse-args args))
       "github" (github! (parse-args args))
       "gate" (gate! (parse-args args))
