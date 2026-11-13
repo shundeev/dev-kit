@@ -109,6 +109,9 @@ component is an M: stop, resize it and ask for G1.
 
 - Check the behaviour where a person meets it: a UI in a real browser, a service through its
   requests or CLI, a script through a real run, an LLM system through its eval suite.
+  What each kind asserts: `.shared/docs/user-level-tests.md`.
+- When `kit.edn` declares `:user-test`, run `.shared/bin/kit user-test`: CI runs the same command
+  on every pull request. A test that checks the change and is not there yet is added to it.
 - The evidence goes under **User-level test**. A check that can only run after the merge
   (GitHub reads templates and rulesets from `main`) is named as such, and its result goes on
   the issue.

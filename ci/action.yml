@@ -47,3 +47,21 @@ runs:
       if: steps.kit.outputs.clojure == 'true'
       shell: bash
       run: '"${{ github.action_path }}/../clojure/zprint_check.sh"'
+
+    # The user-level test (dev-kit#27, docs/user-level-tests.md): the change checked the way a person
+    # meets it, by the command in kit.edn's :user-test. It runs last, so the code checks fail first.
+    - name: User-level test
+      id: user-test
+      if: steps.kit.outputs.user_test == 'true'
+      shell: bash
+      run: bb "${{ github.action_path }}/../bin/kit" user-test
+
+    # Kept when the test fails too: a failure's screenshots are the ones worth seeing. Hidden files
+    # are left out by the action's default, and the path is a folder kit.edn names inside the project.
+    - name: Keep the user-level test's artifacts
+      if: ${{ !cancelled() && steps.user-test.outcome != 'skipped' && steps.kit.outputs.user_test_artifacts != '' }}
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: user-test
+        path: ${{ steps.kit.outputs.user_test_artifacts }}
+        overwrite: true # a re-run of the failed job uploads again under the same name

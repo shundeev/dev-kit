@@ -43,6 +43,7 @@ git add -A && git commit -m "chore: add dev-kit"
 | `kit retro N` | The friction data of merged issue N, for its retrospective. From the friction log the hooks keep on this machine (`~/.local/state/dev-kit/friction`, never committed): confirmation windows by the rule behind them, questions, interruptions, «трение:» marks, refusals, errors, repeated commands and where the time went. From GitHub: reviews, waiting on the owner and CI. Counts only. |
 | `kit retro --missing` | Merged issues of the last 14 days without a retrospective. New work waits for them. |
 | `kit gate …` | The pull request gate: the branch of an open issue, the title, the `ADR:` line, filled **Review** and **User-level test**, accepted ADRs unchanged, the design approval and the size. CI runs it, again when a title or body is edited; the finish script runs its shape rules before it opens a PR; the edit hook runs the design approval. |
+| `kit user-test` | The project's user-level test, `:user-test` in `kit.edn`, run from the project's root. CI runs it after the other checks and keeps its artifacts, also when it fails ([docs/user-level-tests.md](docs/user-level-tests.md)). |
 | `kit identity`, `kit modules` | The agent's identity alone, for a repository without dev-kit; the modules, for CI. |
 
 ## How updates arrive
@@ -87,9 +88,10 @@ You do not have to watch for updates: the session start says when the pinned com
 ## kit.edn
 
 ```clojure
-{:repo     "shundeev/site"
- :showcase "Site"
- :modules  #{}}          ; #{:clojure} for the shared zprint/clj-kondo setup
+{:repo      "shundeev/site"
+ :showcase  "Site"
+ :modules   #{}          ; #{:clojure} for the shared zprint/clj-kondo setup
+ :user-test {:run "npm ci && npx playwright test" :artifacts "test-results"}} ; optional, run in CI
 ```
 
 Defaults come from `kit-defaults.edn`: the board, the base branch, the code owners and the agent's account. A project can override `:board`, `:base`, `:owners`, `:agent` and `:claude-settings`; the last is merged into the generated settings.
