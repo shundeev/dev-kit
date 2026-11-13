@@ -23,7 +23,7 @@ the pull request MERGED. When GitHub already merged it, only the closeout runs: 
 did not merge keeps its branch.
 
 Options:
-  --repo <owner/repo>           Default: GHWF_REPO, then the origin remote
+  --repo <owner/repo>           Default: the folder's origin on GitHub, then GHWF_REPO
   --owner <login>               Board owner (default: GHWF_OWNER)
   --project-number <number>     Board number (default: GHWF_PROJECT_NUMBER)
   --base <branch>               Default: GHWF_DEFAULT_BASE or main
@@ -41,7 +41,7 @@ die() {
   exit 1
 }
 
-repo="${GHWF_REPO:-}"
+repo=""
 owner="${GHWF_OWNER:-}"
 project_number="${GHWF_PROJECT_NUMBER:-}"
 base_branch="${GHWF_DEFAULT_BASE:-main}"
@@ -61,11 +61,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$repo" ]]; then
-  origin_url="$(git remote get-url origin 2>/dev/null || true)"
-  [[ "$origin_url" =~ github.com[:/]([^/]+/[^/.]+)(\.git)?$ ]] && repo="${BASH_REMATCH[1]}"
-fi
-[[ -n "$repo" ]] || die "--repo or GHWF_REPO is required"
+repo="$(resolve_repo "$repo")" || exit 1
 
 branch_name="$(git rev-parse --abbrev-ref HEAD)"
 [[ "$branch_name" != "$base_branch" && "$branch_name" != "HEAD" ]] \
@@ -80,7 +76,7 @@ pr_url="$(gh pr list -R "$repo" --head "$branch_name" --state open --json url --
 if [[ -z "$pr_url" ]]; then
   # Merged by GitHub's auto-merge after the owner's Approve: only the closeout is left.
   pr_url="$(gh pr list -R "$repo" --head "$branch_name" --state merged --json url --jq '.[0].url // empty')"
-  [[ -n "$pr_url" ]] || die "No open or merged pull request for branch '$branch_name'"
+  [[ -n "$pr_url" ]] || die "No open or merged pull request for branch '$branch_name' in $repo; if that is the wrong repository, pass --repo owner/name"
   echo "Already merged by GitHub: $pr_url"
 else
   read -r review_decision merge_state <<<"$(gh pr view "$pr_url" --json reviewDecision,mergeStateStatus \

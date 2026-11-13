@@ -24,7 +24,7 @@ Options:
   --status <option>             Status field option to set
   --mode <issue|draft-convert>  Default: issue
   --owner <login>               Project owner (default: GHWF_OWNER)
-  --repo <owner/repo>           Repo (default: GHWF_REPO)
+  --repo <owner/repo>           Repo (default: the folder's origin on GitHub, then GHWF_REPO)
   --project-number <number>     Project number (default: GHWF_PROJECT_NUMBER)
   --showcase-field <name>       Field name (default: GHWF_SHOWCASE_FIELD or Showcase)
   --priority-field <name>       Field name (default: GHWF_PRIORITY_FIELD or Priority)
@@ -258,7 +258,7 @@ use_project_item() {
 }
 
 owner="${GHWF_OWNER:-}"
-repo="${GHWF_REPO:-}"
+repo=""
 project_number="${GHWF_PROJECT_NUMBER:-}"
 showcase_field="${GHWF_SHOWCASE_FIELD:-Showcase}"
 priority_field="${GHWF_PRIORITY_FIELD:-Priority}"
@@ -399,7 +399,7 @@ done
 
 [[ -n "$title" ]] || die "--title is required"
 [[ -n "$owner" ]] || die "--owner or GHWF_OWNER is required"
-[[ -n "$repo" ]] || die "--repo or GHWF_REPO is required"
+repo="$(resolve_repo "$repo")" || exit 1
 [[ -n "$project_number" ]] || die "--project-number or GHWF_PROJECT_NUMBER is required"
 [[ "$mode" == "issue" || "$mode" == "draft-convert" ]] || die "--mode must be 'issue' or 'draft-convert'"
 [[ "$skip_branch" -eq 0 || "$no_checkout" -eq 0 ]] || die "--skip-branch and --no-checkout are mutually exclusive: one creates no branch, the other creates one without touching the working tree"
@@ -455,7 +455,7 @@ if [[ "$reuse_existing" -eq 1 ]]; then
   elif [[ -n "$issue_number_override" ]]; then
     issue_number="$issue_number_override"
     issue_url="$(gh issue view "$issue_number" -R "$repo" --json url --jq '.url')"
-    [[ -n "$issue_url" ]] || die "Issue #$issue_number not found"
+    [[ -n "$issue_url" ]] || die "Issue #$issue_number not found in $repo; if that is the wrong repository, pass --repo owner/name"
 
     item_json="$(gh project item-add "$project_number" --owner "$owner" --url "$issue_url" --format json)"
     item_id="$(jq -r '.id // empty' <<<"$item_json")"
