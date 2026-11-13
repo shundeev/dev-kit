@@ -1140,6 +1140,30 @@ owners '["other-org/owners"]'
 expect_exit 1 "github: a team of another organization is refused" ghk --yes
 contains "  names it" "other-org" "$LAST"
 cp "$WORK/gh33-kit.edn" kit.edn
+# At a terminal (#91): the answer typed at "Apply these changes?", through a pseudo-terminal. Yes is read as
+# Linux's rpmatch(3) reads it: ^[yY] always, and the locale's yesexpr. A fake `locale` stands in for a Russian
+# one, which CI does not have.
+RUL="$WORK/ru-locale"; mkdir -p "$RUL"; printf '#!/bin/sh\necho "^[+1yYДд]"\n' > "$RUL/locale"; chmod +x "$RUL/locale"
+pty() { # pty <answer> [dir put first on PATH]
+  : > "$GD/log"; rm -f "$GD/posted-ruleset.json"
+  printf '%s\n' "$1" | script -qec "env -u CLAUDECODE -u GH_TOKEN -u GITHUB_TOKEN -u GITHUB_REPOSITORY -u GHWF_REPO LC_ALL=C.UTF-8 TERM=xterm PATH='${2:+$2:}$KIT/test/fake-gh:$PATH' FAKE_GH_DIR='$GD' FAKE_GH_LOG='$GD/log' GH_CONFIG_DIR='$OC' bb $kit github" /dev/null 2>&1
+}
+answers() { # answers <want: yes|no> <locale dir or ""> <answer…>: the answers that came out otherwise
+  local want="$1" dir="$2" a odd=""; shift 2
+  for a in "$@"; do
+    out="$(pty "$a" "$dir")"
+    if [ -s "$GD/posted-ruleset.json" ]; then [ "$want" = yes ] || odd="$odd [$a]"; else [ "$want" = no ] || odd="$odd [$a]"; fi
+  done
+  echo "$odd"
+}
+rm -f "$GD/rulesets.json" "$GD/ruleset.json"
+odd="$(answers yes "" y Y yes Yeah)"; [ -z "$odd" ] && ok "github: y, Y, yes, Yeah apply, in any locale" || bad "github: not taken as yes:$odd"
+odd="$(answers no "" у д да n x)"; [ -z "$odd" ] && ok "github: у, д, да, n, x apply nothing in a C locale" || bad "github: taken as yes:$odd"
+odd="$(answers yes "$RUL" д Да + 1 y)"; [ -z "$odd" ] && ok "github: in a Russian locale д, Да, +, 1 and y apply, as its yesexpr says" || bad "github ru: not taken:$odd"
+odd="$(answers no "$RUL" у н нет)"; [ -z "$odd" ] && ok "github: у, н, нет apply nothing in a Russian locale either" || bad "github ru: taken as yes:$odd"
+out="$(pty у)"
+grep -q '«у»' <<<"$out" && grep -q 'nothing was changed' <<<"$out" \
+  && ok "github: an answer it did not take is named" || bad "github: unnamed answer" "$out"
 
 echo '[{"id":7,"name":"main"}]' > "$GD/rulesets.json"
 jq '. + {current_user_can_bypass: "never"}' "$WORK/gh33-same.json" > "$GD/ruleset.json"
