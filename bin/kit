@@ -1284,13 +1284,26 @@
         (str "rule " t ", " (name k) ": " (js hv) " → not set by dev-kit, reset")))))
 
 
+(defn yes-expr
+  "What counts as yes, as Linux's rpmatch(3) has it (#91): ^[yY] in any locale, and the locale's own pattern,
+  `locale yesexpr` (glibc's ru_RU: ^[+1yYДд]). A Cyrillic у is no, as there."
+  []
+  (let [own (try (some-> (p/sh {:continue true} "locale" "yesexpr") :out str/trim not-empty re-pattern)
+                 (catch Exception _ nil))]
+    (fn [answer] (boolean (or (re-find #"^[yY]" answer) (some-> own (re-find answer)))))))
+
+
 (defn- confirm!
-  "True when the changes may go ahead: --yes, or a yes from the person at the terminal."
+  "True when the changes may go ahead: --yes, or a yes from the person at the terminal. Any other answer is named,
+  so a no is never mistaken for a fault."
   [yes]
   (or yes
       (and (interactive?)
            (do (print "Apply these changes? [y/N] ") (flush)
-               (contains? #{"y" "yes"} (some-> (read-line) str/trim str/lower-case))))))
+               (let [a (str/trim (or (read-line) ""))]
+                 (or ((yes-expr) a)
+                     (do (println (str "  the answer was «" a "», not yes (y, or the yes of this system's language)"))
+                         false)))))))
 
 
 (defn github!
