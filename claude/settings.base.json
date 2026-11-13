@@ -61,14 +61,9 @@
       "Bash(gh repo edit *)",
       "Bash(gh secret *)",
       "Bash(gh workflow run *)",
-      "Bash(git branch -D *)",
-      "Bash(git checkout -- *)",
       "Bash(git checkout -b *)",
-      "Bash(git clean *)",
       "Bash(git push * --delete *)",
       "Bash(git push --delete *)",
-      "Bash(git reset --hard *)",
-      "Bash(git restore *)",
       "Bash(git switch -c *)"
     ],
     "deny": [
@@ -99,7 +94,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash|Edit|Write|NotebookEdit|MultiEdit",
+        "matcher": "Bash|Edit|Write|NotebookEdit|MultiEdit|Read|Grep|Glob",
         "hooks": [
           {
             "type": "command",
@@ -224,5 +219,16 @@
         ]
       }
     ]
+  },
+  "extraKnownMarketplaces": {
+    "dev-kit": {
+      "source": {
+        "source": "directory",
+        "path": "{{kit}}"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "project-link@dev-kit": true
   }
 }

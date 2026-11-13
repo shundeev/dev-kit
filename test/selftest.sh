@@ -89,9 +89,10 @@ done
 has allow "Bash(bash .claude/skills/gh-project-workflow/scripts/merge_issue_flow.sh *)" \
   && ! has ask "Bash(bash .claude/skills/gh-project-workflow/scripts/merge_issue_flow.sh *)" \
   && ok "the merge script runs without a prompt" || bad "the merge script still asks"
-for rule in "Bash(gh pr merge *)" \
-            "Bash(git reset --hard *)" "Bash(git clean *)" "Bash(git branch -D *)"; do
-  has ask "$rule" && ok "asks: $rule" || bad "asks: $rule"
+has ask "Bash(gh pr merge *)" && ok "asks: Bash(gh pr merge *)" || bad "asks: Bash(gh pr merge *)"
+# #20: the safety guard refuses these outright; an ask rule would never be reached
+for rule in "Bash(git reset --hard *)" "Bash(git clean *)" "Bash(git branch -D *)" "Bash(git checkout -- *)" "Bash(git restore *)"; do
+  has ask "$rule" && bad "still asks: $rule" || ok "no ask rule, the safety guard decides: $rule"
 done
 # #74: closing an issue reopens in one click and happens on the owner's word or from the flow scripts.
 if has ask "Bash(gh issue close *)"; then bad "closing an issue still asks the owner"; else ok "closing an issue does not ask"; fi
@@ -100,6 +101,17 @@ for rule in "Bash(git push --force *)" "Bash(git push * --force *)" "Bash(git pu
   has deny "$rule" && ok "denies: $rule" || bad "denies: $rule"
 done
 has allow "Bash(.shared/bin/kit *)" && ok "kit path substituted" || bad "kit path substituted"
+# #30: the project-link plugin comes from the pinned submodule, with nothing to install by hand
+jq -e '.extraKnownMarketplaces["dev-kit"].source == {source: "directory", path: ".shared"} and .enabledPlugins["project-link@dev-kit"] == true' \
+  .claude/settings.json >/dev/null && ok "settings enable project-link from the .shared marketplace" || bad "plugin settings" "$(jq -c '{extraKnownMarketplaces, enabledPlugins}' .claude/settings.json)"
+mk="$KIT/.claude-plugin/marketplace.json"
+jq -r '.plugins[] | "\(.name) \(.source)"' "$mk" | while read -r name src; do
+  [ "$(jq -r .name "$KIT/$src/.claude-plugin/plugin.json" 2>/dev/null)" = "$name" ] && echo ok || echo "bad $name"
+done | grep -q bad && bad "a marketplace entry does not match its plugin.json" \
+  || { [ "$(jq '.plugins | length' "$mk" 2>/dev/null || echo 0)" -ge 1 ] && ok "marketplace entries match their plugins" || bad "no plugins in $mk"; }
+if command -v claude >/dev/null 2>&1 && [ -z "${CI:-}" ]; then
+  out="$(claude plugin validate "$KIT" 2>&1)" && ok "claude plugin validate passes for dev-kit's marketplace" || bad "claude plugin validate" "$out"
+fi
 jq -e '.hooks.PreToolUse and .hooks.SessionStart' .claude/settings.json >/dev/null && ok "hooks survive the settings merge" || bad "hooks lost in the settings merge"
 perm allow | grep -q '{{kit}}' && bad "unsubstituted {{kit}}" || ok "no {{kit}} placeholder left"
 has allow "Bash(clj-kondo *)" && bad "clojure allows without the module" || ok "no clojure allows without the module"
@@ -559,6 +571,54 @@ contains "doctor names the version" "ignores onFailure" "$LAST"
 printf '#!/bin/sh\necho "2.1.322 (Claude Code)"\n' > "$fake/claude"
 out="$(PATH="$fake:$PATH" bb $kit doctor 2>&1)"
 grep -q "ignores onFailure" <<<"$out" && bad "new enough Claude Code flagged" "$out" || ok "new enough Claude Code passes"
+
+echo "- safety guard: destructive commands and secret reads (#20)"
+export CC_SAFETY_NET_HOME="$WORK/ccsn"
+call() { # call <tool> <tool_input JSON>: the project's PreToolUse entry hook, as Claude Code calls it
+  jq -nc --arg t "$1" --argjson i "$2" --arg d "$P" '{tool_name:$t, tool_input:$i, hook_event_name:"PreToolUse", cwd:$d}' \
+    | CLAUDE_PROJECT_DIR="$P" bash .claude/hooks/pretooluse.sh 2>&1; }
+refused() { grep -q '"permissionDecision":"deny"' <<<"$2" && ok "$1" || bad "$1" "$2"; }
+passes() { grep -q '"permissionDecision":"deny"' <<<"$2" && bad "$1" "$2" || ok "$1"; }
+jq -e '.hooks.PreToolUse[0].matcher | test("Read") and test("Grep") and test("Glob")' .claude/settings.json >/dev/null \
+  && ok "the entry hook sees reads too" || bad "the entry hook misses reads"
+refused "refuses: git reset --hard" "$(call Bash '{"command":"git reset --hard"}')"
+contains "  naming the rule" "Rule: git.reset-hard" "$(call Bash '{"command":"git reset --hard"}')"
+refused "refuses: git push -uf origin x (combined flags)" "$(call Bash '{"command":"git push -uf origin x"}')"
+refused "refuses: bash -c 'git reset --hard'" "$(call Bash "$(jq -nc '{command: "bash -c '"'"'git reset --hard'"'"'"}')")"
+refused "refuses: cat .env" "$(call Bash '{"command":"cat .env"}')"
+refused "refuses: a Read of .env" "$(call Read '{"file_path":".env"}')"
+refused "refuses: a Grep in .env" "$(call Grep '{"pattern":"K","path":".env"}')"
+passes "lets through: --force-with-lease to an issue branch (#38)" "$(call Bash '{"command":"git push --force-with-lease origin 5-x"}')"
+passes "lets through: git status" "$(call Bash '{"command":"git status"}')"
+passes "lets through: a Read of README.md" "$(call Read '{"file_path":"README.md"}')"
+refused "the delivery guard still runs after it" "$(call Bash '{"command":"gh issue create --title x"}')"
+[ -f .cc-safety-net/policy.json ] && ok "init writes the project's policy" || bad "no .cc-safety-net/policy.json"
+cp .cc-safety-net/policy.json "$WORK/policy.json"; echo hi > notes.txt
+jq '.secret_protection = {deny_paths: ["notes.txt"]}' "$WORK/policy.json" > .cc-safety-net/policy.json
+refused "the guard reads the project's .cc-safety-net/policy.json" "$(call Bash '{"command":"cat notes.txt"}')"
+cp "$WORK/policy.json" .cc-safety-net/policy.json; rm -f notes.txt
+passes "  and the default policy lets that file through" "$(call Bash '{"command":"cat notes.txt"}')"
+oldnode="$WORK/oldnode"; mkdir -p "$oldnode"; printf '#!/bin/sh\necho v18.19.0\n' > "$oldnode/node"; chmod +x "$oldnode/node"
+out="$(PATH="$oldnode:$PATH" call Bash '{"command":"git status"}')"; code=$?
+[ "$code" -eq 2 ] && ok "with Node older than 22 every guarded call is refused (exit 2)" || bad "old Node (exit $code)" "$out"
+contains "  saying what to install" "Node 22 or later" "$out"
+noisy="$WORK/noisynode"; mkdir -p "$noisy"; printf '#!/bin/sh\necho "(node) a warning" >&2\nexec %s "$@"\n' "$(command -v node)" > "$noisy/node"; chmod +x "$noisy/node"
+out="$(PATH="$noisy:$PATH" call Bash '{"command":"git status"}' 2>/dev/null)"; code=$?
+[ "$code" -eq 0 ] && [ -z "$out" ] && ok "a warning from Node on stderr does not reach the hook's answer" || bad "noisy Node (exit $code)" "$out"
+expect_exit 1 "doctor names a Node older than 22" env PATH="$oldnode:$PATH" bb $kit doctor
+contains "  with the fix" "nvm install 22" "$LAST"
+V="$KIT/vendor/cc-safety-net"; version="$(sed -n 's/^version=//p' "$V/PIN")"; integrity="$(sed -n 's/^integrity=//p' "$V/PIN")"
+if curl -fsSL -o "$WORK/ccsn.tgz" "https://registry.npmjs.org/cc-safety-net/-/cc-safety-net-$version.tgz" 2>/dev/null; then
+  [ "sha512-$(openssl dgst -sha512 -binary "$WORK/ccsn.tgz" | openssl base64 -A)" = "$integrity" ] \
+    && ok "the npm release $version has the pinned sha512" || bad "the release's sha512 differs from PIN"
+  mkdir -p "$WORK/ccsn-pkg" && tar -xzf "$WORK/ccsn.tgz" -C "$WORK/ccsn-pkg"
+  differ="$(cd "$V" && find . -type f ! -name PIN ! -name README.md | while read -r f; do cmp -s "$f" "$WORK/ccsn-pkg/package/$f" || echo "$f"; done)"
+  [ -z "$differ" ] && ok "the vendored files are the release's, byte for byte" || bad "vendored files differ from the release" "$differ"
+elif [ -n "${CI:-}" ]; then
+  bad "the npm release cc-safety-net $version could not be downloaded, so the vendored copy is unchecked"
+else
+  echo "  skip  vendored copy against the npm release (offline)"
+fi
 
 echo "- flow scripts, offline guards"
 export GHWF_OWNER=u473t8 GHWF_PROJECT_NUMBER=3 GHWF_REPO=u473t8/kit-selftest

@@ -13,7 +13,8 @@ issue on the board → design approved by the owner (size M and up) → branch �
 Hooks refuse:
 - an issue filed outside the board, and a PR from a branch with no issue;
 - an edit before an M-sized design is approved;
-- new work while a merged task lacks its retrospective.
+- new work while a merged task lacks its retrospective;
+- destructive commands (`git reset --hard`, `git push -uf`, `rm -rf` outside the project) and secret reads (`.env`, `~/.ssh`), through [cc-safety-net](https://github.com/kenryu42/cc-safety-net), vendored at a pinned version (`vendor/cc-safety-net`).
 
 The `main` ruleset accepts pull requests only, with the owners' approval.
 
@@ -27,7 +28,7 @@ git add -A && git commit -m "chore: add dev-kit"
 
 - **A clone:** `git clone --recurse-submodules …`, then `.shared/bin/kit init`.
 - **A new machine:**
-  1. Install `git`, `gh`, `bb` (babashka), `jq` and Claude Code.
+  1. Install `git`, `gh`, `bb` (babashka), `jq`, Node 22 or later and Claude Code.
   2. Log yourself in with `gh auth login`.
   3. Run `.shared/bin/kit init` in your own terminal. It also logs the agent's GitHub account in; see [the agent's identity](docs/agent-identity.md).
 
@@ -66,7 +67,8 @@ You do not have to watch for updates: the session start says when the pinned com
 | In the project | Comes from |
 |---|---|
 | `AGENTS.md`, between `dev-kit:begin` / `dev-kit:end` | `rules/shared.md` (+ `rules/clojure.md`) |
-| `.claude/settings.json`: permissions and hooks (delivery guard, friction recorder, formatting) | `claude/settings.base.json` + board settings from `kit.edn` |
+| `.claude/settings.json`: permissions and hooks (safety guard, delivery guard, friction recorder, formatting) | `claude/settings.base.json` + board settings from `kit.edn` |
+| `.cc-safety-net/policy.json`: the safety guard's policy, read by Claude Code, Codex and OpenCode alike | `kit` (level `standard`) |
 | `.claude/skills/*` (links) | `claude/skills/`: `repo-task-delivery`, `gh-project-workflow`, `adr` |
 | `.claude/agents/*.md` (copies) | `claude/agents/`: `ops`, `log-reader`; `smell-reviewer` with the Clojure module |
 | `.github/workflows/ci.yml` | `managed/ci.yml`, which runs `ci/action.yml` from the submodule |
@@ -75,6 +77,8 @@ You do not have to watch for updates: the session start says when the pinned com
 | git `core.hooksPath` | `githooks/`: the zprint check before a commit |
 | `.zprint.edn`, `.clj-kondo/config.edn` `:config-paths` | `clojure/` (module `clojure`) |
 | `env` in `.claude/settings.local.json` (per machine, git-ignored) | `:agent` in `kit.edn` / `kit-defaults.edn` |
+
+**The board's link under the prompt** comes from the `project-link` plugin (`claude/plugins/`). The generated settings declare `.shared` as a plugin marketplace, so Claude Code loads it at the session start with nothing to install, at the dev-kit version the project pins (#30).
 
 **Why `AGENTS.md` and not `CLAUDE.md`.** It is one file for every agent. Claude Code reads `AGENTS.md` when there is no `CLAUDE.md`, and Codex and OpenCode read it natively. The shared rules are written into it as text, because only Claude Code understands `@` imports.
 
