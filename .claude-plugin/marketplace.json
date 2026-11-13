@@ -1,0 +1,14 @@
+{
+  "name": "dev-kit",
+  "owner": {
+    "name": "shundeev"
+  },
+  "description": "Plugins that dev-kit ships to every project that mounts it",
+  "plugins": [
+    {
+      "name": "project-link",
+      "source": "./claude/plugins/project-link",
+      "description": "A clickable link to the project's GitHub Project board on the prompt footer, next to the permission mode"
+    }
+  ]
+}
