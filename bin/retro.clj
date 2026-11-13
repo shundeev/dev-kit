@@ -63,7 +63,7 @@
 
 
 ;; ------------------------------------------------------------------ commands
-;; A shape names what a command was without its arguments ("gh pr view", "bash merge_issue_flow.sh"): every
+;; A shape names what a command was without its arguments ("gh pr view", "kit merge"): every
 ;; word a plain command word, never a path, a flag value or inline code. Segments are a command's simple
 ;; commands; ask rules match against them.
 

@@ -363,8 +363,8 @@
 (defn judge [statements]
   (let [base   (or (System/getenv "GHWF_DEFAULT_BASE") "main")
         repo   (or (System/getenv "GHWF_REPO") "<owner/repo>")
-        start  "bash .claude/skills/gh-project-workflow/scripts/start_issue_flow.sh"
-        finish "bash .claude/skills/gh-project-workflow/scripts/finish_issue_flow.sh"
+        start  ".shared/bin/kit start"
+        finish ".shared/bin/kit finish"
         zsh?   (= "zsh" (some-> (System/getenv "SHELL") (str/replace #".*/" "")))
         branch (delay (sh-out "git" "rev-parse" "--abbrev-ref" "HEAD"))]
     (loop [[st & more] statements wd "."]

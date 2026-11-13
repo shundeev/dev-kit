@@ -5,6 +5,8 @@
 ;;   .shared/bin/kit init     --local   per-machine items only (the SessionStart hook runs it)
 ;;   .shared/bin/kit doctor   [--ci] [--quiet]
 ;;   .shared/bin/kit modules
+;;   .shared/bin/kit start | finish | merge   the delivery flow's GitHub steps (#95); --help on each
+;;   .shared/bin/kit board set <project-number> <owner> <issue-url> <field> <option>   one card's field (#41)
 ;;   .shared/bin/kit user-test   the project's user-level test, :user-test in kit.edn (#27)
 ;;   .shared/bin/kit identity [--dir PATH]   the agent's GitHub identity alone, for any repository
 ;;   .shared/bin/kit github   [--check NAME] [--yes] [--repo R]   the repository's main ruleset and access, set up by
@@ -1001,7 +1003,7 @@
                 (str "the body has no line '## " heading "' (exactly that heading): add the section from the PR template")
                 (str "'## " heading "' is empty, or holds only the template's hint: fill in ## " heading
                      "; CI reruns when the body is edited")))))
-    [(str "branch '" branch "' is not <issue>-<slug>: open the issue with start_issue_flow.sh and move the work to its branch")]))
+    [(str "branch '" branch "' is not <issue>-<slug>: open the issue with kit start and move the work to its branch")]))
 
 
 (defn adr-problems
@@ -1448,6 +1450,13 @@
                                (map #(str/replace % #"^;; ?" ""))))))
 
 
+(defn flow!
+  "kit start, finish, merge and board set: the delivery flow's GitHub steps, in bin/flow.clj (#95)."
+  [cmd args]
+  (load-file (str (fs/path kit-dir "bin" "flow.clj")))
+  ((resolve 'flow/main) cmd args (str (fs/path kit-dir "bin" "kit"))))
+
+
 (defn retro!
   "kit retro N … and kit retro --missing …: the code lives in bin/retro.clj, loaded only for this command."
   [[n & more]]
@@ -1478,6 +1487,7 @@
       "github" (github! (parse-args args))
       "gate" (gate! (parse-args args))
       "retro" (retro! args)
+      ("start" "finish" "merge" "board") (flow! cmd args)
       nil (usage)
       (do (usage) (die "unknown command" cmd)))
     (catch clojure.lang.ExceptionInfo e
