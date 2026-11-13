@@ -24,6 +24,7 @@ The `main` ruleset accepts pull requests only, with the owners' approval.
 git submodule add https://github.com/shundeev/dev-kit .shared
 .shared/bin/kit init --showcase <board Showcase option> [--modules clojure] [--scaffold]
 git add -A && git commit -m "chore: add dev-kit"
+.shared/bin/kit github   # in your own terminal: the main ruleset and the agent's Write access
 ```
 
 - **A clone:** `git clone --recurse-submodules …`, then `.shared/bin/kit init`.
@@ -39,7 +40,8 @@ git add -A && git commit -m "chore: add dev-kit"
 | Command | What it does |
 |---|---|
 | `kit init` | Lays everything out. It is safe to rerun and never overwrites project-owned files: a file of the project's own where dev-kit writes stops it with what to move, and nothing is written until `kit.edn` is valid. A `.claude/settings.json` found at the first run moves into `kit.edn` as `:claude-settings`. `--local` touches only the per-machine items; the session start runs it. |
-| `kit doctor` | Checks that everything is in place and matches the pinned dev-kit, that `kit.edn` is valid, and that no `CLAUDE.md` hides AGENTS.md from Claude Code. Each problem comes with the command that fixes it. `--ci` skips the local-only checks. |
+| `kit doctor` | Checks that everything is in place and matches the pinned dev-kit, that `kit.edn` is valid, and that no `CLAUDE.md` hides AGENTS.md from Claude Code. Read as the agent, it also checks the GitHub side: the `main` ruleset requires an approving review, the agent cannot bypass it, and the agent has Write. Each problem comes with the command that fixes it. `--ci` skips the local-only checks. |
+| `kit github` | Run by the owner in their own terminal, since it takes an admin: brings the repository's `main` ruleset to `managed/github/ruleset.json`, with the project's required check (`--check`, default `checks`), the `:owners` teams as required reviewers and the owner as the only bypass actor, in pull-request mode. It gives the agent and `:owners` Write and accepts the agent's invitation as the agent. It shows each change and applies it on a yes, or with `--yes`; a rerun changes nothing. |
 | `kit retro N` | The friction data of merged issue N, for its retrospective. From the friction log the hooks keep on this machine (`~/.local/state/dev-kit/friction`, never committed): confirmation windows by the rule behind them, questions, interruptions, «трение:» marks, refusals, errors, repeated commands and where the time went. From GitHub: reviews, waiting on the owner and CI. Counts only. |
 | `kit retro --missing` | Merged issues of the last 14 days without a retrospective. New work waits for them. |
 | `kit gate …` | The pull request gate: the branch of an open issue, the title, the `ADR:` line, filled **Review** and **User-level test**, accepted ADRs unchanged, the design approval and the size. CI runs it, again when a title or body is edited; the finish script runs its shape rules before it opens a PR; the edit hook runs the design approval. |
