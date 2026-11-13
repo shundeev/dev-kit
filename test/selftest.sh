@@ -1032,6 +1032,140 @@ grep -qx 'upload=true' <<<"$steps" && grep -qx 'on-failure=true' <<<"$steps" && 
   && ok "CI: its artifacts are uploaded even when it fails" || bad "CI artifacts step" "$steps"
 cd "$P" || exit 1
 
+echo "- the GitHub side: kit github and the doctor check (#33, fake gh)"
+rs="$KIT/managed/github/ruleset.json"
+pr_rule() { jq -c --arg k "$2" '.rules[] | select(.type == "pull_request") | .parameters[$k]' "$1"; }
+[ "$(pr_rule "$rs" required_approving_review_count)/$(pr_rule "$rs" dismiss_stale_reviews_on_push)/$(pr_rule "$rs" require_code_owner_review)/$(pr_rule "$rs" required_review_thread_resolution)/$(pr_rule "$rs" allowed_merge_methods)" \
+  = '1/true/true/true/["squash"]' ] \
+  && [ "$(jq -c '[.enforcement, .conditions.ref_name.include, ([.rules[].type] | sort)]' "$rs")" \
+       = '["active",["~DEFAULT_BRANCH"],["deletion","non_fast_forward","pull_request","required_status_checks"]]' ] \
+  && ok "the managed ruleset: one approval, stale ones dismissed, code owners, threads resolved, squash only, on the default branch" \
+  || bad "managed ruleset" "$(jq -c . "$rs")"
+fresh "$WORK/gh33"; git remote set-url origin https://github.com/shundeev/kit-selftest.git
+GD="$WORK/gh33-fake"; AC="$WORK/gh33-agent"; OC="$WORK/gh33-owner"; mkdir -p "$GD" "$AC" "$OC"
+printf 'github.com:\n    user: kit-agent\n' > "$AC/hosts.yml"; printf 'github.com:\n    user: kit-owner\n' > "$OC/hosts.yml"
+bb $kit init --showcase Site >/dev/null 2>&1
+bb -e "(spit \"kit.edn\" (pr-str (assoc (clojure.edn/read-string (slurp \"kit.edn\")) :agent {:login \"kit-agent\" :email \"a@example.invalid\" :gh-config-dir \"$AC\"})))"
+bb $kit init >/dev/null 2>&1
+fgh() { env -u CLAUDECODE -u GH_TOKEN -u GITHUB_TOKEN -u GITHUB_REPOSITORY -u GHWF_REPO PATH="$KIT/test/fake-gh:$PATH" FAKE_GH_DIR="$GD" FAKE_GH_LOG="$GD/log" "$@"; }
+ghk() { : > "$GD/log"; rm -f "$GD/posted-ruleset.json" "$GD/put-ruleset.json" "$GD/invitations-as"; fgh GH_CONFIG_DIR="$OC" bb $kit github "$@"; }
+repo=shundeev/kit-selftest
+echo '[{"id":5,"repository":{"full_name":"shundeev/kit-selftest"}}]' > "$GD/agent-invitations.json"
+expect_exit 0 "github: a repository without the main ruleset gets it" ghk --yes
+contains "  says so" "ruleset main: created" "$LAST"
+p="$GD/posted-ruleset.json"
+[ "$(pr_rule "$p" required_approving_review_count)" = 1 ] && ok "  one approving review" || bad "  review count" "$(cat "$p" 2>/dev/null)"
+[ "$(jq -c '[.rules[] | select(.type == "pull_request") | .parameters.required_reviewers[] | [.reviewer.type, .reviewer.id, .minimum_approvals]]' "$p" 2>/dev/null)" = '[["Team",42,1]]' ] \
+  && grep -qx "api orgs/shundeev/teams/owners" "$GD/log" && ok "  the owners team of kit.edn is the required reviewer" || bad "  required reviewers" "$(cat "$p" 2>/dev/null)"
+[ "$(jq -r '.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[0].context' "$p" 2>/dev/null)" = checks ] \
+  && ok "  the project's check, checks, is required" || bad "  required check" "$(cat "$p" 2>/dev/null)"
+[ "$(jq -c .bypass_actors "$p" 2>/dev/null)" = '[{"actor_type":"User","actor_id":1,"bypass_mode":"pull_request"}]' ] \
+  && ok "  only the owner who runs it may bypass, in pull-request mode" || bad "  bypass" "$(jq -c .bypass_actors "$p" 2>/dev/null)"
+grep -qx "api repos/$repo/collaborators/kit-agent -X PUT -f permission=push" "$GD/log" && ok "  the agent is invited with Write" || bad "  agent invite" "$(cat "$GD/log")"
+grep -qx "api orgs/shundeev/teams/owners/repos/$repo -X PUT -f permission=push" "$GD/log" && ok "  the owners team gets Write" || bad "  team access" "$(cat "$GD/log")"
+grep -qx "api user/repository_invitations/5 -X PATCH" "$GD/log" && [ "$(sort -u "$GD/invitations-as")" = "$AC|" ] \
+  && ok "  the invitation is accepted as the agent, from its gh config" || bad "  accept" "$(cat "$GD/log"; cat "$GD/invitations-as" 2>/dev/null)"
+jq '. + {id: 7, current_user_can_bypass: "always"} | .rules |= map(if .type == "pull_request" then .parameters.automatic_copilot_code_review_enabled = false else . end)' \
+  "$p" > "$GD/ruleset.json"
+echo '[{"id":7,"name":"main"}]' > "$GD/rulesets.json"; echo write > "$GD/perm-kit-agent"
+echo '[{"slug":"owners","permission":"push"}]' > "$GD/teams.json"; echo '[]' > "$GD/agent-invitations.json"
+expect_exit 0 "github: a rerun" ghk
+contains "  changes nothing" "nothing to change" "$LAST"
+grep -qE -- '-X (PUT|POST|PATCH)' "$GD/log" && bad "  wrote to GitHub" "$(cat "$GD/log")" || ok "  writes nothing, whatever fields GitHub adds"
+cp "$GD/ruleset.json" "$WORK/gh33-same.json"
+jq '(.rules |= map(if .type == "pull_request" then .parameters.required_approving_review_count = 0 else . end)) | .rules += [{"type":"required_signatures"}]' \
+  "$WORK/gh33-same.json" > "$GD/ruleset.json"
+expect_exit 1 "github: a different ruleset is not changed without --yes" ghk
+contains "  names the difference" "required_approving_review_count" "$LAST"
+contains "  and the rule dev-kit lacks" "required_signatures" "$LAST"
+contains "  says how to apply it" "--yes" "$LAST"
+[ ! -e "$GD/put-ruleset.json" ] && ok "  nothing is written" || bad "  wrote" "$(cat "$GD/put-ruleset.json")"
+expect_exit 0 "github: --yes brings it back" ghk --yes
+[ "$(pr_rule "$GD/put-ruleset.json" required_approving_review_count)/$(jq -c '[.rules[].type] | index("required_signatures")' "$GD/put-ruleset.json" 2>/dev/null)" = 1/null ] \
+  && grep -qx "api repos/$repo/rulesets/7 -X PUT --input -" "$GD/log" && ok "  in place, as dev-kit has it" || bad "  update" "$(cat "$GD/log")"
+rm "$GD/rulesets.json" "$GD/ruleset.json"
+expect_exit 0 "github: --check names the required check" ghk --yes --check selftest
+[ "$(jq -r '.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[0].context' "$GD/posted-ruleset.json" 2>/dev/null)" = selftest ] \
+  && ok "  selftest, as in dev-kit itself" || bad "  check" "$(cat "$GD/posted-ruleset.json" 2>/dev/null)"
+echo '{"permissions":{"admin":false}}' > "$GD/repo.json"
+expect_exit 1 "github: without admin rights it is refused" ghk --yes
+contains "  says who can run it" "admin" "$LAST"
+grep -qE -- '-X (PUT|POST|PATCH)' "$GD/log" && bad "  wrote to GitHub" "$(cat "$GD/log")" || ok "  and writes nothing"
+rm "$GD/repo.json"
+: > "$GD/log"
+expect_exit 1 "github: an agent session never runs it" fgh CLAUDECODE=1 GH_CONFIG_DIR="$AC" bb $kit github --yes
+contains "  says where to run it" "your own terminal" "$LAST"
+[ ! -s "$GD/log" ] && ok "  without calling GitHub" || bad "  called" "$(cat "$GD/log")"
+echo '[{"id":6,"invitee":{"login":"kit-agent"}}]' > "$GD/invitations.json"; echo none > "$GD/perm-kit-agent"
+echo '[{"id":6,"repository":{"full_name":"shundeev/kit-selftest"}}]' > "$GD/agent-invitations.json"; mv "$AC/hosts.yml" "$WORK/gh33-hosts"
+expect_exit 0 "github: with the agent logged out" ghk --yes
+grep -q 'collaborators/kit-agent -X PUT' "$GD/log" && bad "  invited the agent again" "$(cat "$GD/log")" || ok "  a pending invitation is not sent again"
+contains "  says how to accept it" "invitation to accept: in this terminal" "$LAST"
+grep -q 'repository_invitations/6' "$GD/log" && bad "  accepted as someone else" "$(cat "$GD/log")" || ok "  and accepts nothing"
+mv "$WORK/gh33-hosts" "$AC/hosts.yml"; echo '[]' > "$GD/agent-invitations.json"; rm "$GD/invitations.json"; echo write > "$GD/perm-kit-agent"
+echo '[{"id":7,"name":"main"}]' > "$GD/rulesets.json"
+jq '.rules |= map(if .type == "required_status_checks" then .parameters.required_status_checks[0].context = "selftest" else . end)' \
+  "$WORK/gh33-same.json" > "$GD/ruleset.json"
+expect_exit 0 "github: without --check, an existing ruleset keeps its required check" ghk
+contains "  so dev-kit's own selftest stays required" "nothing to change" "$LAST"
+echo '[{"id":8,"name":"protect main"}]' > "$GD/rulesets.json"
+expect_exit 1 "github: a ruleset under another name is not doubled" ghk --yes
+contains "  says what to rename" "none named main" "$LAST"
+grep -q -- '-X POST' "$GD/log" && bad "  created a second one" "$(cat "$GD/log")" || ok "  and creates none"
+echo '[{"id":7,"name":"main"},{"id":9,"name":"main"}]' > "$GD/rulesets.json"
+expect_exit 1 "github: two rulesets named main are refused" ghk --yes
+contains "  naming both" "7, 9" "$LAST"
+echo '[{"id":7,"name":"main"}]' > "$GD/rulesets.json"; cp "$WORK/gh33-same.json" "$GD/ruleset.json"; echo admin > "$GD/perm-kit-agent"
+expect_exit 1 "github: an agent with more than Write is refused" ghk --yes
+contains "  says why" "more than Write" "$LAST"
+grep -qE -- '-X (PUT|POST|PATCH)' "$GD/log" && bad "  wrote" "$(cat "$GD/log")" || ok "  before any change"
+echo none > "$GD/perm-kit-agent"; touch "$GD/write-fails"
+expect_exit 1 "github: a failed write names the step" ghk --yes
+contains "  and says a rerun is safe" "safe to repeat" "$LAST"
+grep -q 'ExceptionInfo' <<<"$LAST" && bad "  with a stack trace" "$LAST" || ok "  without a stack trace"
+rm "$GD/write-fails"; echo write > "$GD/perm-kit-agent"
+echo '[{"id":5,"repository":{"full_name":"shundeev/kit-selftest"}}]' > "$GD/agent-invitations.json"; touch "$GD/accept-fails"
+expect_exit 1 "github: a failed accept is no success" ghk --yes
+contains "  says where to accept it" "github.com/$repo/invitations" "$LAST"
+rm "$GD/accept-fails"; : > "$GD/log"; rm -f "$GD/invitations-as"
+fgh GH_CONFIG_DIR="$OC" GH_TOKEN=owner-token bb $kit github --yes >/dev/null 2>&1
+[ "$(sort -u "$GD/invitations-as" 2>/dev/null)" = "$AC|" ] && ok "github: the agent's calls use its config, never a GH_TOKEN of the shell" \
+  || bad "agent calls" "$(cat "$GD/invitations-as" 2>/dev/null)"
+echo '[]' > "$GD/agent-invitations.json"; cp kit.edn "$WORK/gh33-kit.edn"
+owners() { bb -e "(spit \"kit.edn\" (pr-str (assoc (clojure.edn/read-string (slurp \"kit.edn\")) :owners $1)))"; }
+owners '["kit-owner"]'
+expect_exit 1 "github: a reviewer dev-kit no longer sets is shown before it goes" ghk
+contains "  as a change" "required_reviewers" "$LAST"
+owners '["other-org/owners"]'
+expect_exit 1 "github: a team of another organization is refused" ghk --yes
+contains "  names it" "other-org" "$LAST"
+cp "$WORK/gh33-kit.edn" kit.edn
+
+echo '[{"id":7,"name":"main"}]' > "$GD/rulesets.json"
+jq '. + {current_user_can_bypass: "never"}' "$WORK/gh33-same.json" > "$GD/ruleset.json"
+dk() { : > "$GD/log"; fgh GH_CONFIG_DIR="${1:-$AC}" bb $kit doctor 2>&1; }
+out="$(dk)"
+grep -q "api repos/$repo/rulesets" "$GD/log" && ! grep -q 'kit github' <<<"$out" \
+  && ok "doctor: as the agent, a repository with the ruleset and Write passes" || bad "doctor GitHub side" "$out"
+jq '. + {current_user_can_bypass: "always"}' "$WORK/gh33-same.json" > "$GD/ruleset.json"
+out="$(dk)"; grep -E '^  FAIL .*can bypass' <<<"$out" | grep -q 'kit github' && ok "doctor: a bypass for the agent fails, with kit github as the fix" || bad "doctor bypass" "$out"
+jq '. + {current_user_can_bypass: "never"} | .rules |= map(select(.type != "pull_request"))' "$WORK/gh33-same.json" > "$GD/ruleset.json"
+out="$(dk)"; grep -qE '^  FAIL .*approving review' <<<"$out" && ok "doctor: a ruleset without the review rule fails" || bad "doctor review rule" "$out"
+echo '[]' > "$GD/rulesets.json"
+out="$(dk)"; grep -qE '^  FAIL .*no main ruleset' <<<"$out" && ok "doctor: a repository without the ruleset fails" || bad "doctor no ruleset" "$out"
+echo '[{"id":7,"name":"main"}]' > "$GD/rulesets.json"; jq '. + {current_user_can_bypass: "never"}' "$WORK/gh33-same.json" > "$GD/ruleset.json"
+echo read > "$GD/perm-kit-agent"
+out="$(dk)"; grep -qE '^  FAIL .*permission is read' <<<"$out" && ok "doctor: an agent without Write fails" || bad "doctor permission" "$out"
+echo write > "$GD/perm-kit-agent"; touch "$GD/gh-fails"
+out="$(dk)"; grep -qE '^  WARN .*could not be read' <<<"$out" && ! grep -qE '^  FAIL .*ruleset' <<<"$out" \
+  && ok "doctor: offline, the GitHub side is a warning" || bad "doctor offline" "$out"
+rm "$GD/gh-fails"
+out="$(dk "$OC")"; grep -q rulesets "$GD/log" && bad "doctor: checked the GitHub side as the owner" "$(cat "$GD/log")" \
+  || ok "doctor: as anyone but the agent, the GitHub side is not judged"
+: > "$GD/log"; fgh GH_CONFIG_DIR="$AC" bb $kit doctor --ci >/dev/null 2>&1
+grep -q rulesets "$GD/log" && bad "doctor --ci read the rulesets" || ok "doctor --ci skips it"
+cd "$P" || exit 1
+
 echo "- pinned actions (#7)"
 unpinned="$(grep -hE '^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*[^.[:space:]]' "$KIT/managed/ci.yml" "$KIT/ci/action.yml" "$KIT"/.github/workflows/*.yml \
   | grep -vE '@[0-9a-f]{40}([[:space:]]|$)' || true)"

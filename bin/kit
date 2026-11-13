@@ -7,6 +7,8 @@
 ;;   .shared/bin/kit modules
 ;;   .shared/bin/kit user-test   the project's user-level test, :user-test in kit.edn (#27)
 ;;   .shared/bin/kit identity [--dir PATH]   the agent's GitHub identity alone, for any repository
+;;   .shared/bin/kit github   [--check NAME] [--yes] [--repo R]   the repository's main ruleset and access, set up by
+;;                            the owner in their own terminal (#33); --check defaults to checks
 ;;   .shared/bin/kit gate     --branch B --pr N | --g1 N | --hook   the pull request gate (ADR-0002, #21)
 ;;                            | --shape --branch B --title T [--body-file F]   its shape rules, offline
 ;;   .shared/bin/kit retro    N [--repo R] [--messages]   friction data of merged issue N for its
@@ -668,6 +670,46 @@
         "move its content into AGENTS.md below the dev-kit block and delete it, or set Project instructions to claude-md-and-agents-md in /config"]])))
 
 
+(declare gh! origin-repo)
+
+
+(defn github-problems
+  "The GitHub side the agent's work relies on (#33), read as the agent, so only when gh acts as the agent: the main
+  ruleset requires an approving review, the agent cannot bypass it, and the agent has Write. Offline it warns."
+  [{:keys [agent] :as cfg}]
+  (let [login (:login agent)
+        token (some #(not-empty (System/getenv %)) ["GH_TOKEN" "GITHUB_TOKEN"])]
+    (when (and login (not token) (= login (gh-login (gh-config-dir-in-use))))
+      (let [repo (or (origin-repo (str root)) (:repo cfg))
+            fix  (str "in your own terminal: " mount "/bin/kit github")]
+        (try
+          (let [main (some #(when (= "main" (:name %)) %)
+                           (json/parse-string (gh! "api" (str "repos/" repo "/rulesets?per_page=100")) true))
+                rs   (when main (json/parse-string (gh! "api" (str "repos/" repo "/rulesets/" (:id main))) true))
+                n    (some #(when (= "pull_request" (:type %)) (get-in % [:parameters :required_approving_review_count]))
+                           (:rules rs))
+                perm (str/trim (gh! "api" (str "repos/" repo "/collaborators/" login "/permission") "--jq" ".permission"))]
+            (cond-> []
+              (nil? rs)
+              (conj [:fail (str repo " has no main ruleset, so the agent's pull requests could merge without an Approve") fix])
+
+              (and rs (not= "active" (:enforcement rs)))
+              (conj [:fail (str repo ": the main ruleset is " (:enforcement rs) ", not active") fix])
+
+              (and rs (not (and (int? n) (pos? n))))
+              (conj [:fail (str repo ": the main ruleset requires no approving review") fix])
+
+              (and rs (not= "never" (:current_user_can_bypass rs)))
+              (conj [:fail (str repo ": the agent " login " can bypass the main ruleset (" (:current_user_can_bypass rs) ")") fix])
+
+              (not= "write" perm)
+              (conj [:fail (str repo ": the agent's permission is " perm ", not write") fix])))
+          (catch clojure.lang.ExceptionInfo e
+            [[:warn (str repo ": GitHub could not be read to check the main ruleset ("
+                         (first (str/split-lines (ex-message e))) ")")
+              "check the connection; the next session start checks it again"]]))))))
+
+
 (defn problems
   [cfg {:keys [ci]}]
   (cond
@@ -688,7 +730,7 @@
         [:fail (str (label item) ": " problem) (str mount "/bin/kit init")])
       (for [p (stale-paths (managed-items cfg))]
         [:fail (str p ": left over from dev-kit, no longer managed") (str mount "/bin/kit init")])
-      (when-not ci (concat (tool-problems cfg) (claude-version-problems) (identity-problems cfg))))))
+      (when-not ci (concat (tool-problems cfg) (claude-version-problems) (identity-problems cfg) (github-problems cfg))))))
 
 
 ;; ------------------------------------------------------------------ init
@@ -1172,6 +1214,191 @@
     :else (gate-ci! opts)))
 
 
+;; ------------------------------------------------------------------ github (#33)
+
+(defn gh-json [& args] (json/parse-string (apply gh! args) true))
+
+
+(defn gh-send!
+  "gh api with a JSON body on stdin; stdout, or an exception carrying gh's message."
+  [path method body]
+  (let [{:keys [exit out err]} (p/sh {:continue true :in (json/generate-string body)}
+                                     "gh" "api" path "-X" method "--input" "-")]
+    (if (zero? exit) out (throw (ex-info (str/trim (str err out)) {})))))
+
+
+(defn expected-ruleset
+  "managed/github/ruleset.json with the project's required check, the owners' teams as required reviewers, and the
+  person who runs kit github as the only bypass actor, in pull-request mode (ADR-0003)."
+  [check team-ids owner-id]
+  (let [reviewers (vec (for [id team-ids]
+                         {:minimum_approvals 1 :file_patterns ["*" "**/*"] :reviewer {:id id :type "Team"}}))]
+    (-> (json/parse-string (slurp (str (fs/path kit-dir "managed" "github" "ruleset.json"))) true)
+        (assoc :bypass_actors [{:actor_type "User" :actor_id owner-id :bypass_mode "pull_request"}])
+        (update :rules (partial mapv
+                         (fn [r]
+                           (case (:type r)
+                             "pull_request" (cond-> r (seq reviewers) (assoc-in [:parameters :required_reviewers] reviewers))
+                             "required_status_checks" (assoc-in r [:parameters :required_status_checks 0 :context] check)
+                             r)))))))
+
+
+(defn- norm
+  "A value for comparison: lists become sets, at every level, so order does not count."
+  [v]
+  (cond (map? v) (update-vals v norm)
+        (sequential? v) (set (map norm v))
+        :else v))
+
+
+(defn ruleset-differences
+  "How the repository's ruleset `have` differs from `want`, one line each. Only the keys dev-kit sets count: a field
+  GitHub adds later is no difference."
+  [want have]
+  (let [by-type #(into {} (map (juxt :type identity)) (:rules %))
+        w (by-type want)
+        h (by-type have)
+        js json/generate-string
+        bypass #(set (map (fn [a] (select-keys a [:actor_type :actor_id :bypass_mode])) %))]
+    (concat
+      (for [k [:enforcement :target :conditions]
+            :when (not= (norm (get want k)) (norm (get have k)))]
+        (str (name k) ": " (js (get have k)) " → " (js (get want k))))
+      (when (not= (bypass (:bypass_actors want)) (bypass (:bypass_actors have)))
+        [(str "bypass_actors: " (js (:bypass_actors have)) " → " (js (:bypass_actors want)))])
+      (for [t (sort (remove w (keys h)))] (str "rule " t ": not in dev-kit's ruleset, removed"))
+      (for [t (sort (remove h (keys w)))] (str "rule " t ": added"))
+      (for [[t r] (sort-by key w)
+            :when (h t)
+            [k v] (sort-by key (:parameters r))
+            :let [hv (get-in h [t :parameters k])]
+            :when (not= (norm v) (norm hv))]
+        (str "rule " t ", " (name k) ": " (js hv) " → " (js v)))
+      ;; A PUT replaces a rule's parameters: one dev-kit does not set falls back to GitHub's default. Shown when it
+      ;; holds something, e.g. a reviewer team, so it never goes unseen.
+      (for [[t r] (sort-by key w)
+            :when (h t)
+            [k hv] (sort-by key (get-in h [t :parameters]))
+            :when (and (not (contains? (:parameters r) k))
+                       (not (or (nil? hv) (false? hv) (and (coll? hv) (empty? hv)))))]
+        (str "rule " t ", " (name k) ": " (js hv) " → not set by dev-kit, reset")))))
+
+
+(defn- confirm!
+  "True when the changes may go ahead: --yes, or a yes from the person at the terminal."
+  [yes]
+  (or yes
+      (and (interactive?)
+           (do (print "Apply these changes? [y/N] ") (flush)
+               (contains? #{"y" "yes"} (some-> (read-line) str/trim str/lower-case))))))
+
+
+(defn github!
+  "Brings one repository's GitHub side to what the agent's work relies on (#33): the main ruleset from
+  managed/github/ruleset.json, Write for the agent and every :owners entry, and the agent's invitation accepted as
+  the agent. Run by the owner, in their own terminal: changing a ruleset takes an admin. Safe to run again."
+  [{:keys [check yes] :as opts}]
+  (when (System/getenv "CLAUDECODE")
+    (fail! "kit github changes the repository's settings, which an agent session never does: run it in your own terminal,"
+           "logged in to gh as the owner"))
+  (let [cfg     (gate-config)
+        repo    (gate-repo opts cfg)
+        first-line #(first (str/split-lines (str %)))
+        read!   (fn [what & args]
+                  (try (apply gh-json args)
+                       (catch clojure.lang.ExceptionInfo e
+                         (fail! what "could not be read (" (first-line (ex-message e)) "): check `gh auth status` and the"
+                                "connection, then run kit github again"))))
+        _       (when-not (get-in (read! repo "api" (str "repos/" repo)) [:permissions :admin])
+                  (fail! "gh is not logged in as an admin of" repo "(gh auth status): changing its ruleset takes an admin;"
+                         "run kit github as the owner"))
+        org     (first (str/split repo #"/"))
+        teams   (filter #(str/includes? % "/") (:owners cfg))
+        users   (remove #(str/includes? % "/") (:owners cfg))
+        _       (doseq [t teams :when (not (str/starts-with? t (str org "/")))]
+                  (fail! "the team" t "in :owners is not of" org "; a team gives access only to its own organization's"
+                         "repositories: fix :owners in kit.edn"))
+        sets    (read! (str "the rulesets of " repo) "api" (str "repos/" repo "/rulesets?per_page=100"))
+        mains   (filter #(= "main" (:name %)) sets)
+        _       (when (next mains)
+                  (fail! repo "has" (count mains) "rulesets named main (ids" (str (str/join ", " (map :id mains)) "):")
+                         "keep one in Settings → Rules → Rulesets, then run kit github again"))
+        _       (when (and (empty? mains) (seq sets))
+                  (fail! repo "has rulesets, none named main (" (str/join ", " (map :name sets)) "): rename the one that"
+                         "protects the default branch to main in Settings → Rules → Rulesets, or delete it, then run"
+                         "kit github again"))
+        main    (first mains)
+        have    (when main (read! "the main ruleset" "api" (str "repos/" repo "/rulesets/" (:id main))))
+        ;; Without --check an existing ruleset keeps its check: dev-kit's own is selftest, a project's is checks.
+        check   (or check
+                    (some #(when (= "required_status_checks" (:type %))
+                             (get-in % [:parameters :required_status_checks 0 :context]))
+                          (:rules have))
+                    "checks")
+        _       (when-not (re-matches #"[A-Za-z0-9 ._/()-]+" check) (fail! "--check" (pr-str check) "is not a check name"))
+        me      (read! "your GitHub account" "api" "user")
+        want    (expected-ruleset check (for [t teams]
+                                          (:id (read! (str "the team " t " of :owners") "api"
+                                                      (str "orgs/" (str/replace t "/" "/teams/")))))
+                                  (:id me))
+        diffs   (when have (seq (ruleset-differences want have)))
+        perm    #(try (str/trim (gh! "api" (str "repos/" repo "/collaborators/" % "/permission") "--jq" ".permission"))
+                      (catch clojure.lang.ExceptionInfo _ "none"))
+        agent   (get-in cfg [:agent :login])
+        _       (when-let [p (some-> agent perm #{"admin" "maintain"})]
+                  (fail! "the agent" agent "has" p "on" repo ", more than Write: with it the agent could change the rules"
+                         "it works under. Lower it to Write in Settings → Collaborators and teams, then run kit github again"))
+        pending (set (keep #(get-in % [:invitee :login]) (read! "the invitations" "api" (str "repos/" repo "/invitations"))))
+        access  (into {} (map (juxt :slug :permission)) (read! "the teams" "api" (str "repos/" repo "/teams")))
+        plan    (concat
+                  (cond (nil? have) [["ruleset main: created" #(gh-send! (str "repos/" repo "/rulesets") "POST" want)]]
+                        diffs [[(str "ruleset main: updated\n" (str/join "\n" (map #(str "        " %) diffs)))
+                                #(gh-send! (str "repos/" repo "/rulesets/" (:id main)) "PUT" want)]])
+                  (for [u (distinct (remove nil? (cons agent users)))
+                        :let [p (perm u)]
+                        :when (and (not (#{"write" "maintain" "admin"} p)) (not (pending u)))]
+                    [(str u ": invited with Write (now " p ")")
+                     #(gh! "api" (str "repos/" repo "/collaborators/" u) "-X" "PUT" "-f" "permission=push")])
+                  (for [t teams
+                        :let [slug (second (str/split t #"/"))]
+                        :when (not (#{"push" "maintain" "admin"} (access slug)))]
+                    [(str "team " t ": given Write")
+                     #(gh! "api" (str "orgs/" org "/teams/" slug "/repos/" repo) "-X" "PUT" "-f" "permission=push")]))]
+    (println (str "dev-kit github (" repo ")"))
+    (if (empty? plan)
+      (println "  nothing to change")
+      (do (doseq [[what] plan] (println (str "  " what)))
+          (when-not (confirm! yes)
+            (fail! "nothing was changed: run kit github --yes to apply these changes"))
+          (doseq [[what act] plan]
+            (try (act)
+                 (catch clojure.lang.ExceptionInfo e
+                   (fail! (str "\"" (first-line what) "\" failed (" (first-line (ex-message e)) "); the steps above it"
+                               " are done. Run kit github again: it is safe to repeat")))))))
+    (when agent
+      (let [dir   (expand-home (get-in cfg [:agent :gh-config-dir]))
+            ;; As the agent: its own config, never a token the shell may hold.
+            as-agent #(apply p/sh {:continue true
+                                   :env (-> (into {} (System/getenv)) (dissoc "GH_TOKEN" "GITHUB_TOKEN")
+                                            (assoc "GH_CONFIG_DIR" dir))}
+                             "gh" "api" %&)
+            by-hand (str "accept it at https://github.com/" repo "/invitations signed in as " agent
+                         ", or run kit github again")]
+        (if (= agent (gh-login dir))
+          (let [why #(or (not-empty (first-line (:err %))) (str "gh exit " (:exit %)))
+                {:keys [exit out] :as r} (as-agent "user/repository_invitations")]
+            (when-not (zero? exit)
+              (fail! (str "the agent's invitations could not be read (" (why r) "):") by-hand))
+            (doseq [inv (json/parse-string (or (not-empty out) "[]") true)
+                    :when (= repo (get-in inv [:repository :full_name]))]
+              (let [r (as-agent (str "user/repository_invitations/" (:id inv)) "-X" "PATCH")]
+                (when-not (zero? (:exit r))
+                  (fail! "accepting the invitation as" agent (str "failed (" (why r) "):") by-hand))
+                (println (str "  " agent ": accepted the invitation, as the agent")))))
+          (when (or (pending agent) (some #(str/starts-with? (first %) (str agent ":")) plan))
+            (println (str "  " agent " has an invitation to accept: in this terminal, " mount
+                          "/bin/kit init logs the agent in; then run kit github again"))))))))
+
 
 (defn parse-args
   [args]
@@ -1195,6 +1422,8 @@
       "--body-file" (recur (rest more) (assoc opts :body-file (first more)))
       "--now" (recur (rest more) (assoc opts :now (first more)))
       "--messages" (recur more (assoc opts :messages true))
+      "--check" (recur (rest more) (assoc opts :check (first more)))
+      "--yes" (recur more (assoc opts :yes true))
       (die "unknown option" a))))
 
 
@@ -1233,6 +1462,7 @@
                   (println (str "user_test_artifacts=" (or (get-in cfg [:user-test :artifacts]) ""))))
       "user-test" (user-test!)
       "identity" (identity! (parse-args args))
+      "github" (github! (parse-args args))
       "gate" (gate! (parse-args args))
       "retro" (retro! args)
       nil (usage)

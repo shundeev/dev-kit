@@ -25,11 +25,22 @@
 #   fields.json     output of `project field-list` (default: Status, Priority, Size and Showcase with their options)
 #   board-fails.seq / board-fails  stderr of a failing `project item-edit`, one call per line ("ok" lets it pass);
 #                   the last line repeats; empty or absent: every edit passes
+# The GitHub side of a repository (#33): REST answers in full, without --jq, except perm-<login>.
+#   repo.json       `api repos/<o>/<r>` (default: the caller is an admin)
+#   rulesets.json   `api repos/…/rulesets` (default: []); ruleset.json  `api repos/…/rulesets/<id>`
+#   posted-ruleset.json / put-ruleset.json  written: the body of a POST / PUT of a ruleset
+#   user.json       `api user` (default: {"login":"kit-owner","id":1})
+#   team.json       `api orgs/<o>/teams/<t>` (default: {"id":42}); teams.json  `api repos/…/teams` (default: [])
+#   invitations.json `api repos/…/invitations` (default: []);
+#   agent-invitations.json `api user/repository_invitations` (default: []); invitations-as  written: the
+#                   GH_CONFIG_DIR|GH_TOKEN of each call on the agent's invitations; accept-fails  their PATCH fails
+#   write-fails     when present, every `api … -X PUT|POST` fails with 422
 set -u
 printf '%s\n' "$*" >> "$FAKE_GH_LOG"
 # the repository a call names with -R, as real gh puts it into the URLs it prints
 repo=u473t8/fake; prev=""; for a in "$@"; do [ "$prev" = "-R" ] && repo="$a"; prev="$a"; done
 answer() { cat "$FAKE_GH_DIR/$1" 2>/dev/null || true; }
+answer_or() { if [ -e "$FAKE_GH_DIR/$1" ]; then cat "$FAKE_GH_DIR/$1"; else echo "$2"; fi; }
 answer_seq() { # answer_seq <name>: the next line of <name>.seq, else <name>
   local seq="$FAKE_GH_DIR/$1.seq"
   if [ -s "$seq" ]; then
@@ -83,6 +94,10 @@ case "${1:-} ${2:-}" in
     if [ -n "$why" ] && [ "$why" != ok ]; then echo "$why" >&2; exit 1; fi ;;
   "api "*)
     [ -e "$FAKE_GH_DIR/gh-fails" ] && { echo "error connecting to api.github.com" >&2; exit 1; }
+    if [ -e "$FAKE_GH_DIR/write-fails" ] && [[ "$*" == *"-X PUT"* || "$*" == *"-X POST"* ]]; then
+      [[ "$*" == *"--input -"* ]] && cat > /dev/null
+      echo "HTTP 422: Validation Failed" >&2; exit 1
+    fi
     case "$2" in
       graphql)
         case "$*" in
@@ -95,6 +110,23 @@ case "${1:-} ${2:-}" in
       */permission) u="${2%/permission}"; answer "perm-${u##*/}" ;;
       */files*) answer pr-files.json ;;
       */pulls/*) answer pr.json ;;
+      */rulesets|*'/rulesets?'*)
+        if [[ "$*" == *"-X POST"* ]]; then cat > "$FAKE_GH_DIR/posted-ruleset.json"; echo '{"id":7}'
+        else answer_or rulesets.json '[]'; fi ;;
+      */rulesets/*)
+        if [[ "$*" == *"-X PUT"* ]]; then cat > "$FAKE_GH_DIR/put-ruleset.json"; echo '{"id":7}'
+        else answer ruleset.json; fi ;;
+      */invitations) answer_or invitations.json '[]' ;;
+      */collaborators/*) ;;
+      user) answer_or user.json '{"login":"kit-owner","id":1}' ;;
+      user/repository_invitations) echo "${GH_CONFIG_DIR:-}|${GH_TOKEN:-}" >> "$FAKE_GH_DIR/invitations-as"; answer_or agent-invitations.json '[]' ;;
+      user/repository_invitations/*)
+        echo "${GH_CONFIG_DIR:-}|${GH_TOKEN:-}" >> "$FAKE_GH_DIR/invitations-as"
+        if [ -e "$FAKE_GH_DIR/accept-fails" ]; then echo "HTTP 404: Not Found" >&2; exit 1; fi ;;
+      orgs/*/teams/*/repos/*) ;;
+      orgs/*/teams/*) answer_or team.json '{"id":42}' ;;
+      repos/*/*/teams) answer_or teams.json '[]' ;;
+      repos/*/*) [[ "$2" == repos/*/*/* ]] || answer_or repo.json '{"permissions":{"admin":true}}' ;;
     esac ;;
   *) exit 0 ;;
 esac
