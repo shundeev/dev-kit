@@ -495,7 +495,7 @@ if bash .shared/claude/hooks/session-start.sh 2>&1 | grep -q behind; then bad "o
 git -C .shared remote set-url origin "$old_origin"
 
 echo "- delivery guard"
-guard() { jq -nc --arg c "$1" '{tool_input:{command:$c}}' | bash .shared/claude/hooks/delivery-guard.sh; }
+guard() { jq -nc --arg c "$1" '{tool_input:{command:$c}}' | bb .shared/claude/hooks/guard.clj; }
 contains "denies raw gh issue create" '"permissionDecision":"deny"' "$(guard 'gh issue create --title x')"
 contains "denies gh pr create from main" '"permissionDecision":"deny"' "$(guard 'gh pr create --fill')"
 [ -z "$(guard 'gh pr create --head 12-landing --fill')" ] && ok "allows gh pr create from an issue branch" || bad "issue branch denied"
@@ -515,7 +515,7 @@ for c in "git push --force-with-lease origin main" "git push --force-with-lease 
 done
 contains "  the refusal says which branches may be rewritten" "<number>-<slug>" "$(guard 'git push --force-with-lease origin main')"
 # #64: in zsh an unquoted $v stays one word, so a command that needs it split is refused.
-zguard() { jq -nc --arg c "$1" '{tool_input:{command:$c}}' | SHELL=/bin/zsh bash .shared/claude/hooks/delivery-guard.sh; }
+zguard() { jq -nc --arg c "$1" '{tool_input:{command:$c}}' | SHELL=/bin/zsh bb .shared/claude/hooks/guard.clj; }
 for c in 'set -- $t' 'env $E bash x.sh' 'for n in $list; do echo $n; done' '$cmd --flag' 'for n in ${list}; do :; done'; do
   contains "zsh: refuses a command relying on splitting: $c" '"permissionDecision":"deny"' "$(zguard "$c")"
 done
@@ -524,7 +524,7 @@ for c in 'set -- ${=t}' 'for n in ${=list}; do :; done' 'echo "$v"' 'for x in $(
   out="$(zguard "$c")"
   if [ -z "$out" ]; then ok "zsh: passes $c"; else bad "zsh: judged $c" "$out"; fi
 done
-out="$(jq -nc '{tool_input:{command:"set -- $t"}}' | SHELL=/bin/bash bash .shared/claude/hooks/delivery-guard.sh)"
+out="$(jq -nc '{tool_input:{command:"set -- $t"}}' | SHELL=/bin/bash bb .shared/claude/hooks/guard.clj)"
 if [ -z "$out" ]; then ok "bash splits words itself: no refusal"; else bad "refused in bash" "$out"; fi
 # #54: a gh api call that only reads runs without a window; one that can change GitHub asks the owner.
 for c in "gh api repos/u473t8/x" "gh api repos/u473t8/x --paginate --jq '.[] | .name'" \
@@ -540,6 +540,26 @@ for c in "gh api -X POST repos/u473t8/x/issues -f title=t" "gh api repos/u473t8/
 done
 if jq -e '.permissions.ask | index("Bash(gh api *)")' .claude/settings.json >/dev/null; then bad "settings still ask for every gh api call"
 else ok "settings no longer ask for every gh api call"; fi
+# #93: the guard reads commands with a tokenizer, so quoted text is text and nested commands are seen.
+for c in 'gh issue create --title "x" --help' 'git commit -m "a && gh issue create -t y"' \
+         'gh pr create --head 12-x --title "a; gh issue create"' $'cat <<\'EOF\' > b.md\ngh issue create -t y\nEOF'; do
+  out="$(guard "$c")"
+  if [ -z "$out" ]; then ok "tokenizer: quoted or heredoc text is no command: $c"; else bad "tokenizer: judged text: $c" "$out"; fi
+done
+for c in 'bash -c "gh issue create -t x"' "eval 'gh issue create -t x'" 'echo `gh issue create -t x`' \
+         $'cat <<<"gh x"\ngh issue create -t y' $'cat <<EOF\nx\nEOF\ngh issue create -t y' 'sh -c "cd /tmp && gh issue create -t x"'; do
+  contains "tokenizer: a nested or following command is judged: $c" '"permissionDecision":"deny"' "$(guard "$c")"
+done
+# The independent review of #93: what a careless reading would let through.
+for c in $'cat <<EOF|gh issue create -t y\nbody\nEOF' $'cat <<EOF;gh issue create -t y\nbody\nEOF' \
+         $'cat <<A; cat <<B\nx\nA\ny\nB\ngh issue create -t y' $'cat <<EOF\r\nbody\r\nEOF\r\ngh issue create -t y' \
+         "echo \$'it\\'s' && gh issue create -t y" "gh issue create --title '--help'" \
+         'if true; then gh issue create -t x; fi' 'for x in a b; do gh issue create -t x; done' \
+         'sudo -u bob gh issue create -t x' 'sudo -E gh issue create -t x' "bash -lc 'gh issue create -t x'" \
+         'echo "$(case x in x) gh issue create -t y;; esac)"' \
+         'git -c core.x=y push --force-with-lease origin main' 'git --no-pager push --force-with-lease origin main'; do
+  contains "tokenizer: still judged: $c" '"permissionDecision":"deny"' "$(guard "$c")"
+done
 
 echo "- fail closed"
 jq -e '.hooks.PreToolUse[0].hooks[0].onFailure == "block"' .claude/settings.json >/dev/null && ok "PreToolUse hook fails closed" || bad "PreToolUse onFailure"
@@ -559,11 +579,11 @@ expect_exit 0 "an edit on a branch without an issue passes the gate" edit_entry
 [ -z "$LAST" ] && ok "  with no refusal" || bad "  refused" "$LAST"
 expect_exit 2 "an edit with dev-kit missing is refused, with the repair" edit_entry "$WORK/nokit"
 contains "refusal names the repair" "git submodule update --init" "$LAST"
-nojq="$WORK/nojq"; mkdir -p "$nojq"
-for t in bash git awk sed cat head tr; do ln -sf "$(command -v $t)" "$nojq/$t"; done
-out="$(jq -nc '{tool_input:{command:"gh issue create -t x"}}' | PATH="$nojq" bash .shared/claude/hooks/delivery-guard.sh 2>&1)"; code=$?
-[ "$code" -eq 2 ] && ok "guard without jq refuses (exit 2)" || bad "guard without jq (exit $code)" "$out"
-contains "says jq is missing" "needs jq" "$out"
+nobb="$WORK/nobb"; mkdir -p "$nobb"
+for t in bash git awk sed cat head tr grep jq node dirname readlink mktemp rm; do ln -sf "$(command -v $t)" "$nobb/$t"; done
+out="$(jq -nc '{tool_input:{command:"gh issue create -t x"}}' | PATH="$nobb" CLAUDE_PROJECT_DIR="$P" bash .claude/hooks/pretooluse.sh 2>&1)"; code=$?
+[ "$code" -eq 2 ] && ok "the entry without bb refuses a Bash call (exit 2)" || bad "the entry without bb (exit $code)" "$out"
+contains "  and says what to install" "needs Babashka" "$out"
 fake="$WORK/fakeclaude"; mkdir -p "$fake"
 printf '#!/bin/sh\necho "2.1.200 (Claude Code)"\n' > "$fake/claude"; chmod +x "$fake/claude"
 expect_exit 1 "doctor fails on a Claude Code too old for onFailure" env PATH="$fake:$PATH" bb $kit doctor

@@ -10,7 +10,11 @@ not run here.
   selftest case first.
 - Changing `rules/`, `claude/`, `managed/` or `scaffold/` changes every project on its next
   `kit init`. Say in the PR body what projects will see.
-- Shell scripts pass `shellcheck -S warning`; `bin/kit` passes `clj-kondo`.
+- Logic is written in Babashka (ADR-0005). bash only for the bootstrap that must run when dev-kit
+  or bb is missing (`managed/pretooluse.sh`, `claude/hooks/session-start.sh`, `githooks/pre-commit`)
+  and for the outside drivers `test/selftest.sh` and `test/e2e.sh`. A hook that runs before every
+  call is a small bb file of its own, not a `kit` subcommand: loading `kit` costs 55 ms.
+- Shell scripts pass `shellcheck -S warning`; `bin/kit` and `claude/hooks/*.clj` pass `clj-kondo`.
 - Claude sessions here act as the agent's GitHub account once `bb bin/kit identity --dir .` has
   written the git-ignored `.claude/settings.local.json` (per clone and per worktree; run in a
   terminal it also logs the agent in), then the session is restarted. Check:

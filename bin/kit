@@ -613,7 +613,7 @@
   (concat
     (for [[tool why] (cond-> [["git" "everything"]
                               ["gh" "the issue flow scripts"]
-                              ["jq" "the delivery-guard hook and flow scripts"]]
+                              ["jq" "the flow scripts and the friction recorder"]]
                        (clojure? cfg) (into [["clj-kondo" "lint"] ["zprint" "format check"]]))
           :when (nil? (sh "bash" "-c" (str "command -v " tool)))]
       [:fail (str tool " is not installed (needed for " why ")") (str "install " tool)])
