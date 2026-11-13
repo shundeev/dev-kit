@@ -33,7 +33,7 @@ jobs:
 
       - name: Lint
         run: |
-          shellcheck -S warning claude/hooks/*.sh claude/skills/gh-project-workflow/scripts/*.sh clojure/zprint_check.sh githooks/pre-commit test/selftest.sh test/fake-gh/gh managed/pretooluse.sh
+          shellcheck -S warning claude/hooks/*.sh claude/skills/gh-project-workflow/scripts/*.sh clojure/zprint_check.sh githooks/pre-commit test/selftest.sh test/e2e.sh test/fake-gh/gh managed/pretooluse.sh
           clj-kondo --fail-level error --lint bin/kit
 
       - name: Selftest

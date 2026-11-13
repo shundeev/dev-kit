@@ -1,0 +1,53 @@
+name: E2E
+
+# The flow scripts against GitHub itself, in the sandbox repository and its own board (#40): on every pull
+# request that changes them, and once a day, since a change on GitHub's side or in gh breaks them without one.
+# Not a required check: the selftest is. It runs as the agent, through the E2E_GH_TOKEN secret.
+on:
+  pull_request:
+    paths:
+      - claude/skills/gh-project-workflow/scripts/**
+      - bin/kit            # the finish script's shape gate
+      - kit-defaults.edn   # the real board, which the run must never touch
+      - test/e2e.sh
+      - .github/workflows/e2e.yml
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-sandbox # one run at a time: they share the sandbox
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # A fork's or Dependabot's pull request gets no secrets: it would only fail for the missing token.
+    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: DeLaGuardo/setup-clojure@6d46099eae24853c33c0482f2bb54edf4f1a4c74 # 13.7.0
+        with:
+          bb: 1.13.229
+
+      - name: The agent's token
+        env:
+          GH_TOKEN: ${{ secrets.E2E_GH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::The secret E2E_GH_TOKEN is missing: the owner adds the agent's token (steps on dev-kit#40's PR)"
+            exit 1
+          fi
+          gh api user --jq '"acting as \(.login)"' \
+            || { echo "::error::E2E_GH_TOKEN is refused (expired, or the agent logged in again): the owner sets it again (steps on dev-kit#40's PR)"; exit 1; }
+
+      - name: End-to-end run
+        env:
+          GH_TOKEN: ${{ secrets.E2E_GH_TOKEN }}
+        run: test/e2e.sh
