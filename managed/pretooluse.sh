@@ -17,17 +17,24 @@ set -uo pipefail
 
 input="$(cat)"
 root="${CLAUDE_PROJECT_DIR:-.}"
-guard="$root/{{kit}}/claude/hooks/delivery-guard.sh"
+guard="$root/{{kit}}/claude/hooks/guard.clj"
 
-# Bash goes to the delivery guard; Edit/Write/NotebookEdit to the design approval gate (#26).
+# Bash goes to the delivery guard; Edit/Write/NotebookEdit to the design approval gate (#26). Both are
+# Babashka (ADR-0005): without bb they cannot judge, so the call is refused with the repair (#93).
 tool="$(printf '%s' "$input" | sed -n 's/.*"tool_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
 if [ -r "$guard" ]; then
   out="$(bash "$root/{{kit}}/claude/hooks/safety-net.sh" <<<"$input")"; rc=$?
   if [ "$rc" -eq 0 ] && [ -z "$out" ]; then
     case "$tool" in
       Read|Grep|Glob) ;;
+      *) command -v bb >/dev/null 2>&1 || {
+           echo "Refused: the delivery guard needs Babashka (bb), which is not installed. Install it (https://babashka.org), then retry; .shared/bin/kit doctor checks it." >&2
+           exit 2; } ;;
+    esac
+    case "$tool" in
+      Read|Grep|Glob) ;;
       Edit|Write|NotebookEdit|MultiEdit) out="$(bb "$root/{{kit}}/bin/kit" gate --hook <<<"$input")"; rc=$? ;;
-      *) out="$(bash "$guard" <<<"$input")"; rc=$? ;;
+      *) out="$(bb "$guard" <<<"$input")"; rc=$? ;;
     esac
   fi
   [ -n "$out" ] && printf '%s\n' "$out"

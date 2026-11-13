@@ -99,7 +99,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/claude/hooks/delivery-guard.sh\"",
+            "command": "bb \"${CLAUDE_PROJECT_DIR:-.}/claude/hooks/guard.clj\"",
             "timeout": 10,
             "statusMessage": "Checking delivery flow...",
             "onFailure": "block"
