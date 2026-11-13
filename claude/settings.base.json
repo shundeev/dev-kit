@@ -219,5 +219,16 @@
         ]
       }
     ]
+  },
+  "extraKnownMarketplaces": {
+    "dev-kit": {
+      "source": {
+        "source": "directory",
+        "path": "{{kit}}"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "project-link@dev-kit": true
   }
 }

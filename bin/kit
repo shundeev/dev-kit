@@ -716,10 +716,11 @@
       (str (label item) " (" problem ")"))))
 
 
-(defn infer-repo
-  []
-  (when-let [url (sh "git" "remote" "get-url" "origin")]
-    (second (re-find #"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$" url))))
+(defn origin-repo
+  "owner/name of the GitHub origin of the git repository at dir, or nil."
+  [dir]
+  (when-let [url (sh-in dir "git" "remote" "get-url" "origin")]
+    (second (re-find #"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?/?$" url))))
 
 
 (defn new-config
@@ -730,7 +731,7 @@
         ;; settings dev-kit wrote run its hook; kit.edn went missing, they are not the project's own
         settings (if (str/includes? (json/generate-string settings) ".claude/hooks/pretooluse.sh") {} settings)]
     (when (= ::invalid settings) (fail! ".claude/settings.json is not a JSON object: fix it or move it away, then run kit init again"))
-    (cond-> {:repo     (or repo (infer-repo) (fail! "no origin remote on GitHub: pass --repo owner/name"))
+    (cond-> {:repo     (or repo (origin-repo root) (fail! "no origin remote on GitHub: pass --repo owner/name"))
              :showcase showcase
              :modules  (into #{} (comp (remove str/blank?) (map keyword)) (some-> modules (str/split #",")))}
       (seq settings) (assoc :claude-settings settings))))
@@ -1010,9 +1011,12 @@
 
 
 (defn gate-repo
+  "The repository gate and retro act on: --repo, CI's, the current folder's origin, then the session's
+  GHWF_REPO and kit.edn. The folder comes before the session (#81)."
   [{:keys [repo]} cfg]
-  (or repo (not-empty (System/getenv "GITHUB_REPOSITORY")) (not-empty (System/getenv "GHWF_REPO")) (:repo cfg)
-      (die "gate: no repository; pass --repo owner/name")))
+  (or repo (not-empty (System/getenv "GITHUB_REPOSITORY")) (origin-repo ".") (not-empty (System/getenv "GHWF_REPO"))
+      (:repo cfg)
+      (die "no repository: this folder has no GitHub origin and GHWF_REPO is not set; run inside the clone, or pass --repo owner/name")))
 
 
 (defn managed-paths

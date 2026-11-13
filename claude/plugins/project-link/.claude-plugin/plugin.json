@@ -1,0 +1,9 @@
+{
+  "name": "project-link",
+  "version": "0.1.0",
+  "description": "A clickable link to the project's GitHub Project board on the prompt footer, next to the permission mode",
+  "author": {
+    "name": "shundeev"
+  },
+  "types": "./types/index.d.ts"
+}
