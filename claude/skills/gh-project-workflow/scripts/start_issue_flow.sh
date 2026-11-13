@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+board_sh="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/board.sh"
+[[ -r "$board_sh" ]] || { echo "Error: $board_sh is missing: run this script from its skill directory, .claude/skills/gh-project-workflow/scripts/, where board.sh sits next to it" >&2; exit 1; }
 # shellcheck source=board.sh
-source "$(dirname "${BASH_SOURCE[0]}")/board.sh"
+source "$board_sh"
 
 usage() {
   cat <<'USAGE'
@@ -73,20 +75,12 @@ set_size_label() {
     || echo "Warning: could not set the label size:$size_option on #$issue_number" >&2
 }
 
+# A failed board update ends the run (#41): the issue exists, the board does not show it as asked.
 apply_project_field() {
-  local field_name="$1"
-  local option_name="$2"
-  local required="${3:-true}"
-
+  local field_name="$1" option_name="$2" output
   [[ -n "$option_name" ]] || return 0
-
-  local output
-  if output="$(board_set_field "$project_number" "$owner" "$issue_url" "$field_name" "$option_name" 2>&1)"; then
-    return 0
-  fi
-
-  [[ "$required" != "true" ]] || die "Failed to set '$field_name' to '$option_name': $output"
-  echo "Warning: Failed to set '$field_name' to '$option_name', skipping: $output" >&2
+  output="$(board_set_field "$project_number" "$owner" "$issue_url" "$field_name" "$option_name" 2>&1)" && return 0
+  die "#$issue_number is filed, but its $field_name on the board is not '$option_name': $(board_reason "$output"). Then run this script again with --issue $issue_number"
 }
 
 # `gh project item-list` asks for every field value of every item — 203 points of the 5000
@@ -94,7 +88,7 @@ apply_project_field() {
 # those. Output keeps the shape the CLI produced, so the jq matchers below are unchanged.
 project_items_json() {
   local query='
-    query($owner: String!, $number: Int!, $after: String) {
+    query($owner: String!, $number: Int!, $status: String!, $after: String) {
       owner: repositoryOwner(login: $owner) {
         ... on ProjectV2Owner {
           projectV2(number: $number) {
@@ -103,9 +97,10 @@ project_items_json() {
               nodes {
                 id
                 isArchived
+                status: fieldValueByName(name: $status) { ... on ProjectV2ItemFieldSingleSelectValue { name } }
                 content {
                   __typename
-                  ... on Issue { number url title }
+                  ... on Issue { number url title state }
                   ... on PullRequest { number url title }
                   ... on DraftIssue { title }
                 }
@@ -116,57 +111,53 @@ project_items_json() {
       }
     }'
 
-  local after="null" page nodes all="[]" has_next
+  # Pages are gathered as lines and joined by jq reading stdin: a board of ~650 items no longer
+  # fits into one command-line argument (128 KiB), which --argjson needed.
+  local after="null" page pages="" has_next
   while :; do
     if [[ "$after" == "null" ]]; then
-      page="$(gh api graphql -f query="$query" -F owner="$owner" -F number="$project_number")"
+      page="$(gh api graphql -f query="$query" -F owner="$owner" -F number="$project_number" -f status="$status_field")"
     else
-      page="$(gh api graphql -f query="$query" -F owner="$owner" -F number="$project_number" -F after="$after")"
+      page="$(gh api graphql -f query="$query" -F owner="$owner" -F number="$project_number" -f status="$status_field" -F after="$after")"
     fi
 
     # Archived items are out of the CLI's listing too; reusing one would resurrect
     # work the owner had put away.
-    nodes="$(jq -c '[.data.owner.projectV2.items.nodes[]
-                     | select(.isArchived | not)
-                     | {id: .id,
-                        title: (.content.title // ""),
-                        content: {type: .content.__typename,
-                                  number: .content.number,
-                                  url: .content.url}}]' <<<"$page")"
-    all="$(jq -c --argjson nodes "$nodes" '. + $nodes' <<<"$all")"
+    pages+="$(jq -c '[.data.owner.projectV2.items.nodes[]
+                      | select(.isArchived | not)
+                      | {id: .id,
+                         title: (.content.title // ""),
+                         status: (.status.name // ""),
+                         content: {type: .content.__typename,
+                                   number: .content.number,
+                                   url: .content.url,
+                                   state: .content.state}}]' <<<"$page")"$'\n'
 
     has_next="$(jq -r '.data.owner.projectV2.items.pageInfo.hasNextPage' <<<"$page")"
     [[ "$has_next" == "true" ]] || break
     after="$(jq -r '.data.owner.projectV2.items.pageInfo.endCursor' <<<"$page")"
   done
 
-  jq -c --argjson items "$all" -n '{items: $items}'
+  jq -cs '{items: add}' <<<"${pages:-[]}"
 }
 
 # One board serves several repositories, so a title only matches an issue of this repo
 # (or a draft, which belongs to no repo yet). Same-title work in another repo is not ours.
+# Only open work counts (#12): a closed issue or a Done card with a recurring title is history,
+# and reusing it would move it back to In progress and drop the new body.
 find_project_item_by_title() {
   local items_json="$1"
   local item_title="$2"
-  jq -c --arg item_title "$item_title" --arg prefix "https://github.com/$repo/" \
+  jq -c --arg item_title "$item_title" --arg prefix "https://github.com/$repo/" --arg done_status "${GHWF_DONE_STATUS:-Done}" \
     '.items[] | select(.title == $item_title)
-              | select(.content.type == "DraftIssue" or ((.content.url // "") | startswith($prefix)))' \
-    <<<"$items_json" | head -n1
-}
-
-# Same for an issue number: #12 exists in every repository on the board.
-find_project_item_by_issue_number() {
-  local items_json="$1"
-  local number="$2"
-  jq -c --argjson number "$number" --arg prefix "https://github.com/$repo/" \
-    '.items[] | select(.content.number? == $number)
-              | select((.content.url // "") | startswith($prefix))' \
+              | select(.content.type == "DraftIssue" or (.content.type == "Issue" and ((.content.url // "") | startswith($prefix))))
+              | select(.content.state != "CLOSED" and .status != $done_status)' \
     <<<"$items_json" | head -n1
 }
 
 find_issue_by_title() {
   local issue_title="$1"
-  gh issue list -R "$repo" --state all --search "$issue_title in:title" --limit 20 --json number,title,url \
+  gh issue list -R "$repo" --state open --search "$issue_title in:title" --limit 20 --json number,title,url \
     | jq -c --arg issue_title "$issue_title" '.[] | select(.title == $issue_title)' \
     | head -n1
 }
@@ -194,11 +185,10 @@ append_existing_labels() {
   for label in "${labels[@]}"; do
     label="$(trim "$label")"
     [[ -n "$label" ]] || continue
-    if label_exists "$label"; then
-      args_ref+=("$flag" "$label")
-    else
-      echo "Warning: Label '$label' not found in repo '$repo', skipping" >&2
-    fi
+    # A missing label is created, as size:* labels are (#41)
+    label_exists "$label" || gh label create "$label" -R "$repo" >/dev/null 2>&1 \
+      || die "Label '$label' does not exist in $repo and could not be created: create it on GitHub (Issues > Labels), or drop it from --labels"
+    args_ref+=("$flag" "$label")
   done
 }
 
@@ -224,12 +214,13 @@ convert_project_draft_to_issue() {
   repo_id="$(gh repo view "$repo" --json id --jq '.id')"
   [[ -n "$repo_id" ]] || die "Failed to resolve repository id"
 
+  # The schema (introspected, #12): input {itemId, repositoryId}, payload {item: ProjectV2Item}.
   local convert_query convert_json
-  convert_query='mutation($projectItemId:ID!,$repositoryId:ID!){ convertProjectV2DraftIssueItemToIssue(input:{projectItemId:$projectItemId,repositoryId:$repositoryId}) { issue { number url } } }'
-  convert_json="$(gh api graphql -f query="$convert_query" -F projectItemId="$draft_item_id" -F repositoryId="$repo_id")"
+  convert_query='mutation($itemId:ID!,$repositoryId:ID!){ convertProjectV2DraftIssueItemToIssue(input:{itemId:$itemId,repositoryId:$repositoryId}) { item { content { ... on Issue { number url } } } } }'
+  convert_json="$(gh api graphql -f query="$convert_query" -F itemId="$draft_item_id" -F repositoryId="$repo_id")"
 
-  issue_number="$(jq -r '.data.convertProjectV2DraftIssueItemToIssue.issue.number // empty' <<<"$convert_json")"
-  issue_url="$(jq -r '.data.convertProjectV2DraftIssueItemToIssue.issue.url // empty' <<<"$convert_json")"
+  issue_number="$(jq -r '.data.convertProjectV2DraftIssueItemToIssue.item.content.number // empty' <<<"$convert_json")"
+  issue_url="$(jq -r '.data.convertProjectV2DraftIssueItemToIssue.item.content.url // empty' <<<"$convert_json")"
   [[ -n "$issue_number" && -n "$issue_url" ]] || die "Draft item conversion to issue failed"
 }
 
@@ -438,28 +429,19 @@ issue_url=""
 issue_number=""
 item_id=""
 
-if [[ "$reuse_existing" -eq 1 ]]; then
+# --issue N names the work: no title is matched, with reuse on or off (#12).
+if [[ -n "$issue_number_override" ]]; then
+  issue_number="$issue_number_override"
+  issue_url="$(gh issue view "$issue_number" -R "$repo" --json url --jq '.url' 2>&1)" \
+    || die "Issue #$issue_number not found in $repo ($issue_url): check the number, start without --issue, or pass --repo owner/name if that is the wrong repository"
+  item_id="$(board_gh project item-add "$project_number" --owner "$owner" --url "$issue_url" --format json --jq '.id' 2>&1)" \
+    || die "#$issue_number could not be put on the board: $(board_reason "$item_id")"
+elif [[ "$reuse_existing" -eq 1 ]]; then
   items_json="$(project_items_json)"
-  existing_item=""
-
-  if [[ -n "$issue_number_override" ]]; then
-    existing_item="$(find_project_item_by_issue_number "$items_json" "$issue_number_override")"
-  fi
-
-  if [[ -z "$existing_item" ]]; then
-    existing_item="$(find_project_item_by_title "$items_json" "$title")"
-  fi
+  existing_item="$(find_project_item_by_title "$items_json" "$title")"
 
   if [[ -n "$existing_item" ]]; then
     use_project_item "$existing_item"
-  elif [[ -n "$issue_number_override" ]]; then
-    issue_number="$issue_number_override"
-    issue_url="$(gh issue view "$issue_number" -R "$repo" --json url --jq '.url')"
-    [[ -n "$issue_url" ]] || die "Issue #$issue_number not found in $repo; if that is the wrong repository, pass --repo owner/name"
-
-    item_json="$(gh project item-add "$project_number" --owner "$owner" --url "$issue_url" --format json)"
-    item_id="$(jq -r '.id // empty' <<<"$item_json")"
-    [[ -n "$item_id" ]] || die "Failed to add issue to project"
   else
     existing_issue="$(find_issue_by_title "$title")"
     if [[ -n "$existing_issue" ]]; then
@@ -467,9 +449,8 @@ if [[ "$reuse_existing" -eq 1 ]]; then
       issue_url="$(jq -r '.url // empty' <<<"$existing_issue")"
       [[ -n "$issue_number" && -n "$issue_url" ]] || die "Existing issue is missing issue data"
 
-      item_json="$(gh project item-add "$project_number" --owner "$owner" --url "$issue_url" --format json)"
-      item_id="$(jq -r '.id // empty' <<<"$item_json")"
-      [[ -n "$item_id" ]] || die "Failed to add existing issue to project"
+      item_id="$(board_gh project item-add "$project_number" --owner "$owner" --url "$issue_url" --format json --jq '.id' 2>&1)" \
+        || die "#$issue_number could not be put on the board: $(board_reason "$item_id")"
     fi
   fi
 fi
@@ -477,9 +458,10 @@ fi
 if [[ -z "$issue_number" && "$mode" == "issue" ]]; then
   issue_args=(issue create -R "$repo" --title "$title")
 
+  # gh issue create without a body asks for one, and without a terminal it fails (#12)
   if [[ -n "$body_file" ]]; then
     issue_args+=(--body-file "$body_file")
-  elif [[ -n "$body" ]]; then
+  else
     issue_args+=(--body "$body")
   fi
 
@@ -489,11 +471,9 @@ if [[ -z "$issue_number" && "$mode" == "issue" ]]; then
   issue_url="$(gh "${issue_args[@]}" | tail -n1 | tr -d '\r')"
   [[ -n "$issue_url" ]] || die "Issue creation failed"
 
-  item_json="$(gh project item-add "$project_number" --owner "$owner" --url "$issue_url" --format json)"
-  item_id="$(jq -r '.id // empty' <<<"$item_json")"
-  [[ -n "$item_id" ]] || die "Failed to add issue to project"
-
   issue_number="${issue_url##*/}"
+  item_id="$(board_gh project item-add "$project_number" --owner "$owner" --url "$issue_url" --format json --jq '.id' 2>&1)" \
+    || die "#$issue_number is filed but could not be put on the board: $(board_reason "$item_id"). Then run this script again with --issue $issue_number"
 elif [[ -z "$issue_number" ]]; then
   draft_args=(project item-create "$project_number" --owner "$owner" --title "$title" --format json)
 
@@ -520,11 +500,11 @@ if [[ -n "$issue_number" ]]; then
   fi
 fi
 
-apply_project_field "$showcase_field" "$showcase_option" false
-apply_project_field "$priority_field" "$priority_option" true
-apply_project_field "$size_field" "$size_option" false
+apply_project_field "$showcase_field" "$showcase_option"
+apply_project_field "$priority_field" "$priority_option"
+apply_project_field "$size_field" "$size_option"
 set_size_label
-apply_project_field "$status_field" "$status_option" true
+apply_project_field "$status_field" "$status_option"
 
 development_branch=""
 if [[ "$skip_branch" -eq 0 ]]; then

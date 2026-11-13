@@ -16,8 +16,19 @@
 #   pr.json         output of `api …/pulls/<n> --jq '{title, body}'`
 #   gh-fails        when present, every `api` call fails, as when GitHub is unreachable
 #   issue-title  output of `issue view … --json title`
+#   issue-missing   when present, `issue view` fails as for a number that is no issue
+#   issue-list      output of `issue list … --json number,title,url` (default: [])
+#   issue-created   output of `issue create` (default: https://github.com/u473t8/fake/issues/77)
+#   labels.json     output of `label list --json name` (default: [])
+#   project-items.json.seq / project-items.json  pages of the board items query (`api graphql`, projectV2(number…)
+#   convert.json    the response of the draft conversion mutation
+#   fields.json     output of `project field-list` (default: Status, Priority, Size and Showcase with their options)
+#   board-fails.seq / board-fails  stderr of a failing `project item-edit`, one call per line ("ok" lets it pass);
+#                   the last line repeats; empty or absent: every edit passes
 set -u
 printf '%s\n' "$*" >> "$FAKE_GH_LOG"
+# the repository a call names with -R, as real gh puts it into the URLs it prints
+repo=u473t8/fake; prev=""; for a in "$@"; do [ "$prev" = "-R" ] && repo="$a"; prev="$a"; done
 answer() { cat "$FAKE_GH_DIR/$1" 2>/dev/null || true; }
 answer_seq() { # answer_seq <name>: the next line of <name>.seq, else <name>
   local seq="$FAKE_GH_DIR/$1.seq"
@@ -47,16 +58,37 @@ case "${1:-} ${2:-}" in
       *) answer_seq pr-state ;;
     esac ;;
   "issue view")
+    [ -e "$FAKE_GH_DIR/issue-missing" ] && { echo "GraphQL: Could not resolve to an issue or pull request with the number of ${3:-0}." >&2; exit 1; }
     case "$*" in
       *title*) answer issue-title ;;
-      *) echo "https://github.com/u473t8/fake/issues/${3:-0}" ;;
+      *) echo "https://github.com/$repo/issues/${3:-0}" ;;
     esac ;;
+  "issue list") if [ -e "$FAKE_GH_DIR/issue-list" ]; then answer issue-list; else echo "[]"; fi ;;
+  "issue create") if [ -e "$FAKE_GH_DIR/issue-created" ]; then answer issue-created; else echo "https://github.com/$repo/issues/77"; fi ;;
+  "issue develop")
+    case "$*" in
+      *--list*) ;;
+      *) echo "https://github.com/$repo/tree/${3:-0}-task" ;;
+    esac ;;
+  "label list") if [ -e "$FAKE_GH_DIR/labels.json" ]; then answer labels.json; else echo "[]"; fi ;;
+  "repo view") echo "R_fake" ;;
+  "project item-add") case "$*" in *--jq*) echo "PVTI_fake" ;; *) echo '{"id":"PVTI_fake"}' ;; esac ;;
+  "project view") echo "PVT_fake" ;;
+  "project field-list")
+    if [ -e "$FAKE_GH_DIR/fields.json" ]; then answer fields.json; else
+      echo '{"fields":[{"id":"F_status","name":"Status","options":[{"id":"o1","name":"Backlog"},{"id":"o2","name":"In progress"},{"id":"o3","name":"In review"},{"id":"o4","name":"Done"}]},{"id":"F_prio","name":"Priority","options":[{"id":"p1","name":"High"},{"id":"p2","name":"Low"}]},{"id":"F_size","name":"Size","options":[{"id":"s1","name":"S"},{"id":"s2","name":"M"}]},{"id":"F_show","name":"Showcase","options":[{"id":"w1","name":"Site"}]}]}'
+    fi ;;
+  "project item-edit")
+    why="$(answer_seq board-fails)"
+    if [ -n "$why" ] && [ "$why" != ok ]; then echo "$why" >&2; exit 1; fi ;;
   "api "*)
     [ -e "$FAKE_GH_DIR/gh-fails" ] && { echo "error connecting to api.github.com" >&2; exit 1; }
     case "$2" in
       graphql)
         case "$*" in
           *'search('*) answer missing.json ;;
+          *'projectV2(number'*) answer_seq project-items.json ;;
+          *convertProjectV2DraftIssueItemToIssue*) answer convert.json ;;
           *closedByPullRequestsReferences*) answer retro.json ;;
           *) answer gate-issue.json ;;
         esac ;;
