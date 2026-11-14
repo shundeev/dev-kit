@@ -76,6 +76,7 @@ grep -q "Managed by dev-kit" .claude/agents/ops.md && ok "agent copied with the 
 head -1 .claude/agents/ops.md | grep -qx -- '---' && ok "agent copy keeps frontmatter first" || bad "agent frontmatter"
 [ -f LICENSE ] && grep -q "MIT License" LICENSE && ok "LICENSE scaffolded" || bad "LICENSE"
 [ -f .github/workflows/ci.yml ] && ok "CI workflow written" || bad "ci.yml"
+[ -f .github/workflows/ready-when-green.yml ] && ok "ready workflow written (ADR-0007)" || bad "ready-when-green.yml"
 [ "$(git config core.hooksPath)" = ".shared/githooks" ] && ok "hooksPath set" || bad "hooksPath"
 grep -q "dev-kit:begin" AGENTS.md && grep -q "# This project" AGENTS.md && ok "AGENTS.md has the block and the project part" || bad "AGENTS.md"
 [ ! -e CLAUDE.md ] && ok "no CLAUDE.md" || bad "CLAUDE.md exists"
@@ -308,6 +309,26 @@ echo "# edited" >> $prt
 expect_exit 1 "doctor --ci catches an edited PR template" bb $kit doctor --ci
 contains "doctor names the template" "$prt: differs" "$LAST"
 bb $kit init >/dev/null
+
+echo "- ready workflow in projects and in dev-kit (ADR-0007)"
+rw=.github/workflows/ready-when-green.yml
+cmp -s "$rw" "$KIT/managed/ready-when-green.yml" && ok "init lays managed/ready-when-green.yml as it is" || bad "the ready workflow differs from managed/"
+grep -q 'workflows: \["CI"\]' "$rw" && grep -q '^name: CI$' .github/workflows/ci.yml \
+  && ok "  it waits for the workflow managed/ci.yml names" || bad "  the ready workflow does not wait for the CI workflow"
+echo "# edited" >> "$rw"
+expect_exit 1 "doctor --ci catches an edited ready workflow" bb $kit doctor --ci
+contains "doctor names the file" "$rw: differs" "$LAST"
+rm "$rw"
+expect_exit 1 "doctor --ci catches a missing ready workflow" bb $kit doctor --ci
+contains "doctor names it missing" "$rw: missing" "$LAST"
+contains "  and says to run init" "kit init" "$LAST"
+bb $kit init >/dev/null
+[ -f "$rw" ] && ok "init lays it again" || bad "init did not lay the ready workflow"
+# dev-kit is not a project, so its copy is made by one substitution: the name of its own CI workflow.
+sed 's/workflows: \["CI"\]/workflows: ["Selftest"]/' "$KIT/managed/ready-when-green.yml" | cmp -s - "$KIT/$rw" \
+  && grep -q '^name: Selftest$' "$KIT/.github/workflows/selftest.yml" \
+  && ok "dev-kit's own ready workflow is managed/ready-when-green.yml waiting for Selftest" \
+  || bad "dev-kit's own $rw drifted from managed/ready-when-green.yml: regenerate it with sed 's/workflows: \\[\"CI\"\\]/workflows: [\"Selftest\"]/' managed/ready-when-green.yml > $rw"
 
 echo "- delivery skill"
 skill="$KIT/claude/skills/repo-task-delivery/SKILL.md"

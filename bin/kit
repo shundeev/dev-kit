@@ -25,7 +25,7 @@
 ;;              project part of AGENTS.md; with --scaffold also README.md, adr/, docs/experiments/)
 ;;   managed  — owned by dev-kit, rewritten by init, verified by doctor (the AGENTS.md block,
 ;;              .claude/settings.json, .claude/skills links, .claude/agents copies,
-;;              .github/workflows/ci.yml, .github/CODEOWNERS, the issue form and PR template,
+;;              .github/workflows/ci.yml and ready-when-green.yml, .github/CODEOWNERS, the issue form and PR template,
 ;;              clojure module: .zprint.edn link, clj-kondo config-paths;
 ;;              per machine and git-ignored: the agent identity env in .claude/settings.local.json)
 (ns kit
@@ -435,6 +435,10 @@
      {:kind :file :path ".claude/settings.json" :content (settings-text cfg)}
      {:kind :file :path ".github/workflows/ci.yml"
       :content (slurp (str (fs/path kit-dir "managed" "ci.yml")))}
+     ;; ADR-0007: marks a draft pull request ready when its required checks passed; kit finish opens drafts
+     ;; only where the base branch holds this file
+     {:kind :file :path ".github/workflows/ready-when-green.yml"
+      :content (slurp (str (fs/path kit-dir "managed" "ready-when-green.yml")))}
      {:kind :file :path ".github/CODEOWNERS" :content (codeowners-text cfg)}
      {:kind :file :path ".github/ISSUE_TEMPLATE/task.yml"
       :content (slurp (str (fs/path kit-dir "managed" "github" "ISSUE_TEMPLATE" "task.yml")))}
