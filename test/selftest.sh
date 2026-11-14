@@ -1113,6 +1113,20 @@ expect_exit 0 "merge: an update-branch that is refused does not end the wait" fl
 contains "  says the update was refused" "update was refused" "$LAST"
 rm "$FAKE/update-fails"; unscript; : > "$FAKE/pr-list"; git switch -q --detach origin/main
 
+# While GitHub recomputes a PR (mergeStateStatus UNKNOWN, the review decision empty for a moment) no stop reason is
+# judged: the approval is "gone" only on a settled state. Seen live: update-branch, then an UNKNOWN look (#109).
+git switch -q -c 18-unknown origin/main && git push -q -u origin 18-unknown
+echo "https://github.com/u473t8/fake/pull/94" > "$FAKE/pr-list"
+script_views "OPEN - UNKNOWN" "OPEN APPROVED CLEAN" "MERGED APPROVED CLEAN"
+expect_exit 0 "merge: an UNKNOWN look with no review decision is looked at again, not read as a lost approval" flow merge
+contains "  reaches the closeout" "Merged: " "$LAST"
+unscript; : > "$FAKE/pr-list"; git switch -q --detach origin/main
+git switch -q -c 19-unknown origin/main && git push -q -u origin 19-unknown
+echo "https://github.com/u473t8/fake/pull/93" > "$FAKE/pr-list"
+script_views "OPEN APPROVED BLOCKED" "OPEN - UNKNOWN" "OPEN APPROVED BLOCKED" "MERGED APPROVED CLEAN"
+expect_exit 0 "merge: the same while waiting after auto-merge is on" flow merge
+unscript; : > "$FAKE/pr-list"; git switch -q --detach origin/main
+
 git switch -q -c 14-auto origin/main && git push -q -u origin 14-auto
 : > "$FAKE/pr-list"; echo "https://github.com/u473t8/fake/pull/98" > "$FAKE/pr-list-merged"; : > "$FAKE_GH_LOG"
 I14=https://github.com/u473t8/fake/issues/14; I15=https://github.com/u473t8/fake/issues/15
