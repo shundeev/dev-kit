@@ -9,6 +9,8 @@
 #   pr-draft        output of `pr view … --json isDraft` (default false); pr-view-<n> that of the ready workflow's
 #                   state,isDraft,headRefOid,labels read; ready-fails-<n> makes `pr ready <n>` fail
 #   pr-checks.json  output of `pr checks … --json name,bucket`; pr-checks.exit its exit code (default 0)
+#   pr-closing.json output of `pr view … --json closingIssuesReferences` (default: none); issue-closed-<n> when present,
+#                   `issue view … --json state` of issue <n> answers CLOSED, else OPEN
 #   pr-view.seq     when present, `pr view --json …` prints its next line (the PR as JSON: state, reviewDecision,
 #                   mergeStateStatus, headRefOid), one line per call. No line left is an error that says so: a test
 #                   that scripts every look can never wait for ever (#109)
@@ -99,6 +101,7 @@ case "${1:-} ${2:-}" in
     [ -e "$FAKE_GH_DIR/ready-fails-${3:-0}" ] && { echo "GraphQL: Pull request is not ready" >&2; exit 1; }
     exit 0 ;;
   "pr view")
+    case "$*" in *closingIssuesReferences*) answer_or pr-closing.json '{"closingIssuesReferences":[]}'; exit 0 ;; esac
     if [ -e "$FAKE_GH_DIR/pr-view.seq" ]; then consume_seq pr-view.seq; exit $?; fi
     case "$*" in
       *headRefOid*) answer "pr-view-${3:-0}" ;;
@@ -109,6 +112,7 @@ case "${1:-} ${2:-}" in
     [ -e "$FAKE_GH_DIR/issue-missing" ] && { echo "GraphQL: Could not resolve to an issue or pull request with the number of ${3:-0}." >&2; exit 1; }
     case "$*" in
       *title*) answer issue-title ;;
+      *"--json state"*) if [ -e "$FAKE_GH_DIR/issue-closed-${3##*/}" ]; then echo CLOSED; else echo OPEN; fi ;;
       *) echo "https://github.com/$repo/issues/${3:-0}" ;;
     esac ;;
   "issue list") if [ -e "$FAKE_GH_DIR/issue-list" ]; then answer issue-list; else echo "[]"; fi ;;

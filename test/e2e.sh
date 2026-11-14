@@ -8,7 +8,7 @@
 #   1. kit start files an issue: Status, Priority, Size and Showcase on the board, the branch on GitHub
 #   2. a draft card with a title is converted to an issue by a second start
 #   3. a commit; kit finish opens the pull request as a draft and the card is In review. When CI has passed, the
-#      sandbox's ready workflow (managed/ready-when-green.yml, ADR-0007) marks it ready: the owners are asked
+#      sandbox's ready workflow (.github/workflows/ready-when-green.yml, ADR-0007) marks it ready: the owners are asked
 #      only then, and auto-merge is on. Each wait ends on its event (a run completing), never on a timer
 #   4. the merge waits: without the owner's Approve the PR stays open (ADR-0003; the run never approves)
 #   5. cleanup, also after a failure: the PR closed, the branches deleted, the issues closed as not planned and
@@ -210,19 +210,15 @@ n2="$(sed -n 's/^Issue Number: //p' <<<"$out")"; b2="$(branch_in "$out")"
 say "ok    2 draft: the card became issue #$n2, the draft is gone"
 
 STEP="3 finish opens the pull request"
-# The sandbox must hold what this run tests: dev-kit's managed ready workflow, and a CI workflow for it to follow.
+# The sandbox must hold what this run tests: dev-kit's ready workflow, and a CI workflow for it to follow, both active.
 # Without them no run would come, and the waits below would wait for ever.
 for w in ci.yml ready-when-green.yml; do
-  gh api "repos/$REPO/contents/.github/workflows/$w" --jq .name >/dev/null 2>&1 \
-    || fail "$REPO has no .github/workflows/$w on its main: the owner merges the sandbox PR that adds it (steps on dev-kit#104's PR)"
-done
-gh api "repos/$REPO/contents/.github/workflows/ready-when-green.yml" --jq .content | base64 -d | cmp -s - "$KIT/managed/ready-when-green.yml" \
-  || fail "the sandbox's ready-when-green.yml is not dev-kit's managed/ready-when-green.yml: the owner merges the sandbox PR that replaces it (steps on dev-kit#104's PR)"
-# The waits below end on events; an inactive workflow would never produce one, so it fails here, with the reason.
-for w in ci.yml ready-when-green.yml; do
-  st="$(gh api "repos/$REPO/actions/workflows/$w" --jq .state 2>&1)" || fail "the state of $w in $REPO could not be read: $st"
+  st="$(gh api "repos/$REPO/actions/workflows/$w" --jq .state 2>&1)" \
+    || fail "$REPO has no .github/workflows/$w on its main, or it cannot be read ($st): the owner merges the sandbox PR that adds it (steps on dev-kit#104's PR)"
   [ "$st" = active ] || fail "$w in $REPO is $st, so no run will come: the owner enables it (Actions > $w > Enable workflow; steps on dev-kit#104's PR)"
 done
+gh api "repos/$REPO/contents/.github/workflows/ready-when-green.yml" --jq .content | base64 -d | cmp -s - "$KIT/.github/workflows/ready-when-green.yml" \
+  || fail "the sandbox's ready-when-green.yml is not dev-kit's .github/workflows/ready-when-green.yml: the owner merges the sandbox PR that replaces it (steps on dev-kit#104's PR)"
 echo "$RUN" > e2e.txt
 cat > "$WORK/body.md" <<EOF
 ## What changed
@@ -260,48 +256,41 @@ got="$(fields_of "$n1")"
 [ "${got%%|*}" = "In review" ] || fail "the card of #$n1 reads \"$got\", not In review"
 say "ok    3 finish: $pr open, the card In review"
 
-# ADR-0007: the PR was opened as a draft, and the ready workflow marks it ready when CI has passed. Every wait below
-# ends when what it waits for happens, or when that has become impossible, and says which.
+# ADR-0007: the PR was opened as a draft, and the ready workflow marks it ready when CI has passed. A wait ends when
+# what it waits for happens, or when that has become impossible (the PR closed), and says which.
+STEP="3 the ready workflow marks the draft ready"
 prn="${pr##*/}"; sha="$(git rev-parse HEAD)"
-pr_open() { [ "$(gh pr view "$pr" --json state --jq .state 2>/dev/null)" = OPEN ]; }
-STEP="3 CI runs on the PR's head"
-ci=""
-while [ -z "$ci" ]; do # the run appears a moment after the push; the latest one for this head is the one
-  ci="$(gh run list --repo "$REPO" --workflow ci.yml --commit "$sha" --json databaseId,createdAt \
-          --jq 'sort_by(.createdAt) | last | .databaseId // empty' 2>/dev/null)"
-  [ -n "$ci" ] && break
-  pr_open || fail "$pr is no longer open and CI never started on $sha: nothing is left to wait for; look at $pr"
-  sleep 2
-done
+ci="" ours="" # set by await
+await() { # await <variable> <what> <command...>: sets the variable to what the command prints, once it prints something
+  local var="$1" what="$2" out; shift 2
+  while out="$("$@" 2>/dev/null)"; [ -z "$out" ]; do
+    [ "$(gh pr view "$pr" --json state --jq .state 2>/dev/null)" = OPEN ] \
+      || fail "$pr is no longer open and $what never came: nothing is left to wait for; look at $pr"
+    sleep 2
+  done
+  printf -v "$var" %s "$out"
+}
+await ci "CI on $sha" gh run list --repo "$REPO" --workflow ci.yml --commit "$sha" --json databaseId,createdAt \
+  --jq 'sort_by(.createdAt) | last | .databaseId // empty'
 gh run watch "$ci" --repo "$REPO" --exit-status >/dev/null 2>&1 \
   || fail "CI failed on $sha, so the PR stays a draft by design, but this run needs it green: gh run view $ci --repo $REPO --log-failed"
-STEP="3 the ready workflow decides for that CI run"
-# The script's own text is in the log too (the step echoes its source), so only lines that were logged count: they
-# have a timestamp before "decision:".
-# A workflow_run run belongs to main's commit, not to the PR's, so the run that decided for this head is the one whose
-# log names the CI run that triggered it ("CI run id: <id>,"). Each candidate is watched until it ends (its log
-# exists only then). This ends when that run completed, or when it has become impossible, and says which: the PR
-# closed. When GitHub never delivers the workflow_run event no event exists to wait for, so the e2e job's own limit
-# (.github/workflows/e2e.yml) is the only end there; the CI workflow being active was checked before the start.
-ci_started="$(gh run view "$ci" --repo "$REPO" --json createdAt --jq .createdAt)"
-ours=""
-while [ -z "$ours" ]; do
+# A workflow_run run belongs to main's commit, not to the PR's: the run that decided for this head is the one whose log
+# names the CI run that triggered it. A run's log exists once it has ended, so each candidate is watched to its end.
+# The script's own text is in the log too, so only lines with a timestamp before "decision:" count.
+ready_run() {
+  local r
   for r in $(gh run list --repo "$REPO" --workflow ready-when-green.yml --event workflow_run --json databaseId,createdAt \
-               --jq ".[] | select(.createdAt >= \"$ci_started\") | .databaseId" 2>/dev/null); do
-    gh run watch "$r" --repo "$REPO" >/dev/null 2>&1 # returns when that run has ended
-    if gh run view "$r" --repo "$REPO" --log 2>/dev/null | grep -qE "CI run id: $ci,"; then ours="$r"; break; fi
+               --jq ".[] | select(.createdAt >= \"$(gh run view "$ci" --repo "$REPO" --json createdAt --jq .createdAt)\") | .databaseId"); do
+    gh run watch "$r" --repo "$REPO" >/dev/null 2>&1
+    gh run view "$r" --repo "$REPO" --log 2>/dev/null | grep -qE "CI run id: $ci," && { echo "$r"; return; }
   done
-  [ -n "$ours" ] && break
-  pr_open || fail "$pr is no longer open and the ready workflow never ran for CI run $ci: nothing is left to wait for; look at $pr"
-  sleep 2
-done
+}
+await ours "the ready workflow's run for CI run $ci" ready_run
 log="$(gh run view "$ours" --repo "$REPO" --log 2>&1 | grep -E 'Z decision: ' | sed 's/^.*Z decision: /decision: /' | cut -c1-300)"
 [ "$(gh run view "$ours" --repo "$REPO" --json conclusion --jq .conclusion)" = success ] \
   || fail "the ready workflow's run $ours failed: gh run view $ours --repo $REPO --log"
 grep -q 'auto-merge could not be turned on' <<<"$log" \
-  && fail "auto-merge cannot be turned on in $REPO, so the PR can never reach it (run $ours): the owner turns on Settings > General > 'Allow auto-merge' there. $log"
-# The run has ended, so the PR is read once, after both of its steps (ready, then auto-merge).
-STEP="3 the PR is ready, with auto-merge on and the owners asked"
+  && fail "auto-merge cannot be turned on in $REPO (run $ours): the owner turns on Settings > General > 'Allow auto-merge' there. $log"
 state="$(gh pr view "$pr" --json isDraft,autoMergeRequest,reviewRequests 2>&1)" || fail "$state"
 [ "$(jq -r .isDraft <<<"$state")" = false ] || fail "run $ours ended and $pr is still a draft; its decisions: $log"
 [ "$(jq -r '.autoMergeRequest != null' <<<"$state")" = true ] || fail "$pr is ready but auto-merge is not on; run $ours: $log"

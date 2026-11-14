@@ -556,18 +556,16 @@ Options:
           (re-find #"404|Not Found" (str out err)) false
           :else (die (str "Could not look for " ready-workflow-path " on '" base "' of " repo " ("
                           (let [m (str/trim (str out err))] (if (str/blank? m) (str "gh exit code " exit) m))
-                          "). Nothing was committed or pushed: run it again when GitHub answers, "
-                          "or check 'gh auth status'.")))))
+                          "). Nothing was committed or pushed: run it again when GitHub answers, or check 'gh auth status'.")))))
 
 
-(defn- ensure-label!
-  "The label exists in the repository; made when it does not."
-  [repo label color description]
-  (let [have (try (set (map :name (json/parse-string (gh-out "label" "list" "-R" repo "--limit" "200" "--json" "name") true)))
-                  (catch Exception _ #{}))]
-    (when-not (have label)
-      (when-not (zero? (:exit (run "gh" "label" "create" label "-R" repo "--color" color "--description" description)))
-        (die (str "Label '" label "' does not exist in " repo " and could not be created: create it on GitHub (Issues > Labels), then run again"))))))
+(defn- ensure-hold-label!
+  "The label hold exists in the repository; made when it does not."
+  [repo]
+  (let [{:keys [exit out err]} (run "gh" "label" "create" "hold" "-R" repo "--color" "FBCA04"
+                                    "--description" "Stays a draft until kit release (ADR-0007)")]
+    (when-not (or (zero? exit) (re-find #"already exists" (str out err)))
+      (die (str "Label 'hold' does not exist in " repo " and could not be created: create it on GitHub (Issues > Labels), then run again")))))
 
 
 (defn- turn-on-auto-merge!
@@ -626,14 +624,14 @@ Options:
                          (= "true" (gh! "pr" "view" pr-url "--json" "isDraft" "--jq" ".isDraft"))
                          base-draft?)
         _ (when (and (:hold o) pr-url (not draft?))
-            (die (str "--hold on " pr-url ", which is ready already: the workflow only reads drafts, so the label would hold nothing. "
-                      "Nothing was committed or pushed: to hold it, make it a draft first (gh pr ready " pr-url " --undo; "
-                      "that turns auto-merge off and keeps the owners' request), then run kit finish --hold again; or run kit finish without --hold.")))
+            (die (str pr-url " is ready already: the workflow only reads drafts, so --hold would hold nothing. Nothing was committed or "
+                      "pushed: make it a draft first (gh pr ready " pr-url " --undo; that turns auto-merge off and keeps the owners' "
+                      "request) and run kit finish --hold again, or run kit finish without --hold.")))
         _ (when (and (:hold o) (not base-draft?))
-            (die (str "--hold works through " ready-workflow-path ", which '" base "' of " repo " does not hold yet. "
-                      "Nothing was committed or pushed: run kit finish without --hold (the PR then opens ready and the owners are asked at once); "
-                      "once the dev-kit update PR with the file has merged, --hold works.")))
-        _ (when (:hold o) (ensure-label! repo "hold" "FBCA04" "Stays a draft until kit release (ADR-0007)"))]
+            (die (str "--hold works through " ready-workflow-path ", which '" base "' of " repo " does not hold yet. Nothing was "
+                      "committed or pushed: run kit finish without --hold (the PR opens ready, the owners are asked at once), "
+                      "or after the dev-kit update PR with the file has merged.")))
+        _ (when (:hold o) (ensure-hold-label! repo))]
     (when-not (:no-commit o)
       (when (seq (:add o)) (ok! (apply shell "git" "add" "--" (:add o))))
       (when (zero? (:exit (run "git" "diff" "--cached" "--quiet")))
@@ -661,11 +659,11 @@ Options:
         (let [r (apply run "gh" "pr" "edit" pr-url edit)]
           (when-not (zero? (:exit r))
             (warn "Warning: could not request the review or set the assignee:" (str/trim (str (:out r) (:err r)))))))
-      ;; An open PR that already exists is held by its own label: the workflow reads it when CI completes.
+      ;; An open PR is held by its own label: the workflow reads it when CI completes.
       (when (and (:hold o) existing?)
         (let [r (run "gh" "pr" "edit" pr-url "--add-label" "hold")]
           (when-not (zero? (:exit r))
-            (die (str "The pull request " pr-url " could not get the label hold: " (str/trim (str (:out r) (:err r)))
+            (die (str pr-url " could not get the label hold: " (str/trim (str (:out r) (:err r)))
                       ". Fix: add the label on GitHub, or run kit finish --hold again.")))))
       ;; The owner's Approve is the word to merge: with auto-merge on, GitHub merges once the owner approved the
       ;; latest commit, the checks passed and the branch contains the latest base. A draft cannot have it: the
@@ -687,70 +685,6 @@ Options:
         (println (str "Draft: the owners are asked once its required checks pass; the ready workflow marks it ready and turns on auto-merge."
                       (when (:hold o) " Held: when the earlier PR has merged, run kit release."))))
       (println (str "Status: " review-status)))))
-
-
-;; ------------------------------------------------------------------ kit release
-
-(def release-usage
-  "Usage: kit release [options]
-
-For a pull request held with the label hold (kit finish --hold), once the PR it waited for has
-merged: removes the label, marks the PR ready (GitHub then asks the owners for a review) and
-turns on auto-merge (ADR-0007). It also frees a draft that was never held but that nothing
-marked ready, when its required checks have passed. It refuses while a required check on the
-PR's head is not green, and names the check; nothing is changed then. Run it again when the
-check has passed.
-
-Run from the issue branch, or name the pull request.
-
-Options:
-  --pr <number|url>             The pull request (default: the open PR of the current branch)
-  --repo <owner/repo>           Default: the folder's origin on GitHub, then GHWF_REPO
-  --help                        Show this help")
-
-
-(def release-spec
-  {"--pr" [:pr :value] "--repo" [:repo :value] "--help" [:help :flag] "-h" [:help :flag]})
-
-
-(defn- checks-not-green
-  "The required checks of a PR that are not green, as \"name (bucket)\"; empty when all are. Dies when GitHub reports none."
-  [repo pr]
-  (let [{:keys [out err]} (run "gh" "pr" "checks" pr "-R" repo "--required" "--json" "name,bucket")
-        ;; gh exits 8 for pending and 1 for failed, and still prints the list: its output is what counts.
-        checks (try (json/parse-string out true) (catch Exception _ nil))]
-    (cond
-      (nil? checks) (die (str "Could not read the required checks of " pr " (" (str/trim (str out err)) "). Run it again, or look with: gh pr checks " pr " --required"))
-      (empty? checks) (die (str "GitHub reports no required check on " pr ", so none can be called green. Fix: run it again once CI has started, or mark the PR ready by hand with gh pr ready " pr))
-      :else (->> checks (remove #(#{"pass" "skipping"} (:bucket %))) (map #(str (:name %) " (" (:bucket %) ")"))))))
-
-
-(defn release!
-  [_kit args]
-  (let [o (parse-opts release-spec args)
-        _ (when (:help o) (println release-usage) (System/exit 0))
-        repo   (resolve-repo (:repo o))
-        branch (git-out "rev-parse" "--abbrev-ref" "HEAD")
-        pr     (or (:pr o)
-                   (not-empty (gh! "pr" "list" "-R" repo "--head" branch "--state" "open" "--json" "url" "--jq" ".[0].url // empty"))
-                   (die (str "No open pull request for branch '" branch "' in " repo ". Fix: run it from the held PR's branch, or name it with --pr <number>")))
-        {:keys [state isDraft labels url]} (json/parse-string (gh! "pr" "view" pr "-R" repo "--json" "state,isDraft,labels,url") true)
-        url    (or url pr)
-        held?  (boolean (some #(= "hold" (:name %)) labels))
-        bad    (do (when-not (= state "OPEN") (die (str url " is " state ", not open: nothing to release.")))
-                   (checks-not-green repo pr))]
-    (when (seq bad)
-      (die (str "A required check of " url " is not green: " (str/join ", " bad) ". Nothing was changed: "
-                "wait for it (kit checks, in the background), then run kit release again; "
-                "a failed check is fixed first.")))
-    (when held?
-      (ok! (shell "gh" "pr" "edit" pr "-R" repo "--remove-label" "hold"))
-      (println "Hold removed."))
-    (when isDraft
-      (ok! (shell "gh" "pr" "ready" pr "-R" repo))
-      (println "Marked ready: the owners are asked for a review."))
-    (turn-on-auto-merge! url)
-    (println (str "Released: " url))))
 
 
 ;; ------------------------------------------------------------------ waiting on a pull request
@@ -888,6 +822,62 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
               :else (println (str "All " (count checks) " required checks passed on " (sha7 head) ": " pr)))))))))
 
 
+;; ------------------------------------------------------------------ kit release
+
+(def release-usage
+  "Usage: kit release [options]
+
+For a pull request held with the label hold (kit finish --hold), once the PR it waited for has
+merged: removes the label, marks the PR ready (GitHub then asks the owners for a review) and
+turns on auto-merge (ADR-0007). It also frees a draft that was never held but that nothing marked ready. It refuses,
+naming the check and changing nothing, while a required check on the PR's head is not green.
+
+Options:
+  --pr <number|url>             The pull request (default: the open PR of the current branch)
+  --repo <owner/repo>           Default: the folder's origin on GitHub, then GHWF_REPO
+  --help                        Show this help")
+
+
+(def release-spec
+  {"--pr" [:pr :value] "--repo" [:repo :value] "--help" [:help :flag] "-h" [:help :flag]})
+
+
+(defn- checks-not-green
+  "The required checks of a PR that are not green, as \"name (bucket)\"; empty when all are. Dies when GitHub reports none."
+  [repo pr]
+  (let [checks (required-checks pr repo die)]
+    (when (empty? checks)
+      (die (str "GitHub reports no required check on " pr ", so none can be called green. Fix: run it again once CI has started, or gh pr ready " pr)))
+    (->> checks (remove #(#{"pass" "skipping"} (:bucket %))) (map #(str (:name %) " (" (:bucket %) ")")))))
+
+
+(defn release!
+  [_kit args]
+  (let [o (parse-opts release-spec args)
+        _ (when (:help o) (println release-usage) (System/exit 0))
+        repo   (resolve-repo (:repo o))
+        branch (git-out "rev-parse" "--abbrev-ref" "HEAD")
+        pr     (or (:pr o)
+                   (not-empty (gh! "pr" "list" "-R" repo "--head" branch "--state" "open" "--json" "url" "--jq" ".[0].url // empty"))
+                   (die (str "No open pull request for branch '" branch "' in " repo ". Fix: run it from the held PR's branch, or name it with --pr <number>")))
+        {:keys [state isDraft labels url]} (json/parse-string (gh! "pr" "view" pr "-R" repo "--json" "state,isDraft,labels,url") true)
+        url    (or url pr)
+        held?  (boolean (some #(= "hold" (:name %)) labels))
+        _      (when-not (= state "OPEN") (die (str url " is " state ", not open: nothing to release.")))
+        bad    (checks-not-green repo pr)]
+    (when (seq bad)
+      (die (str "A required check of " url " is not green: " (str/join ", " bad) ". Nothing was changed: wait for it "
+                "(kit checks, in the background), then run kit release again; a failed check is fixed first.")))
+    (when held?
+      (ok! (shell "gh" "pr" "edit" pr "-R" repo "--remove-label" "hold"))
+      (println "Hold removed."))
+    (when isDraft
+      (ok! (shell "gh" "pr" "ready" pr "-R" repo))
+      (println "Marked ready: the owners are asked for a review."))
+    (turn-on-auto-merge! url)
+    (println (str "Released: " url))))
+
+
 ;; ------------------------------------------------------------------ kit merge
 
 (def merge-usage
@@ -899,7 +889,8 @@ updated by merging the base into it, which keeps the approval. It turns on auto-
 waits until GitHub reports the pull request MERGED, or until merging became impossible (closed, a
 required check failed, DIRTY, the approval gone); it then stops and names the reason.
 When GitHub already merged it, only the closeout runs: board Status \"Done\", the branch deleted
-locally and on GitHub, back to the base branch. A pull request that did not merge keeps its branch.
+locally and on GitHub, back to the base branch; each issue the PR closes that is still open is closed as completed
+(auto-merge merges as github-actions, and GitHub then closes none). A pull request that did not merge keeps its branch.
 
 Options:
   --repo <owner/repo>           Default: the folder's origin on GitHub, then GHWF_REPO
@@ -923,6 +914,20 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
   (die (str "The branch conflicts with " base ": " url ". Fix: merge " base " into the branch (git fetch origin && "
             "git merge origin/" base ") and resolve the conflicts, then push; the push dismisses the owner's Approve, "
             "so ask for it again.")))
+
+
+(defn- close-linked-issues!
+  "A pull request merged by auto-merge is merged by github-actions, and GitHub then closes none of its linked issues.
+  Closes each one the PR names as closing that is still open, as completed, naming the PR; one line per issue."
+  [pr-url]
+  (doseq [{:keys [number url]} (:closingIssuesReferences (gh-json die "pr" "view" pr-url "--json" "closingIssuesReferences"))]
+    (if (= "OPEN" (gh! "issue" "view" url "--json" "state" "--jq" ".state"))
+      (let [r (run "gh" "issue" "close" url "--reason" "completed" "--comment" (str "Closed by " pr-url ", which merged."))]
+        (if (zero? (:exit r))
+          (println (str "Closed #" number ": " url))
+          (warn (str "Warning: could not close #" number ": " (str/trim (str (:out r) (:err r)))
+                     ". Fix: gh issue close " url " --reason completed"))))
+      (println (str "#" number " was closed already: " url)))))
 
 
 (defn merge!
@@ -1027,6 +1032,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
     (when (zero? (:exit (run "git" "ls-remote" "--exit-code" "--heads" "origin" branch)))
       (ok! (shell "git" "push" "origin" "--delete" branch)))
     (println (str "Merged: " pr-url))
+    (close-linked-issues! pr-url)
     (when board-error (die board-error))
     (println (str "Status: " done-status))))
 
