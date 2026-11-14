@@ -20,16 +20,16 @@ These rules apply to every agent working in this repository (Claude Code, Codex,
   Name the task's Size (XS/S/M/L) and the reason in the first reply; it sets the ceremony.
   No file is edited before the issue and its branch exist, XS included. The design approval is
   enforced: CI (`kit gate`) and the edit hook refuse code on an M issue without it.
-- Issues are filed by `bash .claude/skills/gh-project-workflow/scripts/start_issue_flow.sh`,
+- Issues are filed by `.shared/bin/kit start`,
   never by hand: it puts the issue on the board with Status, Priority and Showcase and creates
   its branch. An issue that is not on the board does not exist.
 - Priority is Urgent / High / Medium / Low. Judge it; never leave it empty.
-- Branches come from `gh issue develop` (the start script), named `<number>-<slug>`.
+- Branches come from `gh issue develop` (`kit start`), named `<number>-<slug>`.
   Never `git checkout -b` / `git switch -c`.
 - Never push to `main`; it accepts pull requests only. A pull request merges only on the
   owner's Approve of its latest commit and only on top of the latest `main`; the ruleset
-  enforces both. The agent never approves. Auto-merge, turned on by the finish script, merges
-  once both hold; `merge_issue_flow.sh` brings a branch that fell behind up to date (merging
+  enforces both. The agent never approves. Auto-merge, turned on by `kit finish`, merges
+  once both hold; `kit merge` brings a branch that fell behind up to date (merging
   `main` in keeps the approval) and closes out.
 - Not part of the flow: answering a question, reading or measuring, continuing an issue that is
   already active, or the owner saying to skip GitHub.

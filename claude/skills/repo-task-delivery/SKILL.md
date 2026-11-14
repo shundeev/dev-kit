@@ -25,7 +25,7 @@ are Requirements, Invariants, Design, Plan and Done when. The pull request body 
 ## 1. Size sets the ceremony
 
 Find the issue or file it first. Search the open issues, since one issue may host several PRs.
-File through `gh-project-workflow` (the start script), never `gh issue create`, with Priority
+File through `gh-project-workflow` (`kit start`), never `gh issue create`, with Priority
 and Size (Priority: **Urgent**, broken for the owner now or blocking all work; **High**, the owner
 waits on it or it removes recurring friction; **Medium**, a planned improvement; **Low**, nice to
 have); starting work means Status **In progress**. No file is edited before the issue and its
@@ -80,7 +80,7 @@ component is an M: stop, resize it and ask for G1.
   while the approval is missing. The approval counts only when set by someone with write access
   who is not the agent, after the issue body and every `## Design` comment last changed. So a
   design and its addenda are comments starting with `## Design`.
-- The gate reads the Size from the issue's `size:*` label (the start script sets it with the board
+- The gate reads the Size from the issue's `size:*` label (`kit start` sets it with the board
   field). No label counts as M. An XS/S PR over 200 changed lines fails until the issue is resized.
 
 ## 6. Plan and execute
@@ -119,7 +119,7 @@ component is an M: stop, resize it and ask for G1.
 
 ## 9. Pull request
 
-- Write the body from `.github/pull_request_template.md`, then run `finish_issue_flow.sh`
+- Write the body from `.github/pull_request_template.md`, then run `kit finish`
   (`gh-project-workflow`). It commits, pushes, opens the PR, turns on auto-merge and moves the
   card to **In review**. It first runs the shape rules CI's pull request gate holds (branch,
   title, `ADR:` line, filled **Review** and **User-level test**), so a PR that would fail them is
@@ -135,7 +135,7 @@ component is an M: stop, resize it and ask for G1.
     `git push --force-with-lease`, reply with the new hash and resolve the thread;
   - disagreed: reply with the argument and leave the thread open. An open thread blocks the merge.
 - The owner's Approve of the latest commit is the word to merge. Auto-merge merges once the
-  checks pass and the branch contains the latest `main`. Then run `merge_issue_flow.sh` for the
+  checks pass and the branch contains the latest `main`. Then run `kit merge` for the
   closeout; it also updates a branch that fell behind, and merging `main` in keeps the approval.
 - The agent never approves a pull request.
 - An owner step still open after the merge: reopen the issue and keep its card **In progress**.
@@ -143,7 +143,7 @@ component is an M: stop, resize it and ask for G1.
 
 ## 11. Retrospective
 
-- New work waits for it (ADR-0004, #56): `start_issue_flow.sh` refuses to start while an issue
+- New work waits for it (ADR-0004, #56): `kit start` refuses to start while an issue
   merged in the last 14 days lacks its `## Retrospective` comment, and a session's start names
   them. Only the owner waives it: `--skip-retro` asks them first.
 - After the merge, collect the data: `bb .shared/bin/kit retro <issue>` (in dev-kit itself

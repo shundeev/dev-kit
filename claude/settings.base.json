@@ -44,9 +44,6 @@
       "Bash(gh project view *)",
       "Bash(gh project item-list *)",
       "Bash(gh project field-list *)",
-      "Bash(bash .claude/skills/gh-project-workflow/scripts/start_issue_flow.sh *)",
-      "Bash(bash .claude/skills/gh-project-workflow/scripts/finish_issue_flow.sh *)",
-      "Bash(bash .claude/skills/gh-project-workflow/scripts/merge_issue_flow.sh *)",
       "Bash({{kit}}/bin/kit *)",
       "Bash(bb {{kit}}/bin/kit *)",
       "Bash(jq *)"

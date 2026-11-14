@@ -46,6 +46,7 @@ git add -A && git commit -m "chore: add dev-kit"
 | `kit retro --missing` | Merged issues of the last 14 days without a retrospective. New work waits for them. |
 | `kit gate …` | The pull request gate: the branch of an open issue, the title, the `ADR:` line, filled **Review** and **User-level test**, accepted ADRs unchanged, the design approval and the size. CI runs it, again when a title or body is edited; the finish script runs its shape rules before it opens a PR; the edit hook runs the design approval. |
 | `kit user-test` | The project's user-level test, `:user-test` in `kit.edn`, run from the project's root. CI runs it after the other checks and keeps its artifacts, also when it fails ([docs/user-level-tests.md](docs/user-level-tests.md)). |
+| `kit start`, `kit finish`, `kit merge` | The delivery flow's GitHub steps: the issue on the board and its branch; the commit, push, pull request and In review; the closeout after the owner's Approve. `kit board set` sets one card's field. How to use them: the `gh-project-workflow` skill. |
 | `kit identity`, `kit modules` | The agent's identity alone, for a repository without dev-kit; the modules, for CI. |
 
 ## How updates arrive
@@ -101,10 +102,10 @@ Defaults come from `kit-defaults.edn`: the board, the base branch, the code owne
 ## Developing dev-kit
 
 ```sh
-test/selftest.sh     # a throwaway project: init/doctor/repairs, hooks, flow scripts, kit retro
+test/selftest.sh     # a throwaway project: init/doctor/repairs, hooks, kit start/finish/merge, kit retro
 ```
 
-The decisions are in `adr/`. The delivery scripts, the guard hook and the subagents were first built for [Sprecha](https://github.com/the-kind-robots/learning-app).
+The decisions are in `adr/`. The delivery flow, the guard hook and the subagents were first built in bash for [Sprecha](https://github.com/the-kind-robots/learning-app).
 
 ## License
 

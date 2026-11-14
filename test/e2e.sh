@@ -5,12 +5,12 @@
 # It acts on a sandbox repository and its own board, owned like the real board (kit-defaults.edn :board :owner),
 # never on anything else, and checks every
 # step against GitHub:
-#   1. start_issue_flow.sh files an issue: Status, Priority, Size and Showcase on the board, the branch on GitHub
+#   1. kit start files an issue: Status, Priority, Size and Showcase on the board, the branch on GitHub
 #   2. a draft card with a title is converted to an issue by a second start
-#   3. a commit; finish_issue_flow.sh opens the pull request and the card is In review
+#   3. a commit; kit finish opens the pull request and the card is In review
 #   4. the merge waits: without the owner's Approve the PR stays open (ADR-0003; the run never approves)
 #   5. cleanup, also after a failure: the PR closed, the branches deleted, the issues closed as not planned and
-#      their cards archived, so the next run starts clean
+#      their cards deleted, so the next run starts clean
 # A failing step names itself and GitHub's answer.
 #
 #   test/e2e.sh        as the gh login in use: the agent's in a Claude session; in CI, the E2E_GH_TOKEN secret
@@ -18,7 +18,6 @@
 set -uo pipefail
 
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SCR="$KIT/claude/skills/gh-project-workflow/scripts"
 REPO="${E2E_REPO:-shundeev/flow-sandbox}"
 BOARD="${E2E_BOARD:-Flow sandbox}"
 # The sandbox board is owned where the real board is, a user's board with an organization's issues: the #22
@@ -53,16 +52,18 @@ SHOWCASE="$(gh project field-list "$NUM" --owner "$BOWNER" --format json --jq '.
 export GHWF_OWNER="$BOWNER" GHWF_PROJECT_NUMBER="$NUM" GHWF_REPO="$REPO" GHWF_MERGE_WAIT=0
 
 # One board item per issue: Status|Priority|Size|Showcase, or the draft's title for a draft.
-item() {
-  gh api graphql -f query='query($o:String!,$n:Int!){repositoryOwner(login:$o){... on ProjectV2Owner{projectV2(number:$n){
-      items(last:100){nodes{
+# Every page of the board: a card just added is not among the last 100 of a long board.
+all_items() {
+  gh api graphql --paginate -f query='query($o:String!,$n:Int!,$endCursor:String){repositoryOwner(login:$o){... on ProjectV2Owner{projectV2(number:$n){
+      items(first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{
       id isArchived content{__typename ... on Issue{number title} ... on DraftIssue{title}}
       s:fieldValueByName(name:"Status"){... on ProjectV2ItemFieldSingleSelectValue{name}}
       p:fieldValueByName(name:"Priority"){... on ProjectV2ItemFieldSingleSelectValue{name}}
       z:fieldValueByName(name:"Size"){... on ProjectV2ItemFieldSingleSelectValue{name}}
       w:fieldValueByName(name:"Showcase"){... on ProjectV2ItemFieldSingleSelectValue{name}}}}}}}}' \
-    -f o="$BOWNER" -F n="$NUM" --jq '.data.repositoryOwner.projectV2.items.nodes[] | select(.isArchived | not)'
+    -f o="$BOWNER" -F n="$NUM" --jq '.data.repositoryOwner.projectV2.items.nodes[]'
 } # gh's error goes to stderr, into the log: the step that needed the board names GitHub's answer there
+item() { all_items | jq -c 'select(.isArchived | not)'; }
 branch_in() { sed -n 's/^\(Checked Out \)\{0,1\}Branch: //p' <<<"$1"; } # the start script's "Branch:" line
 fields_of() { # fields_of <issue number>
   item | jq -r --argjson n "$1" 'select(.content.number == $n) | "\(.s.name)|\(.p.name)|\(.z.name)|\(.w.name)"' 2>/dev/null
@@ -94,17 +95,19 @@ cleanup() {
     gh issue close "$n" --repo "$REPO" --reason "not planned" >/dev/null 2>&1 || problems+=" issue #$n;"
   done
   # Every card of this run, an issue's or a draft that was never converted.
-  cards="$(item | jq -r --arg r "$RUN" 'select((.content.title // "") | startswith($r)) | .id')" \
+  # Every card of this run, an issue's or a draft never converted, and cards of earlier runs left archived: deleted,
+  # so the board stays short.
+  cards="$(all_items | jq -r --arg r "$RUN" 'select((.content.title // "") as $t | ($t | startswith($r)) or (.isArchived and ($t | startswith("e2e ")))) | .id')" \
     || problems+=" (the board's cards could not be listed)"
   for id in $cards; do
-    gh project item-archive "$NUM" --owner "$BOWNER" --id "$id" >/dev/null 2>&1 || problems+=" card $id;"
+    gh project item-delete "$NUM" --owner "$BOWNER" --id "$id" >/dev/null 2>&1 || problems+=" card $id;"
   done
   rm -rf "$WORK"
   if [ -n "$problems" ]; then
     echo "FAIL  step 5 cleanup: left in $REPO:$problems remove them by hand, then run again" >&2
     exit 1
   fi
-  say "ok    5 cleanup: the PR closed, branches deleted, issues closed as not planned, cards archived"
+  say "ok    5 cleanup: the PR closed, branches deleted, issues closed as not planned, cards deleted"
   exit "$rc"
 }
 trap cleanup EXIT
@@ -119,7 +122,7 @@ git config user.email "e2e@users.noreply.github.com"
 git config credential.helper '!gh auth git-credential'
 
 STEP="1 start files an issue"
-out="$(bash "$SCR/start_issue_flow.sh" --title "$RUN: task" --priority Low --size XS --showcase "$SHOWCASE" \
+out="$(bb "$KIT/bin/kit" start --title "$RUN: task" --priority Low --size XS --showcase "$SHOWCASE" \
          --status "In progress" 2>&1)" || fail "$out"
 n1="$(sed -n 's/^Issue Number: //p' <<<"$out")"; b1="$(branch_in "$out")"
 [ -n "$n1" ] && issues+=("$n1"); [ -n "$b1" ] && branches+=("$b1") # cleaned up whatever follows
@@ -137,7 +140,7 @@ for _ in $(seq 20); do
   [ -n "$(item | jq -r --arg t "$RUN: draft" 'select(.content.title == $t) | .id' 2>/dev/null)" ] && break
   sleep 2
 done
-out="$(bash "$SCR/start_issue_flow.sh" --title "$RUN: draft" --priority Low --size XS --showcase "$SHOWCASE" \
+out="$(bb "$KIT/bin/kit" start --title "$RUN: draft" --priority Low --size XS --showcase "$SHOWCASE" \
          --no-checkout 2>&1)" || fail "$out"
 n2="$(sed -n 's/^Issue Number: //p' <<<"$out")"; b2="$(branch_in "$out")"
 [ -n "$n2" ] && issues+=("$n2"); [ -n "$b2" ] && branches+=("$b2")
@@ -176,7 +179,7 @@ none
 
 ADR: none
 EOF
-out="$(bash "$SCR/finish_issue_flow.sh" --type test --summary "end-to-end run $RUN" --add e2e.txt \
+out="$(bb "$KIT/bin/kit" finish --type test --summary "end-to-end run $RUN" --add e2e.txt \
          --pr-body-file "$WORK/body.md" 2>&1)" || fail "$out"
 pr="$(sed -n 's/^PR URL: //p' <<<"$out")"
 [ -n "$pr" ] || fail "no PR URL in: $out"
@@ -186,7 +189,7 @@ got="$(fields_of "$n1")"
 say "ok    3 finish: $pr open, the card In review"
 
 STEP="4 the merge waits for the owner"
-out="$(bash "$SCR/merge_issue_flow.sh" 2>&1)" && fail "merge_issue_flow.sh succeeded without the owner's Approve: $out"
+out="$(bb "$KIT/bin/kit" merge 2>&1)" && fail "kit merge succeeded without the owner's Approve: $out"
 grep -q "Waiting for the owner's Approve" <<<"$out" || fail "the merge stopped for another reason: $out"
 [ "$(gh pr view "$pr" --json state --jq .state 2>&1)" = OPEN ] || fail "the PR $pr is no longer open"
 say "ok    4 merge: refused without the owner's Approve, $pr still open"

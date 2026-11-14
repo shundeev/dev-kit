@@ -6,8 +6,8 @@ name: E2E
 on:
   pull_request:
     paths:
-      - claude/skills/gh-project-workflow/scripts/**
-      - bin/kit            # the finish script's shape gate
+      - bin/flow.clj       # kit start, finish and merge (#95)
+      - bin/kit            # their entry, and the shape gate
       - kit-defaults.edn   # the real board, which the run must never touch
       - test/e2e.sh
       - .github/workflows/e2e.yml
