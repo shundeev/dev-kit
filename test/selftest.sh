@@ -1009,7 +1009,14 @@ rm "$FAKE/update-fails"; unscript; : > "$FAKE/pr-list"; git switch -q --detach o
 
 git switch -q -c 14-auto origin/main && git push -q -u origin 14-auto
 : > "$FAKE/pr-list"; echo "https://github.com/u473t8/fake/pull/98" > "$FAKE/pr-list-merged"; : > "$FAKE_GH_LOG"
+I14=https://github.com/u473t8/fake/issues/14; I15=https://github.com/u473t8/fake/issues/15
+echo "{\"closingIssuesReferences\":[{\"number\":14,\"url\":\"$I14\"},{\"number\":15,\"url\":\"$I15\"}]}" > "$FAKE/pr-closing.json"; touch "$FAKE/issue-closed-15"
 expect_exit 0 "merge: a PR already merged by GitHub gets the closeout only" flow merge
+# Merged by github-actions' auto-merge, GitHub closes none of the PR's issues: the closeout closes the open ones.
+grep -q "^issue close $I14 --reason completed --comment .*pull/98" "$FAKE_GH_LOG" && ok "  an open linked issue is closed as completed, naming the PR" || bad "  issue 14 not closed" "$(grep '^issue' "$FAKE_GH_LOG")"
+[ "$(grep -c '^issue close' "$FAKE_GH_LOG")" = 1 ] && ok "  an issue closed already is left alone" || bad "  closed more than the open one" "$(grep '^issue close' "$FAKE_GH_LOG")"
+contains "  says which it closed" "Closed #14" "$LAST"; contains "  and which was closed already" "#15 was closed already" "$LAST"
+rm "$FAKE/pr-closing.json" "$FAKE/issue-closed-15"
 if grep -q '^pr merge' "$FAKE_GH_LOG"; then bad "  merged again"; else ok "  no second merge"; fi
 grep -q '^project item-add' "$FAKE_GH_LOG" && ok "  the card is moved to Done" || bad "  no board update"
 git rev-parse -q --verify refs/heads/14-auto >/dev/null && bad "  local branch left" || ok "  local branch deleted"
@@ -1021,6 +1028,7 @@ script_views "OPEN APPROVED CLEAN" "MERGED APPROVED CLEAN" "MERGED APPROVED CLEA
 expect_exit 0 "merge: a PR GitHub merged while auto-merge was refused goes to the closeout (site#18)" flow merge
 grep -q "Auto-merge not available" <<<"$LAST" && bad "  warned that auto-merge is not available" || ok "  no 'Auto-merge not available' line"
 grep -q '^pr merge [^ ]* --squash$' "$FAKE_GH_LOG" && bad "  tried a plain merge" || ok "  no second merge"
+grep -q '^issue close' "$FAKE_GH_LOG" && bad "  closed an issue the PR does not close" || ok "  a PR with no closing reference closes no issue"
 rm "$FAKE/no-auto-merge"; unscript
 git switch -q -c 42-dirty origin/main && git push -q -u origin 42-dirty
 script_views "OPEN APPROVED DIRTY"; : > "$FAKE_GH_LOG"

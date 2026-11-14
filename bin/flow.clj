@@ -889,7 +889,8 @@ updated by merging the base into it, which keeps the approval. It turns on auto-
 waits until GitHub reports the pull request MERGED, or until merging became impossible (closed, a
 required check failed, DIRTY, the approval gone); it then stops and names the reason.
 When GitHub already merged it, only the closeout runs: board Status \"Done\", the branch deleted
-locally and on GitHub, back to the base branch. A pull request that did not merge keeps its branch.
+locally and on GitHub, back to the base branch; each issue the PR closes that is still open is closed as completed
+(auto-merge merges as github-actions, and GitHub then closes none). A pull request that did not merge keeps its branch.
 
 Options:
   --repo <owner/repo>           Default: the folder's origin on GitHub, then GHWF_REPO
@@ -913,6 +914,20 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
   (die (str "The branch conflicts with " base ": " url ". Fix: merge " base " into the branch (git fetch origin && "
             "git merge origin/" base ") and resolve the conflicts, then push; the push dismisses the owner's Approve, "
             "so ask for it again.")))
+
+
+(defn- close-linked-issues!
+  "A pull request merged by auto-merge is merged by github-actions, and GitHub then closes none of its linked issues.
+  Closes each one the PR names as closing that is still open, as completed, naming the PR; one line per issue."
+  [pr-url]
+  (doseq [{:keys [number url]} (:closingIssuesReferences (gh-json die "pr" "view" pr-url "--json" "closingIssuesReferences"))]
+    (if (= "OPEN" (gh! "issue" "view" url "--json" "state" "--jq" ".state"))
+      (let [r (run "gh" "issue" "close" url "--reason" "completed" "--comment" (str "Closed by " pr-url ", which merged."))]
+        (if (zero? (:exit r))
+          (println (str "Closed #" number ": " url))
+          (warn (str "Warning: could not close #" number ": " (str/trim (str (:out r) (:err r)))
+                     ". Fix: gh issue close " url " --reason completed"))))
+      (println (str "#" number " was closed already: " url)))))
 
 
 (defn merge!
@@ -1017,6 +1032,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
     (when (zero? (:exit (run "git" "ls-remote" "--exit-code" "--heads" "origin" branch)))
       (ok! (shell "git" "push" "origin" "--delete" branch)))
     (println (str "Merged: " pr-url))
+    (close-linked-issues! pr-url)
     (when board-error (die board-error))
     (println (str "Status: " done-status))))
 

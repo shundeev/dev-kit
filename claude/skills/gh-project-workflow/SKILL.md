@@ -104,7 +104,8 @@ woken when it exits. Never wait for it, or for checks, with `sleep` or `--watch`
   impossible: the PR was closed, a required check failed (each named with its link), the branch
   conflicts (`DIRTY`), or the approval is gone. No time limit ends it.
 - PR already merged by auto-merge: only the closeout.
-- Closeout after a confirmed `MERGED`: card **Done**, branch deleted locally and on GitHub,
+- Closeout after a confirmed `MERGED`: card **Done**, each issue the PR closes that is still open
+  closed as completed (auto-merge merges as `github-actions`, and GitHub then closes none), branch deleted locally and on GitHub,
   back to `main` (or detached on `origin/main` when `main` is checked out in another worktree).
   A PR that did not merge keeps its branch.
 
