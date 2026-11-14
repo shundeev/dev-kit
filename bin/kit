@@ -1173,9 +1173,8 @@
 
 (defn issue-verdict
   "[level message] for the issue behind the pull request: open, and its design approval or size."
-  [repo n files cfg]
-  (let [issue (try (fetch-issue repo n) (catch Exception e {"error" (ex-message e)}))
-        size  (issue-size issue)]
+  [repo n issue files cfg]
+  (let [size (issue-size issue)]
     (cond
       (or (nil? issue) (get issue "error"))
       [:fail (str "#" n " is not an issue of " repo (some->> (get issue "error") (str ": "))
@@ -1197,6 +1196,13 @@
         [l (str (if size (str "size " size) "no size label, so M") "; " m)]))))
 
 
+(defn size-problems
+  "An M pull request (an issue that is not XS or S) states its size before and after the simplify pass (#117)."
+  [issue body]
+  (when (and (not (#{"XS" "S"} (issue-size issue))) (not (re-find #"(?m)^Size: +\S.* → \S.* after simplify\b" body)))
+    ["an M pull request has no 'Size: <before> → <after> after simplify' line: add it, e.g. 'Size: 420 → 310 lines after simplify'"]))
+
+
 (defn gate-ci!
   [{:keys [branch pr] :as opts}]
   (let [cfg    (gate-config)
@@ -1207,9 +1213,12 @@
         read!  #(try (%) (catch Exception e (report! [[:fail (str "could not read PR #" pr " of " repo " from GitHub ("
                                                                   (ex-message e) "); rerun the job")]])))
         {:strs [title body]} (read! #(json/parse-string (gh! "api" (str "repos/" repo "/pulls/" pr) "--jq" "{title, body}")))
-        files  (read! #(doall (pr-files repo pr)))]
-    (report! (concat (for [p (concat (shape-problems branch title (str body) pr) (adr-problems files))] [:fail p])
-                     (when n [(issue-verdict repo n files cfg)])))))
+        files  (read! #(doall (pr-files repo pr)))
+        issue  (when n (try (fetch-issue repo n) (catch Exception e {"error" (ex-message e)})))]
+    (report! (concat (for [p (concat (shape-problems branch title (str body) pr)
+                                     (size-problems issue (str body)) (adr-problems files))]
+                       [:fail p])
+                     (when n [(issue-verdict repo n issue files cfg)])))))
 
 
 (defn gate-shape!
