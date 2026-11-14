@@ -602,6 +602,33 @@ for c in "cd $FB && git push -f origin 42-some-task" "git -C $FB push -f origin 
 done
 out="$(cguard 'git push -f origin 42-some-task')"
 if [ -z "$out" ]; then ok "a push from the session's own folder does not borrow another repository's answer"; else bad "judged" "$out"; fi
+# #124: a directory given through a variable or ~ is resolved from the command itself, else the environment; one that
+# cannot be is never replaced by the session's folder.
+HM="$WORK/home"; mkdir -p "$HM"; git init -q -b 42-some-task "$HM/repo"
+vguard() { jq -nc --arg c "$1" '{tool_input:{command:$c}}' | HOME="$HM" S_ENV="$FB" bb .shared/claude/hooks/guard.clj; }
+for c in "S=$FB; cd \$S && git push --force-with-lease" "S=$FB && cd \"\$S\" && git push --force-with-lease" \
+         "S=$FB; cd \${S} && git push --force-with-lease" "export S=$FB; cd \$S && git push --force-with-lease" \
+         "S=$FB; git -C \$S push --force-with-lease" "cd ~/repo && git push --force-with-lease" \
+         "git -C ~/repo push --force-with-lease" "R=repo; cd ~/\$R && git push --force-with-lease" \
+         "D=$FB; S=\$D; cd \$S && git push --force-with-lease" "cd \$S_ENV && git push --force-with-lease"; do
+  out="$(vguard "$c")"
+  if [ -z "$out" ]; then ok "a variable directory is resolved: $c"; else bad "judged: $c" "$out"; fi
+done
+contains "a variable directory on main is refused as main" "'main'" "$(vguard "S=$WORK/force-main; cd \$S && git push --force-with-lease")"
+for c in 'cd $UNSET && git push -f' 'cd "$(pwd)" && git push -f' 'cd `pwd` && git push -f origin 42-some-task' \
+         'git -C $UNSET push --force-with-lease' 'S=$(pwd); cd $S && git push -f'; do
+  out="$(vguard "$c")"
+  contains "an unresolvable directory is refused: $c" '"permissionDecision":"deny"' "$out"
+  contains "  and the fix is named" 'git -C <absolute path>' "$out"
+done
+contains "  and the variable is named" '$UNSET' "$(vguard 'cd $UNSET && git push -f')"
+out="$(vguard 'cd $UNSET && git push -f origin main')"
+contains "a push to main is refused as main whatever the directory" "'main'" "$out"
+out="$(vguard 'cd $UNSET && git push origin 42-some-task')"
+if [ -z "$out" ]; then ok "an unforced push in an unresolvable directory passes"; else bad "judged" "$out"; fi
+for c in "S=$FB; cd \$S && git push -f origin 42-some-task" "S=$FB; git -C \$S push -f origin 42-some-task"; do
+  contains "gh runs in the resolved directory: $c" '"permissionDecision":"deny"' "$(cguard "$c")"
+done
 for state in REVIEW_REQUIRED CHANGES_REQUESTED ""; do
   echo "$state" > "$AG/pr-list"
   out="$(aguard 'git push --force-with-lease origin 42-some-task')"

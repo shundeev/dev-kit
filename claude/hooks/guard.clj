@@ -365,14 +365,44 @@
 (def issue-branch? #(boolean (re-matches #"[0-9].*-.*" (or % ""))))
 
 
+(defn resolve-dir
+  "A directory word with a leading ~, $NAME and ${NAME} replaced by the value of a NAME=value earlier in the
+  command (vars), else of the environment (#124). Plain substitution, nothing is run. {:unresolved word} when
+  it holds $(…) or a backtick, or a variable has no value: the session's folder is never taken for it."
+  [vars word]
+  (let [word  (str word)
+        value #(or (get vars %) (System/getenv %))
+        named #"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?"]
+    (if (or (re-find #"`|\$\(" word) (not-every? value (map second (re-seq named word))))
+      {:unresolved word}
+      (-> word
+          (str/replace #"^~(?=/|$)" (str/re-quote-replacement (System/getenv "HOME")))
+          (str/replace named (comp value second))))))
+
+
+(defn assigned
+  "vars with the NAME=value words that open statement st, or follow `export`; a value that cannot be
+  resolved leaves its name unset."
+  [vars st]
+  (reduce (fn [vars {:keys [t]}]
+            (let [[_ n v] (re-matches #"([A-Za-z_][A-Za-z0-9_]*)=(.*)" t)
+                  v       (resolve-dir vars v)]
+              (if (string? v)
+                (assoc vars n v)
+                (dissoc vars n))))
+          vars
+          (take-while #(assignment? (:t %)) (cond-> st (= "export" (:t (first st))) rest))))
+
+
 (defn push-refused
   "[branch why] for a forced push the rules refuse, else nil: :branch when it is not an issue branch (#38), :approved
-  when its open PR holds an approval, which a rewrite dismisses (#117). Only a forced push to an issue branch reads
-  GitHub, in the push's repository (#99); when it cannot be read the push passes."
-  [dir args]
+  when its open PR holds an approval, which a rewrite dismisses (#117), :dir when the push's directory cannot be
+  resolved and the rule needs it (#124). Only a forced push to an issue branch reads GitHub, in the push's
+  repository (#99); when it cannot be read the push passes."
+  [dir args vars]
   (let [[dir args] (loop [dir        dir
                           [a & more] args]
-                     (cond (= a "-C") (recur (first more) (rest more))
+                     (cond (= a "-C") (recur (resolve-dir vars (first more)) (rest more))
                            ;; git's global options before the command, some with a value
                            (#{"-c" "--git-dir" "--work-tree" "--namespace" "--super-prefix" "--config-env"} a)
                            (recur dir (rest more))
@@ -386,10 +416,11 @@
         (when force
           (some (fn [r]
                   (let [dst (-> r (str/replace #"^\+" "") (str/replace #"^.*:" "") (str/replace #"^refs/heads/" ""))
-                        dst (if (= dst "HEAD")
+                        dst (if (and (= dst "HEAD") (string? dir))
                               (or (sh-out "git" "-C" dir "symbolic-ref" "--short" "-q" "HEAD") "HEAD")
                               dst)]
-                    (cond (not (issue-branch? dst)) [(if (str/blank? dst) "the branches matching on both sides" dst)
+                    (cond (and (map? dir) (or (= dst "HEAD") (issue-branch? dst))) [(:unresolved dir) :dir]
+                          (not (issue-branch? dst)) [(if (str/blank? dst) "the branches matching on both sides" dst)
                                                      :branch]
                           (= "APPROVED"
                              (sh-in dir
@@ -479,7 +510,8 @@
         zsh?   (= "zsh" (some-> (System/getenv "SHELL") (str/replace #".*/" "")))
         branch (delay (sh-out "git" "rev-parse" "--abbrev-ref" "HEAD"))]
     (loop [[st & more] statements
-           wd "."]
+           wd          "."
+           vars        {}]
       (when st
         (when (some #(str/includes? (:t %) "DELIVERY_GUARD=off") st)
           (decide
@@ -491,13 +523,21 @@
               text (str/join " " ts)]
           ;; reading a command's documentation is not running it; a quoted --help is a value, not that flag
           (if (some #(and (not (:q %)) (#{"--help" "-h"} (:t %))) ws)
-            (recur more wd)
+            (recur more wd (assigned vars st))
             (do
               (when (= head "git")
-                (when-let [[target why] (push-refused wd (rest ts))]
+                (when-let [[target why] (push-refused wd (rest ts) vars)]
                   (decide
                    "deny"
-                   (if (= why :approved)
+                   (case why
+                     :dir
+                     (str
+                      "Refused: cannot tell which repository this forced push rewrites (`"
+                      target
+                      "` has no value the guard can read here: it is not set in this command, or it comes from a command).
+
+Run it as `git -C <absolute path> push …`, so the repository is named in the command itself (#124).")
+                     :approved
                      (str
                       "Refused: a forced push to '"
                       target
@@ -582,7 +622,12 @@ From a <number>-<slug> branch, commit, push, open the PR and set Status in one s
 
 If the owner asked for the raw command, re-run it prefixed with DELIVERY_GUARD=off."))))
                     nil)))
-              (recur more (if (and (= head "cd") (some-> sub (str/starts-with? "/"))) sub wd)))))))))
+              (recur more
+                     (let [d (when (and (= head "cd") sub) (resolve-dir vars sub))]
+                       (if (or (map? d) (some-> d (str/starts-with? "/")))
+                         d
+                         wd))
+                     (assigned vars st)))))))))
 
 
 (defn -main
