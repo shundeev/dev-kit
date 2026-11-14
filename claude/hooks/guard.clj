@@ -44,7 +44,12 @@
 
 ;; Claude Code sets run_in_background on a Bash call (https://code.claude.com/docs/en/hooks, the tool_input of a
 ;; PreToolUse call); only `true` counts, a missing or false field is a foreground call (#109).
-(def background? (when (map? input) (true? (get-in input ["tool_input" "run_in_background"]))))
+;; The Monitor tool runs its command in the background and feeds each output line back to the agent
+;; (https://code.claude.com/docs/en/tools-reference#monitor-tool); its input has no run_in_background, so its
+;; tool_name says it (#109). Every other rule still judges its command as it judges Bash's.
+(def background?
+  (when (map? input)
+    (or (= "Monitor" (get input "tool_name")) (true? (get-in input ["tool_input" "run_in_background"])))))
 
 
 (when (and run? (map? input))

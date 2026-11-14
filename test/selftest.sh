@@ -759,6 +759,13 @@ for c in "${waitcalls[@]}"; do
   passes "  and runs in the background: $c" "$(call Bash "$(jq -nc --arg c "$c" '{command:$c, run_in_background:true}')")"
 done
 contains "  the refusal says what to do" "run_in_background" "$(call Bash '{"command":"sleep 5"}')"
+# #109, third PR: Monitor runs its command in the background by nature (tool_input: command, description, timeout_ms; no
+# run_in_background). Its command is still judged by every other rule.
+for c in 'sleep 5' 'gh pr checks 1 --watch'; do
+  passes "Monitor waiting is background, not refused: $c" "$(call Monitor "$(jq -nc --arg c "$c" '{command:$c, description:"wait", timeout_ms:600000}')")"
+done
+refused "Bash without run_in_background and with sleep 5 is still refused" "$(call Bash '{"command":"sleep 5","description":"x"}')"
+refused "Monitor running a command another rule refuses is still refused" "$(call Monitor '{"command":"gh issue create --title x","description":"x","timeout_ms":1000}')"
 for c in 'echo "kit merge later"' 'echo kit checks' 'git merge main' 'gh pr checks 12' 'echo sleep'; do
   passes "a word like merge or sleep in text or another command is not refused: $c" "$(call Bash "$(jq -nc --arg c "$c" '{command:$c}')")"
 done
@@ -1105,6 +1112,20 @@ echo "https://github.com/u473t8/fake/pull/95" > "$FAKE/pr-list"; touch "$FAKE/up
 expect_exit 0 "merge: an update-branch that is refused does not end the wait" flow merge
 contains "  says the update was refused" "update was refused" "$LAST"
 rm "$FAKE/update-fails"; unscript; : > "$FAKE/pr-list"; git switch -q --detach origin/main
+
+# While GitHub recomputes a PR (mergeStateStatus UNKNOWN, the review decision empty for a moment) no stop reason is
+# judged: the approval is "gone" only on a settled state. Seen live: update-branch, then an UNKNOWN look (#109).
+git switch -q -c 18-unknown origin/main && git push -q -u origin 18-unknown
+echo "https://github.com/u473t8/fake/pull/94" > "$FAKE/pr-list"
+script_views "OPEN - UNKNOWN" "OPEN APPROVED CLEAN" "MERGED APPROVED CLEAN"
+expect_exit 0 "merge: an UNKNOWN look with no review decision is looked at again, not read as a lost approval" flow merge
+contains "  reaches the closeout" "Merged: " "$LAST"
+unscript; : > "$FAKE/pr-list"; git switch -q --detach origin/main
+git switch -q -c 19-unknown origin/main && git push -q -u origin 19-unknown
+echo "https://github.com/u473t8/fake/pull/93" > "$FAKE/pr-list"
+script_views "OPEN APPROVED BLOCKED" "OPEN - UNKNOWN" "OPEN APPROVED BLOCKED" "MERGED APPROVED CLEAN"
+expect_exit 0 "merge: the same while waiting after auto-merge is on" flow merge
+unscript; : > "$FAKE/pr-list"; git switch -q --detach origin/main
 
 git switch -q -c 14-auto origin/main && git push -q -u origin 14-auto
 : > "$FAKE/pr-list"; echo "https://github.com/u473t8/fake/pull/98" > "$FAKE/pr-list-merged"; : > "$FAKE_GH_LOG"

@@ -1337,7 +1337,13 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
         ;; up to date. It returns the pull request as last read.
         look!
         (fn [url first?]
-          (let [pr   (read-pr url repo die)
+          (let [;; While GitHub recomputes the PR (UNKNOWN) its review decision can read empty for a moment: no stop
+                ;; reason is judged on it, so it is read again. The wait ends when the state settles (#109).
+                pr   (loop []
+                       (let [p (read-pr url repo die)]
+                         (if (and (= "OPEN" (:state p)) (= "UNKNOWN" (:merge-state p)))
+                           (do (Thread/sleep (* 1000 poll)) (recur))
+                           p)))
                 ms   (:merge-state pr)
                 seen (str (:state pr) " " ms)]
             (when (not= seen @shown) (println (str "GitHub reports " (:state pr) ", " ms ": " url)) (reset! shown seen))
