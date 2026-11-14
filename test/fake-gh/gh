@@ -18,7 +18,7 @@
 #   rules-branch.json  output of `api repos/…/rules/branches/<b>` (default: the base requires selftest and lint)
 #   update-fails    when present, `pr update-branch` fails
 #   run-status      output of `run view … --json status --jq .status` (completed, in_progress)
-#   ready-runs.json output of `run list` of the ready workflow (default: []); run-log-<id> that of `run view <id> --log`
+#   ready-runs.json output of `run list` of the ready workflow (default: []; ready-runs.json.seq: one line per call); run-log-<id> that of `run view <id> --log`
 #   no-auto-merge   when present, `pr merge --auto` fails as in a repository without auto-merge
 #   gate-issue.json the full response of `api graphql` (the gate's issue query)
 #   retro.json      the full response of `api graphql` for the retrospective's query
@@ -84,7 +84,7 @@ case "${1:-} ${2:-}" in
       *) answer pr-list ;;
     esac ;;
   "pr update-branch") [ -e "$FAKE_GH_DIR/update-fails" ] && { echo "GraphQL: Head ref does not exist" >&2; exit 1; }; exit 0 ;;
-  "run list") answer_or ready-runs.json '[]' ;;
+  "run list") if [ -s "$FAKE_GH_DIR/ready-runs.json.seq" ]; then answer_seq ready-runs.json; else answer_or ready-runs.json '[]'; fi ;;
   "run view") case "$*" in *--log*) answer "run-log-${3:-0}" ;; *) answer run-status ;; esac ;;
   "pr create")
     arg_after --body "$@" > "$FAKE_GH_DIR/pr-body"
