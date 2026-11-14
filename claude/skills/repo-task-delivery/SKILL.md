@@ -134,6 +134,9 @@ component is an M: stop, resize it and ask for G1.
   card to **In review**. It first runs the shape rules CI's pull request gate holds (branch,
   title, `ADR:` line, filled **Review** and **User-level test**), so a PR that would fail them is
   never opened (#21).
+- Never sleep or use `--watch` in the foreground; the guard refuses it (#109). A long wait runs as a background command, and
+  the agent is woken when it exits. To wait for CI: `gh pr checks <pr> --watch --fail-fast
+  --required` in the background; its exit code is the result.
 - Anything the owner must do by hand goes into a PR comment that starts with `## Owner steps`, as
   numbered steps: where to click, what to type, what the result looks like, what to do if it
   fails. A step that checks a hook says "ask the agent, without `!`": a `!` command bypasses the
@@ -151,6 +154,8 @@ component is an M: stop, resize it and ask for G1.
 - The owner's Approve of the latest commit is the word to merge. Auto-merge merges once the
   checks pass and the branch contains the latest `main`. Then run `kit merge` for the
   closeout; it also updates a branch that fell behind, and merging `main` in keeps the approval.
+  Run `kit merge` as a background command (the guard refuses it otherwise): it waits for the merge, and the agent is woken when it
+  exits.
 - The agent never approves a pull request.
 - An owner step still open after the merge: reopen the issue and keep its card **In progress**.
   A branch from `gh issue develop` closes its issue on merge, whatever the PR body says.
