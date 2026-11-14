@@ -8,7 +8,7 @@
 #   1. kit start files an issue: Status, Priority, Size and Showcase on the board, the branch on GitHub
 #   2. a draft card with a title is converted to an issue by a second start
 #   3. a commit; kit finish opens the pull request as a draft and the card is In review. When CI has passed, the
-#      sandbox's ready workflow (managed/ready-when-green.yml, ADR-0007) marks it ready: the owners are asked
+#      sandbox's ready workflow (.github/workflows/ready-when-green.yml, ADR-0007) marks it ready: the owners are asked
 #      only then, and auto-merge is on. Each wait ends on its event (a run completing), never on a timer
 #   4. the merge waits: without the owner's Approve the PR stays open (ADR-0003; the run never approves)
 #   5. cleanup, also after a failure: the PR closed, the branches deleted, the issues closed as not planned and
@@ -216,8 +216,8 @@ for w in ci.yml ready-when-green.yml; do
   gh api "repos/$REPO/contents/.github/workflows/$w" --jq .name >/dev/null 2>&1 \
     || fail "$REPO has no .github/workflows/$w on its main: the owner merges the sandbox PR that adds it (steps on dev-kit#104's PR)"
 done
-gh api "repos/$REPO/contents/.github/workflows/ready-when-green.yml" --jq .content | base64 -d | cmp -s - "$KIT/managed/ready-when-green.yml" \
-  || fail "the sandbox's ready-when-green.yml is not dev-kit's managed/ready-when-green.yml: the owner merges the sandbox PR that replaces it (steps on dev-kit#104's PR)"
+gh api "repos/$REPO/contents/.github/workflows/ready-when-green.yml" --jq .content | base64 -d | cmp -s - "$KIT/.github/workflows/ready-when-green.yml" \
+  || fail "the sandbox's ready-when-green.yml is not dev-kit's .github/workflows/ready-when-green.yml: the owner merges the sandbox PR that replaces it (steps on dev-kit#104's PR)"
 # The waits below end on events; an inactive workflow would never produce one, so it fails here, with the reason.
 for w in ci.yml ready-when-green.yml; do
   st="$(gh api "repos/$REPO/actions/workflows/$w" --jq .state 2>&1)" || fail "the state of $w in $REPO could not be read: $st"

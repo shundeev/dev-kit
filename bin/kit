@@ -438,7 +438,7 @@
      ;; ADR-0007: marks a draft pull request ready when its required checks passed; kit finish opens drafts
      ;; only where the base branch holds this file
      {:kind :file :path ".github/workflows/ready-when-green.yml"
-      :content (slurp (str (fs/path kit-dir "managed" "ready-when-green.yml")))}
+      :content (slurp (str (fs/path kit-dir ".github" "workflows" "ready-when-green.yml")))}
      {:kind :file :path ".github/CODEOWNERS" :content (codeowners-text cfg)}
      {:kind :file :path ".github/ISSUE_TEMPLATE/task.yml"
       :content (slurp (str (fs/path kit-dir "managed" "github" "ISSUE_TEMPLATE" "task.yml")))}

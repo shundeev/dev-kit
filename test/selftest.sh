@@ -315,9 +315,9 @@ bb $kit init >/dev/null
 
 echo "- ready workflow in projects and in dev-kit (ADR-0007)"
 rw=.github/workflows/ready-when-green.yml
-cmp -s "$rw" "$KIT/managed/ready-when-green.yml" && ok "init lays managed/ready-when-green.yml as it is" || bad "the ready workflow differs from managed/"
-grep -q 'workflows: \["CI"\]' "$rw" && grep -q '^name: CI$' .github/workflows/ci.yml \
-  && ok "  it waits for the workflow managed/ci.yml names" || bad "  the ready workflow does not wait for the CI workflow"
+cmp -s "$rw" "$KIT/$rw" && ok "init lays dev-kit's own $rw as it is" || bad "the ready workflow differs from dev-kit's"
+grep -q 'workflows: \["CI"\]' "$rw" && grep -q '^name: CI$' .github/workflows/ci.yml && grep -q '^name: CI$' "$KIT/.github/workflows/selftest.yml" \
+  && ok "  it waits for \"CI\", the name of managed/ci.yml and of dev-kit's own CI workflow" || bad "  the ready workflow does not wait for the CI workflow"
 echo "# edited" >> "$rw"
 expect_exit 1 "doctor --ci catches an edited ready workflow" bb $kit doctor --ci
 contains "doctor names the file" "$rw: differs" "$LAST"
@@ -327,17 +327,12 @@ contains "doctor names it missing" "$rw: missing" "$LAST"
 contains "  and says to run init" "kit init" "$LAST"
 bb $kit init >/dev/null
 [ -f "$rw" ] && ok "init lays it again" || bad "init did not lay the ready workflow"
-# dev-kit is not a project, so its copy is made by one substitution: the name of its own CI workflow.
-sed 's/workflows: \["CI"\]/workflows: ["Selftest"]/' "$KIT/managed/ready-when-green.yml" | cmp -s - "$KIT/$rw" \
-  && grep -q '^name: Selftest$' "$KIT/.github/workflows/selftest.yml" \
-  && ok "dev-kit's own ready workflow is managed/ready-when-green.yml waiting for Selftest" \
-  || bad "dev-kit's own $rw drifted from managed/ready-when-green.yml: regenerate it with sed 's/workflows: \\[\"CI\"\\]/workflows: [\"Selftest\"]/' managed/ready-when-green.yml > $rw"
 
 echo "- the ready workflow's script, run against the fake gh (ADR-0007)"
 rwscript="$WORK/ready.sh"
-sed -n '/^        run: |$/,$p' "$KIT/managed/ready-when-green.yml" | tail -n +2 | sed 's/^          //' > "$rwscript"
+sed -n '/^        run: |$/,$p' "$KIT/$rw" | tail -n +2 | sed 's/^          //' > "$rwscript"
 for perm in "checks: read" "statuses: read" "pull-requests: write" "contents: write"; do
-  grep -q "^  $perm" "$KIT/managed/ready-when-green.yml" && ok "  permission $perm" || bad "  permission $perm missing (gh pr checks reads the status rollup)"
+  grep -q "^  $perm" "$KIT/$rw" && ok "  permission $perm" || bad "  permission $perm missing (gh pr checks reads the status rollup)"
 done
 RW="$WORK/rw"; mkdir -p "$RW"
 rw() { # rw <prs json> : the script as GitHub runs it (bash -e), gh faked, its log kept

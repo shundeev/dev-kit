@@ -1,4 +1,4 @@
-name: Selftest
+name: CI
 
 # No path filter: `selftest` is the required check of the main ruleset, so it must always report.
 on:

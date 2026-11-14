@@ -77,7 +77,7 @@ You do not have to watch for updates: the session start says when the pinned com
 | `.claude/skills/*` (links) | `claude/skills/`: `repo-task-delivery`, `gh-project-workflow`, `adr` |
 | `.claude/agents/*.md` (copies) | `claude/agents/`: `ops`, `log-reader`; `smell-reviewer` with the Clojure module |
 | `.github/workflows/ci.yml` | `managed/ci.yml`, which runs `ci/action.yml` from the submodule |
-| `.github/workflows/ready-when-green.yml` | `managed/ready-when-green.yml` (ADR-0007): a pull request opened by `kit finish` is a draft until this marks it ready, once CI is green and its required checks passed; it also turns auto-merge on. A draft with the label `hold` is left alone. dev-kit's own copy waits for "Selftest"; the selftest checks it is the same file. |
+| `.github/workflows/ready-when-green.yml` | dev-kit's own `.github/workflows/ready-when-green.yml` (ADR-0007): a pull request opened by `kit finish` is a draft until this marks it ready, once CI is green and its required checks passed; it also turns auto-merge on. A draft with the label `hold` is left alone. |
 | `.github/ISSUE_TEMPLATE/task.yml`, `.github/pull_request_template.md` | `managed/github/` |
 | `.github/CODEOWNERS` | `:owners` in `kit.edn` |
 | git `core.hooksPath` | `githooks/`: the zprint check before a commit; in dev-kit itself also CI's shellcheck line before a push (a project's push is not touched) |

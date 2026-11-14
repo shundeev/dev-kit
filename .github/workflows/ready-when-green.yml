@@ -11,7 +11,7 @@ name: Ready when green
 
 on:
   workflow_run:
-    workflows: ["Selftest"]
+    workflows: ["CI"]
     types: [completed]
 
 permissions:
