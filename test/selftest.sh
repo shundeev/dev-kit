@@ -9,7 +9,7 @@ set -uo pipefail
 
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+trap 'kill ${live:-} 2>/dev/null; rm -rf "$WORK"' EXIT
 
 pass=0
 fail=0
@@ -34,8 +34,11 @@ unset CLAUDECODE GH_TOKEN GITHUB_TOKEN
 # The flow scripts read GHWF_* from the session's settings; a run from a session must not see
 # them, as CI does not (#55).
 while read -r v; do unset "$v"; done < <(compgen -e | grep '^GHWF_')
-# Nothing waits for a merge that will not come (#12); the one case that waits sets its own.
-export GHWF_MERGE_WAIT=0
+# No command in this run can wait for ever (#109): nothing reads a terminal, so a command that asks a question
+# gets the end of the input; and the fake gh has no answer left after the last one scripted, which ends a wait
+# for an event that was never scripted. The pause between two looks is the one number, and it is 0 here.
+exec </dev/null
+export GHWF_MERGE_POLL=0
 # The machine's global git config and ignore file stay out, as in CI: Claude Code puts
 # settings.local.json into the global ignore file, which would hide what kit itself ignores.
 : > "$WORK/gitconfig"
@@ -375,15 +378,15 @@ for h in "Size sets the ceremony" "Requirements" "Invariants" "Design" "G1" "Pla
 done
 [ -z "$missing" ] && ok "the delivery skill walks every stage of ADR-0002" || bad "the skill lacks the stage${missing#,}"
 missing=""
-for phrase in "gh pr checks <pr> --watch --fail-fast --required" "in the background" "kit finish --hold" "kit release" "Ask the owner for the Approve once the PR is ready"; do
+for phrase in "kit checks" "in the background" "kit finish --hold" "kit release" "Ask the owner for the Approve once the PR is ready"; do
   grep -qF -- "$phrase" "$skill" || missing="$missing, $phrase"
 done
 [ -z "$missing" ] && ok "stage 9: the background alarm, the hold and the release, the Approve asked once ready (ADR-0007)" || bad "stage 9 lacks${missing#,}"
 missing=""
-for phrase in "unless the PR is held" "still a draft without \`hold\`" "kit checks"; do
+for phrase in "unless the PR is held" "still a draft without \`hold\`"; do
   grep -qF -- "$phrase" "$skill" || missing="$missing, $phrase"
 done
-[ -z "$missing" ] && ok "stage 9: a pass means ready unless held; a stuck draft is released; the alarm's known gap" || bad "stage 9 lacks${missing#,}"
+[ -z "$missing" ] && ok "stage 9: a pass means ready unless held; a stuck draft is released; the alarm" || bad "stage 9 lacks${missing#,}"
 [ "$(wc -l < "$KIT/rules/shared.md")" -le 100 ] && ok "the rules block stays within 100 lines" || bad "rules/shared.md is $(wc -l < "$KIT/rules/shared.md") lines"
 missing=""
 for phrase in "what changed for them and what is needed from them" "ends with the pull request's link" \
@@ -684,13 +687,13 @@ passes "lets through: a Read of README.md" "$(call Read '{"file_path":"README.md
 refused "the delivery guard still runs after it" "$(call Bash '{"command":"gh issue create --title x"}')"
 # #109: a command that waits runs in the background, so the agent is woken when it exits.
 waitcalls=('sleep 5' 'gh pr checks 12 --watch --fail-fast' 'gh run watch 99' '.shared/bin/kit merge' 'bb .shared/bin/kit merge'
-           'bb bin/kit merge' 'bash -c "sleep 2"' 'echo $(sleep 1)' 'git status && sleep 3')
+           '.shared/bin/kit checks' 'bb .shared/bin/kit checks --pr 5' 'bb bin/kit merge' 'bash -c "sleep 2"' 'echo $(sleep 1)' 'git status && sleep 3')
 for c in "${waitcalls[@]}"; do
   refused "a waiting command in the foreground is refused: $c" "$(call Bash "$(jq -nc --arg c "$c" '{command:$c}')")"
   passes "  and runs in the background: $c" "$(call Bash "$(jq -nc --arg c "$c" '{command:$c, run_in_background:true}')")"
 done
 contains "  the refusal says what to do" "run_in_background" "$(call Bash '{"command":"sleep 5"}')"
-for c in 'echo "kit merge later"' 'git merge main' 'gh pr checks 12' 'echo sleep'; do
+for c in 'echo "kit merge later"' 'echo kit checks' 'git merge main' 'gh pr checks 12' 'echo sleep'; do
   passes "a word like merge or sleep in text or another command is not refused: $c" "$(call Bash "$(jq -nc --arg c "$c" '{command:$c}')")"
 done
 [ -f .cc-safety-net/policy.json ] && ok "init writes the project's policy" || bad "no .cc-safety-net/policy.json"
@@ -933,39 +936,89 @@ git remote set-url origin "$REMOTE"
 git switch -q 12-landing
 echo "https://github.com/u473t8/fake/pull/99" > "$FAKE/pr-list"
 
-echo "REVIEW_REQUIRED BLOCKED" > "$FAKE/pr-review"; echo OPEN > "$FAKE/pr-state"; : > "$FAKE_GH_LOG"
+# The PR as `gh pr view --json state,reviewDecision,mergeStateStatus,headRefOid` prints it, one line per look. A decision
+# of "-" is none. The fake has no line left after the last one and says so, so no case here can wait for ever (#109).
+view() { jq -nc --arg s "$1" --arg d "$2" --arg m "$3" --arg h "${4:-aaa111}" \
+  '{state: $s, reviewDecision: (if $d == "-" then "" else $d end), mergeStateStatus: $m, headRefOid: $h}'; }
+script_views() { local l; : > "$FAKE/pr-view.seq"; for l in "$@"; do view $l >> "$FAKE/pr-view.seq"; done; }
+script_checks() { printf '%s\n' "$@" > "$FAKE/pr-checks.seq"; }
+unscript() { rm -f "$FAKE/pr-view.seq" "$FAKE/pr-checks.seq"; }
+echo '[]' > "$FAKE/pr-checks.json" # a look at a blocked PR reads its checks: none yet unless a case scripts them
+chk() { jq -nc --arg n "$1" --arg b "$2" '{name: $n, bucket: $b, link: ("https://example.invalid/job/" + $n), state: $b}'; }
+
+script_views "OPEN REVIEW_REQUIRED BLOCKED"; : > "$FAKE_GH_LOG"
 expect_exit 1 "merge: refuses without the owner's Approve" flow merge
 contains "  says what it waits for" "Waiting for the owner's Approve" "$LAST"
 if grep -q '^pr merge' "$FAKE_GH_LOG"; then bad "  tried to merge"; else ok "  no merge attempted"; fi
-echo "APPROVED CLEAN" > "$FAKE/pr-review"
+script_views "OPEN - BLOCKED"
+expect_exit 1 "merge: a PR with no review decision says so (#98)" flow merge
+contains "  review: none" "review: none" "$LAST"
+unscript
 touch "$FAKE/no-auto-merge"; : > "$FAKE_GH_LOG"
+script_views "OPEN APPROVED CLEAN" "OPEN APPROVED CLEAN" "CLOSED APPROVED CLEAN"
 expect_exit 1 "merge: without auto-merge in the repository" flow merge
 calls="$(grep -E '^pr merge' "$FAKE_GH_LOG" | sed -E 's/ https:[^ ]*//; s/ -R [^ ]*//' | tr '\n' ',')"
 [ "$calls" = "pr merge --auto --squash,pr merge --squash," ] && ok "  falls back to a plain squash merge" || bad "  no fallback" "$calls"
-rm "$FAKE/no-auto-merge"
-expect_exit 1 "merge: a PR that did not merge keeps its branch" flow merge
-contains "  says it is not merged yet" "not merged yet" "$LAST"
-GHWF_MERGE_WAIT=abc expect_exit 1 "merge: a GHWF_MERGE_WAIT that is no number is named" flow merge
-contains "  with the fix" "GHWF_MERGE_WAIT is 'abc'" "$LAST"
+rm "$FAKE/no-auto-merge"; unscript
+
+# #109: kit merge waits until the PR is merged, or until merging became impossible, and says which.
+# Each case scripts every look: the first before auto-merge is turned on, the rest while it waits.
+stops() { # stops <name> <needle> <look>...: the merge ends with exit 1 and the reason; the branch and the card stay
+  local name="$1" needle="$2"; shift 2
+  script_views "$@"; : > "$FAKE_GH_LOG"
+  expect_exit 1 "merge: $name" flow merge
+  contains "  names the reason" "$needle" "$LAST"
+  grep -q "^project item-add" "$FAKE_GH_LOG" && bad "  moved the card" || ok "  no closeout"
+  git rev-parse -q --verify refs/heads/"$(git rev-parse --abbrev-ref HEAD)" >/dev/null && ok "  branch kept" || bad "  branch deleted"
+}
+stops "a PR closed while waiting" "was closed" "OPEN APPROVED BLOCKED" "CLOSED APPROVED BLOCKED"
+contains "  and what to do" "Fix:" "$LAST"
+contains "  a status line shows the wait is alive" "GitHub reports OPEN, BLOCKED" "$LAST"
+stops "the approval gone while waiting" "approval is gone" "OPEN APPROVED BLOCKED" "OPEN REVIEW_REQUIRED BLOCKED"
+stops "a conflict that appears while waiting" "merge origin/main" "OPEN APPROVED BLOCKED" "OPEN APPROVED DIRTY"
+script_checks "[$(chk selftest pending)]" "[$(chk selftest fail),$(chk lint pass)]"
+stops "a required check that failed while waiting" "selftest" "OPEN APPROVED BLOCKED" "OPEN APPROVED BLOCKED"
+contains "  names the check's link" "https://example.invalid/job/selftest" "$LAST"
+contains "  and says it failed" "failed" "$LAST"
+unscript
 git rev-parse -q --verify refs/heads/12-landing >/dev/null && ok "  branch kept" || bad "  branch deleted"
 
 W="$WORK/main-wt"; git worktree add -q "$W" main
-echo "APPROVED BEHIND" > "$FAKE/pr-review"; echo MERGED > "$FAKE/pr-state"; : > "$FAKE_GH_LOG"
+script_views "OPEN APPROVED BEHIND" "OPEN APPROVED BEHIND" "MERGED APPROVED CLEAN"; : > "$FAKE_GH_LOG"
 expect_exit 0 "merge: works while main is checked out in another worktree" flow merge
 calls="$(grep -E '^pr (update-branch|merge)' "$FAKE_GH_LOG" | cut -d' ' -f1,2 | tr '\n' ',')"
 [ "$calls" = "pr update-branch,pr merge," ] && ok "  a branch behind main is updated, then merged" || bad "  update and merge order" "$calls"
 git rev-parse -q --verify refs/heads/12-landing >/dev/null && bad "  local branch left" || ok "  local branch deleted"
 git ls-remote --exit-code --heads origin 12-landing >/dev/null 2>&1 && bad "  remote branch left" || ok "  remote branch deleted"
 [ "$(git rev-parse --abbrev-ref HEAD)" = HEAD ] && ok "  this worktree detached on the base" || bad "  not detached"
+unscript
 
 # #72: a branch that falls behind while the script waits is updated, then merges.
 git switch -q -c 15-wait origin/main && git push -q -u origin 15-wait
-echo "https://github.com/u473t8/fake/pull/97" > "$FAKE/pr-list"; echo "APPROVED CLEAN" > "$FAKE/pr-review"
-printf 'OPEN BLOCKED\nOPEN BEHIND\nOPEN BLOCKED\nMERGED CLEAN\n' > "$FAKE/pr-state.seq"; : > "$FAKE_GH_LOG"
-GHWF_MERGE_POLL=0 GHWF_MERGE_WAIT=10 expect_exit 0 "merge: a branch that falls behind while waiting is updated and merges" flow merge
+echo "https://github.com/u473t8/fake/pull/97" > "$FAKE/pr-list";
+script_views "OPEN APPROVED BLOCKED" "OPEN APPROVED BEHIND" "OPEN APPROVED BEHIND" "OPEN APPROVED BLOCKED" "MERGED APPROVED CLEAN"; : > "$FAKE_GH_LOG"
+expect_exit 0 "merge: a branch that falls behind while waiting is updated and merges" flow merge
 calls="$(grep -E '^pr (update-branch|merge)' "$FAKE_GH_LOG" | cut -d' ' -f1,2 | tr '\n' ',')"
 [ "$calls" = "pr merge,pr update-branch," ] && ok "  auto-merge, then an update when it fell behind" || bad "  calls" "$calls"
-rm -f "$FAKE/pr-state.seq"; : > "$FAKE/pr-list"; git switch -q --detach origin/main
+unscript; : > "$FAKE/pr-list"; git switch -q --detach origin/main
+
+# #99: a PR GitHub merged between two looks goes to the closeout; its branch is gone, so no update is tried.
+git switch -q -c 16-race origin/main && git push -q -u origin 16-race
+echo "https://github.com/u473t8/fake/pull/96" > "$FAKE/pr-list"
+script_views "OPEN APPROVED BEHIND" "MERGED APPROVED CLEAN"; : > "$FAKE_GH_LOG"
+expect_exit 0 "merge: a PR merged while the branch was to be updated goes to the closeout (#99)" flow merge
+grep -q '^pr update-branch' "$FAKE_GH_LOG" && bad "  tried to update a merged PR's branch" || ok "  no update of the merged PR's branch"
+grep -q '^pr merge' "$FAKE_GH_LOG" && bad "  tried to merge a merged PR" || ok "  no second merge"
+contains "  closed out" "Merged: " "$LAST"
+git rev-parse -q --verify refs/heads/16-race >/dev/null && bad "  local branch left" || ok "  local branch deleted"
+unscript; : > "$FAKE/pr-list"; git switch -q --detach origin/main
+
+# A refused update-branch is no end: the wait looks again (here the PR has merged by then).
+git switch -q -c 17-refused origin/main && git push -q -u origin 17-refused
+echo "https://github.com/u473t8/fake/pull/95" > "$FAKE/pr-list"; touch "$FAKE/update-fails"; script_views "OPEN APPROVED BLOCKED" "OPEN APPROVED BEHIND" "OPEN APPROVED BEHIND" "MERGED APPROVED CLEAN"
+expect_exit 0 "merge: an update-branch that is refused does not end the wait" flow merge
+contains "  says the update was refused" "update was refused" "$LAST"
+rm "$FAKE/update-fails"; unscript; : > "$FAKE/pr-list"; git switch -q --detach origin/main
 
 git switch -q -c 14-auto origin/main && git push -q -u origin 14-auto
 : > "$FAKE/pr-list"; echo "https://github.com/u473t8/fake/pull/98" > "$FAKE/pr-list-merged"; : > "$FAKE_GH_LOG"
@@ -977,17 +1030,58 @@ git rev-parse -q --verify refs/heads/14-auto >/dev/null && bad "  local branch l
 # #97: the edge cases the retrospectives met.
 git switch -q -c 41-merged origin/main && git push -q -u origin 41-merged
 echo "https://github.com/u473t8/fake/pull/90" > "$FAKE/pr-list"; : > "$FAKE/pr-list-merged"
-echo "APPROVED CLEAN" > "$FAKE/pr-review"; echo MERGED > "$FAKE/pr-state"; touch "$FAKE/no-auto-merge"; : > "$FAKE_GH_LOG"
+script_views "OPEN APPROVED CLEAN" "MERGED APPROVED CLEAN" "MERGED APPROVED CLEAN"; touch "$FAKE/no-auto-merge"; : > "$FAKE_GH_LOG"
 expect_exit 0 "merge: a PR GitHub merged while auto-merge was refused goes to the closeout (site#18)" flow merge
 grep -q "Auto-merge not available" <<<"$LAST" && bad "  warned that auto-merge is not available" || ok "  no 'Auto-merge not available' line"
 grep -q '^pr merge [^ ]* --squash$' "$FAKE_GH_LOG" && bad "  tried a plain merge" || ok "  no second merge"
-rm "$FAKE/no-auto-merge"
+rm "$FAKE/no-auto-merge"; unscript
 git switch -q -c 42-dirty origin/main && git push -q -u origin 42-dirty
-echo "APPROVED DIRTY" > "$FAKE/pr-review"; echo OPEN > "$FAKE/pr-state"; : > "$FAKE_GH_LOG"
+script_views "OPEN APPROVED DIRTY"; : > "$FAKE_GH_LOG"
 expect_exit 1 "merge: a conflict with the base stops at once (#27)" flow merge
 contains "  says to merge the base in" "merge origin/main" "$LAST"; contains "  and that the push dismisses the approval" "dismisses" "$LAST"
 grep -q '^pr merge' "$FAKE_GH_LOG" && bad "  tried to merge" || ok "  no merge attempted"
 git rev-parse -q --verify refs/heads/42-dirty >/dev/null && ok "  branch kept" || bad "  branch deleted"
+unscript
+
+
+# #109: kit checks waits until the checks the base requires (selftest and lint in the fake) are registered on the head
+# commit and have finished, then says how they ended. One row per case: the looks at the PR, the checks seen at each
+# look (name:bucket, "-" is none registered yet), the exit code, and what the output says (";" between phrases).
+echo "https://github.com/u473t8/fake/pull/90" > "$FAKE/pr-list"
+checks_case() { # checks_case <name> <exit> <says> <views> <checks>
+  local name="$1" code="$2" v looks one phrase scripted=() IFS
+  IFS=';' read -ra v <<<"$4"; script_views "${v[@]}"
+  IFS=';' read -ra looks <<<"$5"
+  for one in "${looks[@]}"; do
+    local items=() seen; IFS=' ' read -ra seen <<<"$one"
+    for phrase in "${seen[@]}"; do [ "$phrase" = - ] || items+=("$(chk "${phrase%%:*}" "${phrase##*:}")"); done
+    scripted+=("[$(IFS=,; echo "${items[*]:-}")]")
+  done
+  script_checks "${scripted[@]}"
+  expect_exit "$code" "checks: $name" flow checks
+  IFS=';' read -ra v <<<"$3"
+  for phrase in "${v[@]}"; do contains "  says: $phrase" "$phrase" "$LAST"; done
+  unscript
+}
+while IFS='|' read -r name code says views checks; do checks_case "$name" "$code" "$says" "$views" "$checks"; done <<'TABLE'
+waits for checks not registered yet, then for their result|0|Not registered yet: selftest, lint;have not finished;passed|OPEN - BLOCKED;OPEN - BLOCKED;OPEN - BLOCKED;OPEN - BLOCKED|-;selftest:pending lint:pending;selftest:pass lint:pass
+one registered check that passed is not all of them|0|Not registered yet: lint;passed|OPEN - BLOCKED;OPEN - BLOCKED;OPEN - BLOCKED|selftest:pass;selftest:pass lint:pass
+checks that have passed end it at once|0|All 2 required checks passed|OPEN - CLEAN;OPEN - CLEAN|selftest:pass lint:pass
+a failed check ends it with its link, at once|1|job/selftest|OPEN - BLOCKED;OPEN - BLOCKED|selftest:fail lint:pending
+the head moves|2|aaa111 to bbb222;kit checks again|OPEN - BLOCKED aaa111;OPEN - BLOCKED aaa111;OPEN - BLOCKED bbb222|-;selftest:pending
+the PR closes|2|is closed|OPEN - BLOCKED;CLOSED - BLOCKED|selftest:pending
+the PR merges|2|merged, so there is nothing to wait for|OPEN - BLOCKED;MERGED - CLEAN|selftest:pending
+gh cannot be read (here: no answer left)|2|has no more answers|OPEN - BLOCKED;OPEN - BLOCKED|-
+TABLE
+script_views "OPEN - CLEAN" "OPEN - CLEAN"; script_checks "[$(chk selftest pass),$(chk lint pass)]"; : > "$FAKE_GH_LOG"
+expect_exit 0 "checks: --pr names the pull request" flow checks --pr 77
+grep -q '^pr view 77' "$FAKE_GH_LOG" && grep -q '^pr checks 77' "$FAKE_GH_LOG" && ok "  every call names #77" || bad "  calls" "$(cat "$FAKE_GH_LOG")"
+unscript
+echo '[{"type":"pull_request"}]' > "$FAKE/rules-branch.json"; script_views "OPEN - CLEAN"
+expect_exit 0 "checks: a base that requires no checks ends it at once" flow checks
+contains "  says there is nothing to wait for" "nothing to wait for" "$LAST"
+rm "$FAKE/rules-branch.json"; unscript
+expect_exit 0 "checks has help" flow checks --help
 
 git switch -q -c 43-silent origin/main
 echo "https://github.com/u473t8/fake/pull/91" > "$FAKE/pr-list"
@@ -1078,7 +1172,7 @@ contains "  to In review" "Status: In review" "$LAST"
 echo 'GraphQL: Your token has not been granted the required scopes to execute this query. (INSUFFICIENT_SCOPES)' > "$B/board-fails"
 git switch -q --detach origin/main
 git switch -q -c 32-board origin/main && git push -q -u origin 32-board
-: > "$B/pr-list"; echo "https://github.com/u473t8/fake/pull/98" > "$B/pr-list-merged"; echo "MERGED CLEAN" > "$B/pr-state"
+: > "$B/pr-list"; echo "https://github.com/u473t8/fake/pull/98" > "$B/pr-list-merged"
 expect_exit 1 "merge: a failed Done update stops it, after the merge" flow merge
 contains "  with the command for the status alone" "kit board set" "$LAST"
 rm -f "$B/board-fails" "$B/pr-list-merged"; git switch -q --detach origin/main
@@ -1732,13 +1826,33 @@ rm "$RT/gh-fails"
 expect_exit 1 "retro: a --now that is not a time names the format" retro 55 --now yesterday
 contains "  names the format" "2026-11-12T10:00:00Z" "$LAST"
 
-echo "- selftest and CI cannot hang or miss what CI catches (#98)"
-# #12, #33: the selftest waits for no merge, and CI stops a hang.
-[ "$(grep -c '^export GHWF_MERGE_WAIT=0' "$KIT/test/selftest.sh")" = 1 ] \
-  && [ "$(grep -n '^export GHWF_MERGE_WAIT=0' "$KIT/test/selftest.sh" | cut -d: -f1)" -lt 50 ] \
-  && ok "GHWF_MERGE_WAIT=0 is set once, at the top" || bad "GHWF_MERGE_WAIT=0 is not set once at the top of test/selftest.sh"
-grep -q '^    timeout-minutes: ' "$KIT/.github/workflows/selftest.yml" \
-  && ok "CI gives the selftest a timeout" || bad "no timeout-minutes on the selftest job: add it to .github/workflows/selftest.yml"
+echo "- the selftest cannot hang, and has no time limit (#98, #109)"
+# #109: a hang is made impossible instead of cut off by a clock. No wait lacks its event, and nothing reads a terminal.
+{ grep -q '^exec </dev/null' "$KIT/test/selftest.sh" \
+  && [ "$(grep -n '^exec </dev/null' "$KIT/test/selftest.sh" | cut -d: -f1)" -lt 50 ]; } \
+  && ok "the selftest's input is closed at the top, so nothing waits for a terminal" \
+  || bad "test/selftest.sh does not close its input in its first 50 lines: put 'exec </dev/null' there"
+grep -q 'timeout-minutes' "$KIT/.github/workflows/selftest.yml" \
+  && bad "the selftest job has a timeout-minutes: remove it from .github/workflows/selftest.yml; a hang is made impossible, not cut off" \
+  || ok "CI gives the selftest no time limit"
+# #109: e2e --clean decides by state: a run that has ended is cleaned, a live one or one on another host is left and named.
+# runner_state is taken out of the script and run with the fake gh; the sleeping process stands for a live run.
+tail -f /dev/null & live=$!
+dead="$(bash -c 'echo $$')"
+runner_state() { :; }; eval "$(sed -n '/^runner_state()/,/^}/p' "$KIT/test/e2e.sh")"
+PATH="$KIT/test/fake-gh:$PATH"
+while IFS='|' read -r who status want; do
+  echo "$status" > "$FAKE/run-status"; got="$(runner_state "$who" 2>&1)"
+  case "$got" in "$want"*) ok "e2e --clean: '$who' is $want";; *) bad "e2e --clean: '$who' ($status) gives '$got', want $want";; esac
+done <<TABLE
+ci https://github.com/o/r/actions/runs/5|completed|ended
+ci https://github.com/o/r/actions/runs/5|in_progress|live
+local $(hostname) $live||live
+local $(hostname) $dead||ended
+local other-host 5||left
+||left
+TABLE
+PATH="${PATH#"$KIT/test/fake-gh:"}"
 # #27: the pre-push hook runs CI's shellcheck line, in dev-kit itself only.
 DK="$WORK/dk"; mkdir -p "$DK"
 (cd "$KIT" && tar --exclude=.git -cf - .) | (cd "$DK" && tar -xf -)

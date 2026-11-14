@@ -5,7 +5,7 @@
 ;;   .shared/bin/kit init     --local   per-machine items only (the SessionStart hook runs it)
 ;;   .shared/bin/kit doctor   [--ci] [--quiet]
 ;;   .shared/bin/kit modules
-;;   .shared/bin/kit start | finish | release | merge   the delivery flow's GitHub steps (#95); --help on each
+;;   .shared/bin/kit start | finish | release | merge | checks   the delivery flow's GitHub steps (#95); --help on each
 ;;   .shared/bin/kit board set <project-number> <owner> <issue-url> <field> <option>   one card's field (#41)
 ;;   .shared/bin/kit user-test   the project's user-level test, :user-test in kit.edn (#27)
 ;;   .shared/bin/kit identity [--dir PATH]   the agent's GitHub identity alone, for any repository
@@ -1287,6 +1287,8 @@
 
           :else
           (let [[level reason]
+                ;; 600 s: the cache saves a GitHub call on every edit, and a removed approval is seen within 10 minutes.
+                ;; No event tells a local hook that the label changed, so this is a lifetime, not a wait (#109).
                 (if (and t (< (- now (parse-long t)) 600))
                   [(keyword level) reason]
                   (try (let [[l r] (gate-g1! n (assoc opts :cfg cfg :repo repo))]
@@ -1572,7 +1574,7 @@
 
 
 (defn flow!
-  "kit start, finish, merge and board set: the delivery flow's GitHub steps, in bin/flow.clj (#95)."
+  "kit start, finish, merge, checks and board set: the delivery flow's GitHub steps, in bin/flow.clj (#95)."
   [cmd args]
   (load-file (str (fs/path kit-dir "bin" "flow.clj")))
   ((resolve 'flow/main) cmd args (str (fs/path kit-dir "bin" "kit"))))
@@ -1609,7 +1611,7 @@
       "gate" (gate! (parse-args args))
       "retro" (retro! args)
       "hook" (hook! args)
-      ("start" "finish" "release" "merge" "board") (flow! cmd args)
+      ("start" "finish" "release" "merge" "checks" "board") (flow! cmd args)
       nil (usage)
       (do (usage) (die "unknown command" cmd)))
     (catch clojure.lang.ExceptionInfo e

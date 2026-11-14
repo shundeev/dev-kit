@@ -4,14 +4,18 @@
 # after its --jq filter.
 #   pr-list         output of `pr list --state open … --jq .[0].url` (empty file: no open PR)
 #   pr-list-merged  the same for `--state merged`
-#   pr-state        output of `pr view … --json state…`
-#   pr-state.seq    when present, one answer per call for the same query, the last line repeating
-#   pr-review       output of `pr view --json reviewDecision,mergeStateStatus …`, e.g. "APPROVED CLEAN"
 #   ready-workflow  when present, the base branch holds ready-when-green.yml: `api repos/…/contents/…` answers, else 404
 #   pr-release      output of `pr view … --json state,isDraft,labels,url` (kit release)
 #   pr-draft        output of `pr view … --json isDraft` (default false); pr-view-<n> that of the ready workflow's
 #                   state,isDraft,headRefOid,labels read; ready-fails-<n> makes `pr ready <n>` fail
 #   pr-checks.json  output of `pr checks … --json name,bucket`; pr-checks.exit its exit code (default 0)
+#   pr-view.seq     when present, `pr view --json …` prints its next line (the PR as JSON: state, reviewDecision,
+#                   mergeStateStatus, headRefOid), one line per call. No line left is an error that says so: a test
+#                   that scripts every look can never wait for ever (#109)
+#   pr-checks.seq   the same for `pr checks … --json`: one JSON array per call, as gh prints it (else pr-checks.json)
+#   rules-branch.json  output of `api repos/…/rules/branches/<b>` (default: the base requires selftest and lint)
+#   update-fails    when present, `pr update-branch` fails
+#   run-status      output of `run view … --json status --jq .status` (completed, in_progress)
 #   no-auto-merge   when present, `pr merge --auto` fails as in a repository without auto-merge
 #   gate-issue.json the full response of `api graphql` (the gate's issue query)
 #   retro.json      the full response of `api graphql` for the retrospective's query
@@ -61,6 +65,14 @@ answer_seq() { # answer_seq <name>: the next line of <name>.seq, else <name>
     answer "$1"
   fi
 }
+consume_seq() { # consume_seq <name>: the next line of <name>, which is then gone; none left is an error
+  local seq="$FAKE_GH_DIR/$1"
+  if [ -s "$seq" ]; then head -n1 "$seq"; sed -i 1d "$seq"
+  else
+    echo "fake gh: $1 has no more answers: the code under test looked once more than the test scripted. Fix: script every look in the test, or stop the code at an end state." >&2
+    exit 1
+  fi
+}
 if [ -e "$FAKE_GH_DIR/silent-fail" ]; then case "${1:-} ${2:-}" in "pr list"|"api "*) exit 3 ;; esac; fi
 case "${1:-} ${2:-}" in
   "pr list")
@@ -68,7 +80,8 @@ case "${1:-} ${2:-}" in
       *"--state merged"*) answer pr-list-merged ;;
       *) answer pr-list ;;
     esac ;;
-  "pr update-branch") exit 0 ;;
+  "pr update-branch") [ -e "$FAKE_GH_DIR/update-fails" ] && { echo "GraphQL: Head ref does not exist" >&2; exit 1; }; exit 0 ;;
+  "run view") answer run-status ;;
   "pr create")
     arg_after --body "$@" > "$FAKE_GH_DIR/pr-body"
     echo "Creating pull request for a branch into main in $repo" >&2  # as real gh does, on stderr
@@ -78,17 +91,19 @@ case "${1:-} ${2:-}" in
       echo "GraphQL: Auto merge is not allowed for this repository (enablePullRequestAutoMerge)" >&2
       exit 1
     fi ;;
-  "pr checks") answer pr-checks.json; exit "$(answer_or pr-checks.exit 0)" ;;
+  "pr checks")
+    if [ -e "$FAKE_GH_DIR/pr-checks.seq" ]; then consume_seq pr-checks.seq; exit $?; fi
+    [ -e "$FAKE_GH_DIR/pr-checks.json" ] || { echo "fake gh: no pr-checks.seq or pr-checks.json scripted for this call" >&2; exit 1; }
+    answer pr-checks.json; exit "$(answer_or pr-checks.exit 0)" ;;
   "pr ready")
     [ -e "$FAKE_GH_DIR/ready-fails-${3:-0}" ] && { echo "GraphQL: Pull request is not ready" >&2; exit 1; }
     exit 0 ;;
   "pr view")
+    if [ -e "$FAKE_GH_DIR/pr-view.seq" ]; then consume_seq pr-view.seq; exit $?; fi
     case "$*" in
-      *reviewDecision*) answer pr-review ;;
       *headRefOid*) answer "pr-view-${3:-0}" ;;
       *"--json isDraft --jq"*) answer_or pr-draft false ;;
       *isDraft*) answer pr-release ;;
-      *) answer_seq pr-state ;;
     esac ;;
   "issue view")
     [ -e "$FAKE_GH_DIR/issue-missing" ] && { echo "GraphQL: Could not resolve to an issue or pull request with the number of ${3:-0}." >&2; exit 1; }
@@ -132,6 +147,7 @@ case "${1:-} ${2:-}" in
         esac ;;
       */contents/*)
         [ -e "$FAKE_GH_DIR/ready-workflow" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; } ;;
+      repos/*/rules/branches/*) answer_or rules-branch.json '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"selftest"},{"context":"lint"}]}},{"type":"pull_request"}]' ;;
       */permission) u="${2%/permission}"; answer "perm-${u##*/}" ;;
       */files*) answer pr-files.json ;;
       */pulls/*) answer pr.json ;;

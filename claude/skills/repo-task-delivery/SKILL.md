@@ -139,9 +139,8 @@ component is an M: stop, resize it and ask for G1.
   nothing. Elsewhere the PR opens ready, with auto-merge on, as before.
 - Never sleep or use `--watch` in the foreground; the guard refuses it (#109). A long wait runs as a background command, and
   the agent is woken when it exits. After `kit finish`, the failure alarm is
-  `gh pr checks <pr> --watch --fail-fast --required` in the background; its exit code is the result. A failure wakes
-  you: fix it and push. A pass means the PR became ready, unless the PR is held. Known gap: a watch
-  started right after a push can end before the head's checks exist; `kit checks` (#109) closes it.
+  `kit checks` in the background (exit codes and reasons: `gh-project-workflow`). A failure wakes
+  you: fix it and push. A pass means the PR became ready, unless the PR is held.
 - Ask the owner for the Approve once the PR is ready, not before: a draft is not yet asked for.
 - Anything the owner must do by hand goes into a PR comment that starts with `## Owner steps`, as
   numbered steps: where to click, what to type, what the result looks like, what to do if it
@@ -166,8 +165,7 @@ component is an M: stop, resize it and ask for G1.
 - The owner's Approve of the latest commit is the word to merge. Auto-merge merges once the
   checks pass and the branch contains the latest `main`. Then run `kit merge` for the
   closeout; it also updates a branch that fell behind, and merging `main` in keeps the approval.
-  Run `kit merge` as a background command (the guard refuses it otherwise): it waits for the merge, and the agent is woken when it
-  exits.
+  Run `kit merge` as a background command (the guard refuses it otherwise): it waits until the PR is merged or merging became impossible, names which (`gh-project-workflow`), and the agent is woken when it exits.
 - The agent never approves a pull request.
 - An owner step still open after the merge: reopen the issue and keep its card **In progress**.
   A branch from `gh issue develop` closes its issue on merge, whatever the PR body says.
