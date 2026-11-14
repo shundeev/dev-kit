@@ -1178,11 +1178,19 @@ while IFS='|' read -r name views log says; do
   expect_exit 0 "checks, ready workflow: $name" flow checks
   IFS=';' read -ra ph <<<"$says"; for phrase in "${ph[@]}"; do contains "  says: $phrase" "$phrase" "$LAST"; done
 done <<'TABLE'
-a PR the workflow marked ready|OPEN - CLEAN aaa111;OPEN - CLEAN aaa111||Ready;owners;auto-merge on
+a PR the workflow marked ready|OPEN - CLEAN aaa111;OPEN - CLEAN aaa111;OPEN - CLEAN aaa111|ready\tMark\t2026-11-14T10:00:00Z CI run id: 400, success on 1-x at aaa111\n|Ready;owners;auto-merge on
 a held draft|OPEN - CLEAN aaa111;OPEN - CLEAN aaa111 draft,hold||Held;kit release
 a draft the run left alone, with its decision line|OPEN - CLEAN aaa111;OPEN - CLEAN aaa111 draft;OPEN - CLEAN aaa111 draft|ready\tMark\t2026-11-14T10:00:00Z CI run id: 400, success on 1-x at aaa111\nready\tMark\t2026-11-14T10:00:01Z decision: #9 carries the label hold, left a draft\n|Still a draft;carries the label hold, left a draft
-the PR leaves draft while no run is there yet|OPEN - CLEAN aaa111;OPEN - CLEAN aaa111 draft;OPEN - CLEAN aaa111||Waiting for the ready workflow;kit release;Ready
 TABLE
+# The race on site#25: the PR leaves draft before its review request and auto-merge appear (view word "readying": not a
+# draft, nobody asked, auto-merge off). Leaving draft ends nothing; the report waits for the run, then reads the PR.
+echo '[]' > "$FAKE/ready-runs.json.seq"; echo '[{"databaseId":501,"status":"completed"}]' >> "$FAKE/ready-runs.json.seq"
+printf 'ready\tMark\t2026-11-14T10:00:00Z CI run id: 400, success on 1-x at aaa111\n' > "$FAKE/run-log-501"
+script_checks "[$(chk selftest pass),$(chk lint pass)]" "[$(chk selftest pass),$(chk lint pass)]"
+script_views "OPEN - CLEAN aaa111 readying" "OPEN - CLEAN aaa111 readying" "OPEN - CLEAN aaa111 readying" "OPEN - CLEAN aaa111"
+expect_exit 0 "checks, ready workflow: the PR leaves draft before the run completes" flow checks
+for phrase in "Waiting for the ready workflow" "Ready" "owners asked: owners; auto-merge on"; do contains "  says: $phrase" "$phrase" "$LAST"; done
+rm -f "$FAKE/ready-runs.json.seq"
 rm -f "$FAKE/ready-runs.json" "$FAKE/run-log-501" "$FAKE/ready-workflow"; unscript
 script_views "OPEN - CLEAN" "OPEN - CLEAN"; script_checks "[$(chk selftest pass),$(chk lint pass)]"; : > "$FAKE_GH_LOG"
 expect_exit 0 "checks: --pr names the pull request" flow checks --pr 77
