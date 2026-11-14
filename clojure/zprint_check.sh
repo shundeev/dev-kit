@@ -10,7 +10,11 @@
 # error.
 set -euo pipefail
 
+# Where this script is, from the repository root: the fix below names a command that runs there,
+# `.shared/clojure/zprint_check.sh` in a project and `clojure/zprint_check.sh` in dev-kit.
+here=$(realpath "${BASH_SOURCE[0]}")
 cd "$(git rev-parse --show-toplevel)"
+self=$(realpath --relative-to=. "${here}")
 
 if ! command -v zprint > /dev/null 2>&1; then
     echo "zprint is not on PATH: https://github.com/kkinnear/zprint/releases/tag/1.3.0" >&2
@@ -59,6 +63,6 @@ done
 if [ "${#unformatted[@]}" -gt 0 ]; then
     echo "Not formatted with zprint (.zprint.edn):" >&2
     printf '  %s\n' "${unformatted[@]}" >&2
-    echo "Fix: .shared/clojure/zprint_check.sh --write" >&2
+    echo "Fix: ${self} --write" >&2
     exit 1
 fi
