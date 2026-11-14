@@ -338,7 +338,8 @@
                        (and window (not (dialog tool)))
                        (conj (item (if ran? :confirm-yes :confirm-no) (window-cause window) c))
                        (= outcome "HookDenied") (conj (assoc (item :refusal-hook (shape-all tool input) c)
-                                    :why (second (re-find #"Rule: (\S+)" (str reason)))))
+                                                             :why
+                                                             (second (re-find #"Rule: (\S+)" (str reason)))))
                        (= outcome "PermissionDenied")
                        (conj (item :refusal-classifier
                                    (str (shape-all tool input)
@@ -580,10 +581,17 @@
                    (for [[[k c] n] (ordered (tally own))]
                      (str "| " (label k) " | " c " | " n " | " (get fortnight [k c] 0) " |"))))
          (when-let [refused (seq (filter #(#{:refusal-hook :refusal-classifier :refusal-rule} (:kind %)) own))]
-           (concat ["" "Refusals of the task, each needs a verdict in the retrospective (it protected something, or it was too strict and the hook changes):"]
-                   (for [r (sort-by :at refused)]
-                     (str "- " (stamp (:at r)) " " (label (:kind r)) " · " (one-line (:cause r))
-                          (when (:why r) (str " (rule " (:why r) ")"))))))
+           (concat
+            [""
+             "Refusals of the task, each needs a verdict in the retrospective (it protected something, or it was too strict and the hook changes):"]
+            (for [r (sort-by :at refused)]
+              (str "- "
+                   (stamp (:at r))
+                   " "
+                   (label (:kind r))
+                   " · "
+                   (one-line (:cause r))
+                   (when (:why r) (str " (rule " (:why r) ")"))))))
          (time-lines spans)
          (when-let [recurring (seq (ordered (filter #(>= (val %) 3) fortnight)))]
            (concat ["" "Recurring in the last 14 days (3 or more, whichever task):"]
