@@ -582,6 +582,39 @@ for c in "git push --force-with-lease origin main" "git push --force-with-lease 
   contains "a forced push to a non-issue branch is refused: $c" '"permissionDecision":"deny"' "$(guard "$c")"
 done
 contains "  the refusal says which branches may be rewritten" "<number>-<slug>" "$(guard 'git push --force-with-lease origin main')"
+# #117: a forced push to a branch whose open PR holds an approval is refused: the rewrite dismisses it.
+AG="$WORK/approved"; mkdir -p "$AG"; : > "$AG/log"
+aguard() { jq -nc --arg c "$1" '{tool_input:{command:$c}}' \
+  | PATH="$KIT/test/fake-gh:$PATH" FAKE_GH_DIR="$AG" FAKE_GH_LOG="$AG/log" bb .shared/claude/hooks/guard.clj; }
+echo APPROVED > "$AG/pr-list"
+for c in "git push --force origin 42-some-task" "git push -f origin 42-some-task" "git push -fu origin 42-some-task" \
+         "git push --force-with-lease origin 42-some-task" "git push origin +42-some-task" "git push origin +HEAD:42-some-task" \
+         "cd $FB && git push --force-with-lease"; do
+  contains "an approved PR's branch is not force-pushed: $c" '"permissionDecision":"deny"' "$(aguard "$c")"
+done
+contains "  the refusal names the way out" "gh pr update-branch" "$(aguard 'git push -f origin 42-some-task')"
+# gh runs in the push's directory, not the session's: the repository acted on is judged (#99), whatever GHWF_REPO says
+CG="$WORK/cwdgh"; mkdir -p "$CG"
+printf '#!/bin/sh\n[ "$(pwd -P)" = "%s" ] && echo APPROVED || exit 1\n' "$(cd "$FB" && pwd -P)" > "$CG/gh"; chmod +x "$CG/gh"
+cguard() { jq -nc --arg c "$1" '{tool_input:{command:$c}}' | PATH="$CG:$PATH" GHWF_REPO=u473t8/session-repo bb .shared/claude/hooks/guard.clj; }
+for c in "cd $FB && git push -f origin 42-some-task" "git -C $FB push -f origin 42-some-task"; do
+  contains "gh asks the pushed repository: $c" '"permissionDecision":"deny"' "$(cguard "$c")"
+done
+out="$(cguard 'git push -f origin 42-some-task')"
+if [ -z "$out" ]; then ok "a push from the session's own folder does not borrow another repository's answer"; else bad "judged" "$out"; fi
+for state in REVIEW_REQUIRED CHANGES_REQUESTED ""; do
+  echo "$state" > "$AG/pr-list"
+  out="$(aguard 'git push --force-with-lease origin 42-some-task')"
+  if [ -z "$out" ]; then ok "a PR with review '${state:-none}': the forced push passes"; else bad "judged with review '$state'" "$out"; fi
+done
+echo APPROVED > "$AG/pr-list"; touch "$AG/silent-fail"
+out="$(aguard 'git push -f origin 42-some-task')"
+if [ -z "$out" ]; then ok "GitHub cannot be read: the forced push passes"; else bad "refused offline" "$out"; fi
+rm "$AG/silent-fail"; : > "$AG/log"
+for c in "git push origin 42-some-task" "git push -u origin 42-some-task" "git status"; do
+  out="$(aguard "$c")"; if [ -z "$out" ]; then ok "an unforced command passes: $c"; else bad "judged: $c" "$out"; fi
+done
+if [ -s "$AG/log" ]; then bad "an unforced command read GitHub" "$(cat "$AG/log")"; else ok "  and reads nothing from GitHub"; fi
 # #64: in zsh an unquoted $v stays one word, so a command that needs it split is refused.
 zguard() { jq -nc --arg c "$1" '{tool_input:{command:$c}}' | SHELL=/bin/zsh bb .shared/claude/hooks/guard.clj; }
 for c in 'set -- $t' 'env $E bash x.sh' 'for n in $list; do echo $n; done' '$cmd --flag' 'for n in ${list}; do :; done'; do
