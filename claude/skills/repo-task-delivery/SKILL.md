@@ -67,6 +67,8 @@ component is an M: stop, resize it and ask for G1.
     experiment when unclear), never taken from forums or memory (#22). The proven fact is written
     where the decision depends on it: in the mechanism's code or test, the process step, or the
     ADR, with links to the documentation and the evidence. There is no separate list of facts;
+  - a requirement that rests on how a platform behaves: checked in the sandbox before the work
+    starts, also for S;
   - each manual step for the owner: automate it, or plan it as numbered steps in the PR;
   - work that runs on real data: a throwaway probe over that data comes before the tests and the
     code (#55, #60). What it shows goes into the design; the probe itself goes away.
@@ -112,6 +114,8 @@ component is an M: stop, resize it and ask for G1.
   the simplify pass (#60).
 - For M, also an independent review: a separate agent gets the code and the spec, not the
   author's conclusions, and reproduces each finding (#55's two found 14 defects; #63).
+- When the work writes a new rule in words, ask "can a hook hold it?" If one can, the rule ships
+  as the hook with its tests.
 - Fix or answer every finding, and list them under **Review** in the PR.
 
 ## 8. User-level test

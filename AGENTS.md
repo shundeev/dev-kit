@@ -8,6 +8,8 @@ not run here.
 - What the kit does and how a project uses it: README.md.
 - Every change runs `test/selftest.sh` before the PR; CI runs it too. A behaviour change gets a
   selftest case first.
+- The rules block `rules/shared.md` stays within 100 lines (selftest checks it). When it is full,
+  a rule moves to the skill stage where it is used; it is not compressed.
 - Changing `rules/`, `claude/`, `managed/` or `scaffold/` changes every project on its next
   `kit init`. Say in the PR body what projects will see.
 - Logic is written in Babashka (ADR-0005). bash only for the bootstrap that must run when dev-kit
