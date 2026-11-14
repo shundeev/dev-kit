@@ -2062,6 +2062,54 @@ touch "$WORK/kit-hook-ran"; khook "rm $WORK/kit-hook-ran" >/dev/null
 expect_exit 2 "kit hook: no command says what to pass" bb $kit hook
 contains "  names the usage" "kit hook '<command>'" "$LAST"
 
+# #129: kit sync brings the owner's checkout and its .shared up to the remote, and never changes anything it cannot
+# fast-forward. A scratch project with local bare remotes for the project and for dev-kit.
+echo "- kit sync"
+SY="$WORK/sync"
+mkdir -p "$SY/kitsrc" && (cd "$KIT" && tar --exclude=.git -cf - .) | (cd "$SY/kitsrc" && tar -xf -)
+git -C "$SY/kitsrc" init -q -b main && git -C "$SY/kitsrc" add -A && git -C "$SY/kitsrc" commit -qm "dev-kit v1"
+git clone -q --bare "$SY/kitsrc" "$SY/kit.git"
+git init -q --bare -b main "$SY/origin.git"
+git init -q -b main "$SY/co"
+git -C "$SY/co" remote add origin "$SY/origin.git"
+git -C "$SY/co" -c protocol.file.allow=always submodule add -q "$SY/kit.git" .shared
+(cd "$SY/co" && bb .shared/bin/kit init --repo u473t8/kit-sync --showcase Site >/dev/null 2>&1 && git add -A && git commit -qm "chore: project" && git push -q -u origin main)
+export GIT_ALLOW_PROTOCOL=file
+sync() { (cd "$SY/co" && bb .shared/bin/kit sync 2>&1); }
+expect_exit 0 "sync: a checkout already current" sync
+contains "  prints the one line" "Up to date: " "$LAST"
+git -C "$SY/co" switch -q -c topic
+expect_exit 1 "sync: not on the base branch stops" sync
+contains "  names the fix" "switch to main first" "$LAST"
+contains "  names the current branch" "topic" "$LAST"
+git -C "$SY/co" switch -q main
+echo changed >> "$SY/co/kit.edn"
+echo scratch > "$SY/co/untracked.txt"
+expect_exit 1 "sync: a dirty tracked file stops" sync
+contains "  names the file" "kit.edn" "$LAST"
+contains "  says commit or stash" "commit or stash them first" "$LAST"
+git -C "$SY/co" checkout -q kit.edn
+expect_exit 0 "sync: an untracked file is fine" sync
+rm "$SY/co/untracked.txt"
+# the remote moves: dev-kit gets a commit, and the project pins it
+git clone -q "$SY/kit.git" "$SY/kitw" && echo v2 > "$SY/kitw/V2" && git -C "$SY/kitw" add V2 && git -C "$SY/kitw" commit -qm "dev-kit v2" && git -C "$SY/kitw" push -q origin main
+git clone -q "$SY/origin.git" "$SY/pw" && git -C "$SY/pw" -c protocol.file.allow=always submodule update -q --init
+git -C "$SY/pw/.shared" fetch -q origin && git -C "$SY/pw/.shared" checkout -q origin/main
+git -C "$SY/pw" add .shared && git -C "$SY/pw" commit -qm "chore: update dev-kit" && git -C "$SY/pw" push -q origin main
+NEWKIT="$(git -C "$SY/kitw" rev-parse --short HEAD)"; NEWPRJ="$(git -C "$SY/pw" rev-parse --short HEAD)"
+expect_exit 0 "sync: the remote moved the project and its pinned dev-kit" sync
+contains "  line names both commits" "Up to date: $NEWPRJ chore: update dev-kit; dev-kit $NEWKIT" "$LAST"
+[ "$(git -C "$SY/co/.shared" rev-parse --short HEAD)" = "$NEWKIT" ] && ok "  .shared is at the new pin" || bad "  .shared pin"
+# the local base has a commit of its own and the remote another: nothing may change
+git -C "$SY/co" commit -q --allow-empty -m "local only"
+git -C "$SY/pw" commit -q --allow-empty -m "remote only" && git -C "$SY/pw" push -q origin main
+LOCAL="$(git -C "$SY/co" rev-parse HEAD)"
+expect_exit 1 "sync: a base that cannot fast-forward stops" sync
+contains "  says the local base has commits of its own" "has commits of its own" "$LAST"
+contains "  says nothing was changed" "nothing was changed" "$LAST"
+[ "$(git -C "$SY/co" rev-parse HEAD)" = "$LOCAL" ] && ok "  the local commit is untouched" || bad "  local base moved"
+unset GIT_ALLOW_PROTOCOL
+
 echo
 echo "passed $pass, failed $fail"
 [ "$fail" -eq 0 ]

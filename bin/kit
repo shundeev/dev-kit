@@ -5,6 +5,7 @@
 ;;   .shared/bin/kit init     --local   per-machine items only (the SessionStart hook runs it)
 ;;   .shared/bin/kit doctor   [--ci] [--quiet]
 ;;   .shared/bin/kit modules
+;;   .shared/bin/kit sync     the main checkout after a merge: fast-forward the base, set .shared to its pin, run doctor (#129)
 ;;   .shared/bin/kit start | finish | release | merge | checks   the delivery flow's GitHub steps (#95); --help on each
 ;;   .shared/bin/kit board set <project-number> <owner> <issue-url> <field> <option>   one card's field (#41)
 ;;   .shared/bin/kit user-test   the project's user-level test, :user-test in kit.edn (#27)
@@ -1861,6 +1862,55 @@
       (System/exit code))))
 
 
+(defn git-run
+  "Runs git in the project root with its output passed through. Returns the exit code."
+  [& args]
+  (:exit @(p/process (into ["git" "-C" (str root)] args) {:inherit true})))
+
+
+(defn sync!
+  "kit sync: the owner's main checkout after a merge. Fast-forwards the base, sets .shared to the commit it pins and
+  runs doctor. Needs the base branch and no change to a tracked file (untracked files are fine). Never pushes,
+  resets or discards: when the checkout cannot be brought forward untouched, it stops and says what to do (#129)."
+  []
+  (let [base   (or (:base (read-config)) (:base (read-defaults)))
+        branch (sh "git" "branch" "--show-current")
+        dirty  (remove str/blank? (str/split-lines (or (sh "git" "diff" "--name-only" "HEAD") "")))]
+    (when-not (= base branch)
+      (fail! (str "sync: the checkout is on "
+                  (if (str/blank? branch) "no branch (detached HEAD)" branch)
+                  ", not on "
+                  base
+                  "; switch to "
+                  base
+                  " first (git switch "
+                  base
+                  ").")))
+    (when (seq dirty)
+      (fail! (str "sync: uncommitted changes to tracked files: "
+                  (str/join ", " (take 5 dirty))
+                  (when (> (count dirty) 5) ", ...")
+                  "; commit or stash them first.")))
+    (when-not (zero? (git-run "fetch" "origin"))
+      (fail! "sync: git fetch origin failed; check the network and the remote, then run kit sync again."))
+    (when-not (zero? (git-run "merge" "--ff-only" (str "origin/" base)))
+      (fail! (str "sync: the local "
+                  base
+                  " has commits of its own and cannot fast-forward to origin/"
+                  base
+                  "; nothing was changed. Look at them with git log origin/"
+                  base
+                  "..HEAD.")))
+    (when-not (zero? (git-run "-c" "protocol.file.allow=always" "submodule" "update" "--init"))
+      (fail! "sync: git submodule update --init failed; fix what it printed, then run kit sync again."))
+    (let [{:keys [exit]} @(p/process ["bb" (str (fs/path kit-dir "bin" "kit")) "doctor"]
+                                     {:inherit true :dir (str root)})]
+      (when-not (zero? exit)
+        (fail! "sync: kit doctor found problems, above; fix them with the commands it names."))
+      (println (str "Up to date: " (sh "git" "log" "-1" "--format=%h %s")
+                    "; dev-kit "   (sh-in kit-dir "git" "rev-parse" "--short" "HEAD"))))))
+
+
 (defn flow!
   "kit start, finish, merge, checks and board set: the delivery flow's GitHub steps, in bin/flow.clj (#95)."
   [cmd args]
@@ -1882,7 +1932,7 @@
 
 
 (let [[cmd & args] *command-line-args*]
-  (when (and (#{"init" "doctor" "modules"} cmd)
+  (when (and (#{"init" "doctor" "modules" "sync"} cmd)
              (not= (str root) (sh "git" "rev-parse" "--show-toplevel")))
     (die "dev-kit must be mounted at <project>/" mount "; " (str root) "is not a git repository root"))
   (try
@@ -1901,6 +1951,7 @@
       "github"    (github! (parse-args args))
       "gate"      (gate! (parse-args args))
       "retro"     (retro! args)
+      "sync"      (sync!)
       "hook"      (hook! args)
       ("start" "finish" "release" "merge" "checks" "board") (flow! cmd args)
       nil         (usage)
