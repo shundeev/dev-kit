@@ -5,7 +5,7 @@
 ;;   .shared/bin/kit init     --local   per-machine items only (the SessionStart hook runs it)
 ;;   .shared/bin/kit doctor   [--ci] [--quiet]
 ;;   .shared/bin/kit modules
-;;   .shared/bin/kit start | finish | merge   the delivery flow's GitHub steps (#95); --help on each
+;;   .shared/bin/kit start | finish | release | merge   the delivery flow's GitHub steps (#95); --help on each
 ;;   .shared/bin/kit board set <project-number> <owner> <issue-url> <field> <option>   one card's field (#41)
 ;;   .shared/bin/kit user-test   the project's user-level test, :user-test in kit.edn (#27)
 ;;   .shared/bin/kit identity [--dir PATH]   the agent's GitHub identity alone, for any repository
@@ -1609,7 +1609,7 @@
       "gate" (gate! (parse-args args))
       "retro" (retro! args)
       "hook" (hook! args)
-      ("start" "finish" "merge" "board") (flow! cmd args)
+      ("start" "finish" "release" "merge" "board") (flow! cmd args)
       nil (usage)
       (do (usage) (die "unknown command" cmd)))
     (catch clojure.lang.ExceptionInfo e
