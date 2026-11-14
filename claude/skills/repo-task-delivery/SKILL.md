@@ -81,6 +81,8 @@ component is an M: stop, resize it and ask for G1.
   while the approval is missing. The approval counts only when set by someone with write access
   who is not the agent, after the issue body and every `## Design` comment last changed. So a
   design and its addenda are comments starting with `## Design`.
+- The edit hook judges the repository and branch of the file being edited, not the folder the session
+  was opened in (ADR-0006): an edit in any dev-kit worktree is held to that worktree's issue.
 - The gate reads the Size from the issue's `size:*` label (`kit start` sets it with the board
   field). No label counts as M. An XS/S PR over 200 changed lines fails until the issue is resized.
 
