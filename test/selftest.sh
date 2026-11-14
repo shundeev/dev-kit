@@ -629,6 +629,17 @@ if [ -z "$out" ]; then ok "an unforced push in an unresolvable directory passes"
 for c in "S=$FB; cd \$S && git push -f origin 42-some-task" "S=$FB; git -C \$S push -f origin 42-some-task"; do
   contains "gh runs in the resolved directory: $c" '"permissionDecision":"deny"' "$(cguard "$c")"
 done
+# #126: gh pr create judges the branch of the directory it runs in, or --head's; -R names the repository only.
+for c in "cd $FB && gh pr create --fill" "S=$FB; cd \$S && gh pr create --fill" "cd $FB && gh pr create -R o/r --fill" \
+         "gh pr create --head 12-x --fill" "gh pr create -R o/r --head me:12-x --fill" 'cd $UNSET && gh pr create --head 12-x'; do
+  out="$(vguard "$c")"; if [ -z "$out" ]; then ok "gh pr create allowed: $c"; else bad "judged: $c" "$out"; fi
+done
+for c in "cd $WORK/force-main && gh pr create --fill" "cd $WORK/force-main && gh pr create -R o/r --fill"; do
+  contains "gh pr create from a directory on main is refused: $c" "'main'" "$(vguard "$c")"
+done
+out="$(vguard 'cd $UNSET && gh pr create --fill')"
+contains "gh pr create in an unresolvable directory is refused" '"permissionDecision":"deny"' "$out"
+contains "  and the fix is named" 'gh pr create --head <number>-<slug>' "$out"
 for state in REVIEW_REQUIRED CHANGES_REQUESTED ""; do
   echo "$state" > "$AG/pr-list"
   out="$(aguard 'git push --force-with-lease origin 42-some-task')"

@@ -507,8 +507,7 @@
         repo   (or (System/getenv "GHWF_REPO") "<owner/repo>")
         start  ".shared/bin/kit start"
         finish ".shared/bin/kit finish"
-        zsh?   (= "zsh" (some-> (System/getenv "SHELL") (str/replace #".*/" "")))
-        branch (delay (sh-out "git" "rev-parse" "--abbrev-ref" "HEAD"))]
+        zsh?   (= "zsh" (some-> (System/getenv "SHELL") (str/replace #".*/" "")))]
     (loop [[st & more] statements
            wd          "."
            vars        {}]
@@ -592,16 +591,27 @@ sets Status, Priority and Showcase, and creates the issue branch with `gh issue 
 If the owner asked for the raw command, re-run it prefixed with DELIVERY_GUARD=off."))
 
                     ["pr" "create"]
+                    ;; The branch is --head's, else that of the directory the command runs in (ADR-0006, #126): -R names
+                    ;; the repository and changes nothing here.
                     (let [named  (head-branch ts)
-                          source (or named @branch)]
-                      (when-not (issue-branch? source)
+                          branch (when-not (or named (map? wd)) (sh-in wd "git" "symbolic-ref" "--short" "-q" "HEAD"))]
+                      (when (and (not named) (map? wd))
+                        (decide
+                         "deny"
+                         (str
+                          "Refused: cannot tell which branch this pull request is from (`"
+                          (:unresolved wd)
+                          "` has no value the guard can read here: it is not set in this command, or it comes from a command).
+
+Run it from the worktree with a literal path (cd <absolute path> && gh pr create …), or name the branch: gh pr create --head <number>-<slug> (#126).")))
+                      (when-not (issue-branch? (or named branch))
                         (decide
                          "deny"
                          (str
                           "Refused: "
                           (if named
                             (str "--head names '" named "'")
-                            (str "HEAD is '" (or @branch "unknown") "'"))
+                            (str "HEAD is '" (or branch "unknown") "'"))
                           ", which carries no issue number, so this pull request would have no issue and no board entry behind it.
 
 Get the issue and its branch first:
