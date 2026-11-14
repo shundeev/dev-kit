@@ -73,7 +73,7 @@ You do not have to watch for updates: the session start says when the pinned com
 |---|---|
 | `AGENTS.md`, between `dev-kit:begin` / `dev-kit:end` | `rules/shared.md` (+ `rules/clojure.md`) |
 | `.claude/settings.json`: permissions and hooks (safety guard, delivery guard, friction recorder, formatting) | `claude/settings.base.json` + board settings from `kit.edn` |
-| `.cc-safety-net/policy.json`: the safety guard's policy, read by Claude Code, Codex and OpenCode alike | `kit` (level `standard`) |
+| `.cc-safety-net/policy.json`: the safety guard's policy, read by Claude Code, Codex and OpenCode alike | `kit` (level `standard`, `workflow.worktree_mode`: an agent may discard its own work in a linked worktree; the main checkout stays protected). The project owns the file: `init` adds `worktree_mode` only when the key is absent |
 | `.claude/skills/*` (links) | `claude/skills/`: `repo-task-delivery`, `gh-project-workflow`, `adr` |
 | `.claude/agents/*.md` (copies) | `claude/agents/`: `ops`, `log-reader`; `smell-reviewer` with the Clojure module |
 | `.github/workflows/ci.yml` | `managed/ci.yml`, which runs `ci/action.yml` from the submodule |

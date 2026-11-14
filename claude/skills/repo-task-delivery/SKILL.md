@@ -171,6 +171,9 @@ component is an M: stop, resize it and ask for G1.
   window, so friction comes from this table, not from memory.
 - The hooks tie an event to its task by the git branch of the directory it touched. Name
   worktrees by literal paths (`cd /abs/path`, `git -C /abs/path`), not by shell variables.
+- Every refusal the data lists for the task gets a verdict in the comment: it protected something, or it
+  was too strict. For a too-strict one the proposal changes the hook or its policy deterministically; a
+  rule in words is no proposal (#107).
 - Post a `## Retrospective` comment on the issue (#28) that starts with the table. It covers the
   flow, code rules, determinism, friction, mistakes and wrong assumptions, facts learned, and what
   worked. XS and S may say "nothing to change" in one line after the table.

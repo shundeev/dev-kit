@@ -633,6 +633,32 @@ jq '.secret_protection = {deny_paths: ["notes.txt"]}' "$WORK/policy.json" > .cc-
 refused "the guard reads the project's .cc-safety-net/policy.json" "$(call Bash '{"command":"cat notes.txt"}')"
 cp "$WORK/policy.json" .cc-safety-net/policy.json; rm -f notes.txt
 passes "  and the default policy lets that file through" "$(call Bash '{"command":"cat notes.txt"}')"
+# #107: an agent may discard its own work in a linked worktree; the main checkout keeps the protection
+WT="$WORK/linked-worktree"; tracked=AGENTS.md
+git worktree add -q -b scratch-107 "$WT"
+jq -e '.workflow.worktree_mode == true' .cc-safety-net/policy.json >/dev/null && ok "init turns on workflow.worktree_mode" || bad "no worktree_mode in the policy"
+passes "lets through: git restore in a linked worktree (cd <worktree> && ...)" "$(call Bash "$(jq -nc --arg w "$WT" --arg f "$tracked" '{command: ("cd " + $w + " && git restore " + $f)}')")"
+passes "lets through: git -C <worktree> restore" "$(call Bash "$(jq -nc --arg w "$WT" --arg f "$tracked" '{command: ("git -C " + $w + " restore " + $f)}')")"
+passes "lets through: git checkout <ref> -- <path> in a linked worktree" "$(call Bash "$(jq -nc --arg w "$WT" --arg f "$tracked" '{command: ("cd " + $w + " && git checkout HEAD -- " + $f)}')")"
+refused "refuses: git restore in the main checkout" "$(call Bash "$(jq -nc --arg f "$tracked" '{command: ("git restore " + $f)}')")"
+refused "refuses: git checkout <ref> -- <path> in the main checkout" "$(call Bash "$(jq -nc --arg f "$tracked" '{command: ("git checkout HEAD -- " + $f)}')")"
+refused "refuses: git reset --hard in the main checkout, as before" "$(call Bash '{"command":"git reset --hard"}')"
+refused "refuses: git reset --hard HEAD in the main checkout" "$(call Bash '{"command":"git reset --hard HEAD"}')"
+refused "refuses: git reset --hard HEAD in a linked worktree" "$(call Bash "$(jq -nc --arg w "$WT" '{command: ("cd " + $w + " && git reset --hard HEAD")}')")"
+# measured with cc-safety-net 2.7.12: with worktree_mode its own rule lets the bare form through in a linked worktree
+passes "  (the bare 'git reset --hard' in a linked worktree is cc-safety-net's own relaxation)" "$(call Bash "$(jq -nc --arg w "$WT" '{command: ("cd " + $w + " && git reset --hard")}')")"
+git worktree remove --force "$WT"; git branch -q -D scratch-107
+# an existing project's policy gets the setting on the next init and keeps what the project added
+printf '{"version":1,"safety":{"level":"standard"},"secret_protection":{"deny_paths":["x.txt"]}}\n' > .cc-safety-net/policy.json
+expect_exit 1 "doctor names a policy without worktree_mode" bb $kit doctor --local
+contains "  naming the key" "workflow.worktree_mode" "$LAST"
+bb $kit init >/dev/null 2>&1
+jq -e '.workflow.worktree_mode == true and .secret_protection.deny_paths == ["x.txt"] and .safety.level == "standard"' .cc-safety-net/policy.json >/dev/null \
+  && ok "init adds worktree_mode and keeps what the project put in the policy" || bad "init lost or missed policy keys" "$(cat .cc-safety-net/policy.json)"
+jq '.workflow.worktree_mode = false' .cc-safety-net/policy.json > "$WORK/p.json" && cp "$WORK/p.json" .cc-safety-net/policy.json
+bb $kit init >/dev/null 2>&1
+jq -e '.workflow.worktree_mode == false' .cc-safety-net/policy.json >/dev/null && ok "init leaves a project's own choice of worktree_mode" || bad "init overrode worktree_mode"
+cp "$WORK/policy.json" .cc-safety-net/policy.json; bb $kit init >/dev/null 2>&1
 oldnode="$WORK/oldnode"; mkdir -p "$oldnode"; printf '#!/bin/sh\necho v18.19.0\n' > "$oldnode/node"; chmod +x "$oldnode/node"
 out="$(PATH="$oldnode:$PATH" call Bash '{"command":"git status"}')"; code=$?
 [ "$code" -eq 2 ] && ok "with Node older than 22 every guarded call is refused (exit 2)" || bad "old Node (exit $code)" "$out"
@@ -1432,6 +1458,8 @@ contains "  a turn without its Stop, followed by another: Esc" "| Owner interrup
 contains "  a hook's refusal" "| Refused by a hook | gh issue create | 1 | 1 |" "$out"
 contains "  the classifier's refusal, with its category" "| Refused by the classifier | git push — git_destructive | 1 | 1 |" "$out"
 contains "  no run in a turn that ended normally: a deny rule; a lone echo is named" "| Refused by a rule | echo | 1 | 1 |" "$out"
+contains "  each refusal of the task listed for a verdict (#107)" "Refusals of the task, each needs a verdict" "$out"
+contains "  the classifier's refusal in that list" "Refused by the classifier · git push — git_destructive" "$out"
 contains "  a failed command" "| Tool error | bb kit gate | 1 | 1 |" "$out"
 contains "  gh's flag values stay out of the shape" "| Tool error | gh pr view | 1 | 1 |" "$out"
 contains "  inline code stays out of the shape" "| Tool error | python3 -c | 1 | 1 |" "$out"

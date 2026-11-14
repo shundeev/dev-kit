@@ -7,7 +7,9 @@
 #
 # It never blocks or slows a call: it prints nothing and exits 0, whatever fails. A line is written in one
 # piece under a lock, so parallel calls do not interleave; strings longer than 2 KB are cut.
-# Every line: time, event, session, turn (prompt_id), agent, tool, tool_use_id, the tool's input. Besides:
+# Every line, under the names the log writes: at, event, session, turn (the hook's prompt_id), agent, tool, id
+# (the hook's tool_use_id), input (the tool's input), prompt, reason; a field the event lacks is left out. A
+# PermissionRequest line carries no id (#100), so a request cannot be tied to its call by id. Besides:
 #   PreToolUse         the task: branch and origin of the directory the call touches, read now: a file's
 #                      directory, an existing directory after `cd` or `git -C`, else the cwd
 #   PermissionRequest  the ask rules in force: managed, the project's, its local ones, the user's
