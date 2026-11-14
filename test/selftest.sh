@@ -1020,8 +1020,11 @@ echo "https://github.com/u473t8/fake/pull/99" > "$FAKE/pr-list"
 
 # The PR as `gh pr view --json state,reviewDecision,mergeStateStatus,headRefOid` prints it, one line per look. A decision
 # of "-" is none. The fake has no line left after the last one and says so, so no case here can wait for ever (#109).
-view() { jq -nc --arg s "$1" --arg d "$2" --arg m "$3" --arg h "${4:-aaa111}" \
-  '{state: $s, reviewDecision: (if $d == "-" then "" else $d end), mergeStateStatus: $m, headRefOid: $h}'; }
+# A fifth word is the ready workflow's view: "draft", "draft,hold", or none (marked ready, owners asked, auto-merge on).
+view() { jq -nc --arg s "$1" --arg d "$2" --arg m "$3" --arg h "${4:-aaa111}" --arg f "${5:-}" \
+  '{state: $s, reviewDecision: (if $d == "-" then "" else $d end), mergeStateStatus: $m, headRefOid: $h,
+    isDraft: ($f | contains("draft")), labels: (if ($f | contains("hold")) then [{name: "hold"}] else [] end),
+    reviewRequests: (if $f == "" then [{slug: "owners"}] else [] end), autoMergeRequest: (if $f == "" then {enabledBy: {login: "x"}} else null end)}'; }
 script_views() { local l; : > "$FAKE/pr-view.seq"; for l in "$@"; do view $l >> "$FAKE/pr-view.seq"; done; }
 script_checks() { printf '%s\n' "$@" > "$FAKE/pr-checks.seq"; }
 unscript() { rm -f "$FAKE/pr-view.seq" "$FAKE/pr-checks.seq"; }
@@ -1164,6 +1167,23 @@ the PR closes|2|is closed|OPEN - BLOCKED;CLOSED - BLOCKED|selftest:pending
 the PR merges|2|merged, so there is nothing to wait for|OPEN - BLOCKED;MERGED - CLEAN|selftest:pending
 gh cannot be read (here: no answer left)|2|has no more answers|OPEN - BLOCKED;OPEN - BLOCKED|-
 TABLE
+# Where the base has the ready workflow, kit checks also waits for its decision and reports the PR's state. The workflow's run
+# for the head is found by its log line (the fake: run 501, completed, when a log is given). One row per case: the looks
+# at the PR (the fifth word is its state, see view), the run's log, what the output says.
+touch "$FAKE/ready-workflow"
+while IFS='|' read -r name views log says; do
+  echo '[{"databaseId":501,"status":"completed"}]' > "$FAKE/ready-runs.json"; printf "$log" > "$FAKE/run-log-501"
+  script_checks "[$(chk selftest pass),$(chk lint pass)]" "[$(chk selftest pass),$(chk lint pass)]" "[$(chk selftest pass),$(chk lint pass)]"
+  IFS=';' read -ra v <<<"$views"; script_views "${v[@]}"
+  expect_exit 0 "checks, ready workflow: $name" flow checks
+  IFS=';' read -ra ph <<<"$says"; for phrase in "${ph[@]}"; do contains "  says: $phrase" "$phrase" "$LAST"; done
+done <<'TABLE'
+a PR the workflow marked ready|OPEN - CLEAN aaa111;OPEN - CLEAN aaa111||Ready;owners;auto-merge on
+a held draft|OPEN - CLEAN aaa111;OPEN - CLEAN aaa111 draft,hold||Held;kit release
+a draft the run left alone, with its decision line|OPEN - CLEAN aaa111;OPEN - CLEAN aaa111 draft;OPEN - CLEAN aaa111 draft|ready\tMark\t2026-11-14T10:00:00Z CI run id: 400, success on 1-x at aaa111\nready\tMark\t2026-11-14T10:00:01Z decision: #9 carries the label hold, left a draft\n|Still a draft;carries the label hold, left a draft
+the PR leaves draft while no run is there yet|OPEN - CLEAN aaa111;OPEN - CLEAN aaa111 draft;OPEN - CLEAN aaa111||Waiting for the ready workflow;kit release;Ready
+TABLE
+rm -f "$FAKE/ready-runs.json" "$FAKE/run-log-501" "$FAKE/ready-workflow"; unscript
 script_views "OPEN - CLEAN" "OPEN - CLEAN"; script_checks "[$(chk selftest pass),$(chk lint pass)]"; : > "$FAKE_GH_LOG"
 expect_exit 0 "checks: --pr names the pull request" flow checks --pr 77
 grep -q '^pr view 77' "$FAKE_GH_LOG" && grep -q '^pr checks 77' "$FAKE_GH_LOG" && ok "  every call names #77" || bad "  calls" "$(cat "$FAKE_GH_LOG")"
