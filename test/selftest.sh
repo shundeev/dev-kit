@@ -76,6 +76,7 @@ grep -q "Managed by dev-kit" .claude/agents/ops.md && ok "agent copied with the 
 head -1 .claude/agents/ops.md | grep -qx -- '---' && ok "agent copy keeps frontmatter first" || bad "agent frontmatter"
 [ -f LICENSE ] && grep -q "MIT License" LICENSE && ok "LICENSE scaffolded" || bad "LICENSE"
 [ -f .github/workflows/ci.yml ] && ok "CI workflow written" || bad "ci.yml"
+[ -f .github/workflows/ready-when-green.yml ] && ok "ready workflow written (ADR-0007)" || bad "ready-when-green.yml"
 [ "$(git config core.hooksPath)" = ".shared/githooks" ] && ok "hooksPath set" || bad "hooksPath"
 grep -q "dev-kit:begin" AGENTS.md && grep -q "# This project" AGENTS.md && ok "AGENTS.md has the block and the project part" || bad "AGENTS.md"
 [ ! -e CLAUDE.md ] && ok "no CLAUDE.md" || bad "CLAUDE.md exists"
@@ -309,6 +310,61 @@ expect_exit 1 "doctor --ci catches an edited PR template" bb $kit doctor --ci
 contains "doctor names the template" "$prt: differs" "$LAST"
 bb $kit init >/dev/null
 
+echo "- ready workflow in projects and in dev-kit (ADR-0007)"
+rw=.github/workflows/ready-when-green.yml
+cmp -s "$rw" "$KIT/managed/ready-when-green.yml" && ok "init lays managed/ready-when-green.yml as it is" || bad "the ready workflow differs from managed/"
+grep -q 'workflows: \["CI"\]' "$rw" && grep -q '^name: CI$' .github/workflows/ci.yml \
+  && ok "  it waits for the workflow managed/ci.yml names" || bad "  the ready workflow does not wait for the CI workflow"
+echo "# edited" >> "$rw"
+expect_exit 1 "doctor --ci catches an edited ready workflow" bb $kit doctor --ci
+contains "doctor names the file" "$rw: differs" "$LAST"
+rm "$rw"
+expect_exit 1 "doctor --ci catches a missing ready workflow" bb $kit doctor --ci
+contains "doctor names it missing" "$rw: missing" "$LAST"
+contains "  and says to run init" "kit init" "$LAST"
+bb $kit init >/dev/null
+[ -f "$rw" ] && ok "init lays it again" || bad "init did not lay the ready workflow"
+# dev-kit is not a project, so its copy is made by one substitution: the name of its own CI workflow.
+sed 's/workflows: \["CI"\]/workflows: ["Selftest"]/' "$KIT/managed/ready-when-green.yml" | cmp -s - "$KIT/$rw" \
+  && grep -q '^name: Selftest$' "$KIT/.github/workflows/selftest.yml" \
+  && ok "dev-kit's own ready workflow is managed/ready-when-green.yml waiting for Selftest" \
+  || bad "dev-kit's own $rw drifted from managed/ready-when-green.yml: regenerate it with sed 's/workflows: \\[\"CI\"\\]/workflows: [\"Selftest\"]/' managed/ready-when-green.yml > $rw"
+
+echo "- the ready workflow's script, run against the fake gh (ADR-0007)"
+rwscript="$WORK/ready.sh"
+sed -n '/^        run: |$/,$p' "$KIT/managed/ready-when-green.yml" | tail -n +2 | sed 's/^          //' > "$rwscript"
+for perm in "checks: read" "statuses: read" "pull-requests: write" "contents: write"; do
+  grep -q "^  $perm" "$KIT/managed/ready-when-green.yml" && ok "  permission $perm" || bad "  permission $perm missing (gh pr checks reads the status rollup)"
+done
+RW="$WORK/rw"; mkdir -p "$RW"
+rw() { # rw <prs json> : the script as GitHub runs it (bash -e), gh faked, its log kept
+  : > "$RW/log"
+  PATH="$KIT/test/fake-gh:$PATH" FAKE_GH_DIR="$RW" FAKE_GH_LOG="$RW/log" GH_REPO=u473t8/fake GH_TOKEN=x CONCLUSION=success \
+    HEAD_BRANCH=feat HEAD_SHA=abc HEAD_REPO=u473t8/fake RUN_ID=555 EVENT_PRS="$1" bash -e "$rwscript" 2>&1
+}
+printf 'OPEN\ttrue\tabc\tfalse\n' > "$RW/pr-view-7"; cp "$RW/pr-view-7" "$RW/pr-view-8"; echo "checks pass" > "$RW/pr-checks.json"
+out="$(rw '[7,8]')"; code=$?
+[ "$code" = 0 ] && grep -q '^pr ready 7' "$RW/log" && grep -q '^pr ready 8' "$RW/log" && grep -q '^pr merge 8 --auto --squash' "$RW/log" \
+  && ok "  two green drafts: both marked ready, auto-merge on" || bad "  two green drafts" "$out"
+contains "  logs the CI run's id" "CI run id: 555," "$out"
+touch "$RW/ready-fails-7"
+out="$(rw '[7,8]')"; code=$?
+[ "$code" = 0 ] && grep -q '^pr ready 8' "$RW/log" && ok "  a gh pr ready that fails for one PR does not end the loop" || bad "  loop ended at the failing PR" "$out"
+contains "  and says which PR failed" "gh pr ready failed for #7" "$out"
+rm "$RW/ready-fails-7"
+echo 8 > "$RW/pr-checks.exit"
+out="$(rw '[7]')"
+grep -q '^pr ready' "$RW/log" && bad "  marked ready with a pending check" || ok "  a pending required check leaves the draft"
+contains "  logs gh pr checks' exit code" "exit code 8" "$out"
+rm "$RW/pr-checks.exit"
+printf 'OPEN\ttrue\tabc\ttrue\n' > "$RW/pr-view-7"
+out="$(rw '[7]')"
+grep -q '^pr ready' "$RW/log" && bad "  marked a held PR ready" || ok "  a held PR is left a draft"
+contains "  and says why" "carries the label hold" "$out"
+printf 'OPEN\ttrue\told\tfalse\n' > "$RW/pr-view-7"
+out="$(rw '[7]')"
+grep -q '^pr ready' "$RW/log" && bad "  marked ready a PR with a newer commit" || ok "  a PR whose head moved on is left to its own run"
+
 echo "- delivery skill"
 skill="$KIT/claude/skills/repo-task-delivery/SKILL.md"
 sed -n 2p "$skill" | grep -qx 'name: repo-task-delivery' && ok "the delivery skill names itself" || bad "skill frontmatter"
@@ -318,6 +374,16 @@ for h in "Size sets the ceremony" "Requirements" "Invariants" "Design" "G1" "Pla
   grep -Eqi "^## [0-9]+\. .*$h" "$skill" || missing="$missing, $h"
 done
 [ -z "$missing" ] && ok "the delivery skill walks every stage of ADR-0002" || bad "the skill lacks the stage${missing#,}"
+missing=""
+for phrase in "gh pr checks <pr> --watch --fail-fast --required" "in the background" "kit finish --hold" "kit release" "Ask the owner for the Approve once the PR is ready"; do
+  grep -qF -- "$phrase" "$skill" || missing="$missing, $phrase"
+done
+[ -z "$missing" ] && ok "stage 9: the background alarm, the hold and the release, the Approve asked once ready (ADR-0007)" || bad "stage 9 lacks${missing#,}"
+missing=""
+for phrase in "unless the PR is held" "still a draft without \`hold\`" "kit checks"; do
+  grep -qF -- "$phrase" "$skill" || missing="$missing, $phrase"
+done
+[ -z "$missing" ] && ok "stage 9: a pass means ready unless held; a stuck draft is released; the alarm's known gap" || bad "stage 9 lacks${missing#,}"
 [ "$(wc -l < "$KIT/rules/shared.md")" -le 100 ] && ok "the rules block stays within 100 lines" || bad "rules/shared.md is $(wc -l < "$KIT/rules/shared.md") lines"
 missing=""
 for phrase in "what changed for them and what is needed from them" "ends with the pull request's link" \
@@ -739,6 +805,9 @@ contains "  gh's own lines reach the terminal" "Creating pull request" "$LAST"
 grep -q 'pr list .*--state open' "$FAKE_GH_LOG" && ok "  only open PRs looked up" || bad "  lookup not limited to open PRs"
 grep -q '^pr merge https://github.com/u473t8/fake/pull/99 --auto --squash' "$FAKE_GH_LOG" \
   && ok "  auto-merge turned on: the owner's Approve merges it" || bad "  auto-merge not turned on" "$(cat "$FAKE_GH_LOG")"
+grep -q '^pr create .*--draft' "$FAKE_GH_LOG" && bad "  a repository without the ready workflow gets a draft" || ok "  no ready workflow on the base: the PR opens ready (ADR-0007)"
+grep -q 'contents/.github/workflows/ready-when-green.yml?ref=main' "$FAKE_GH_LOG" \
+  && ok "  asked the base branch for the workflow" || bad "  never looked for the workflow" "$(cat "$FAKE_GH_LOG")"
 contains "  subject from the issue title, first letter lowered" "Subject: feat(GH-12): add Landing page" "$LAST"
 [ "$(git log -1 --format=%s)" = "feat(GH-12): add Landing page" ] && ok "  commit carries the subject" || bad "  commit subject"
 [ "$(git rev-parse origin/12-landing 2>/dev/null)" = "$(head_now)" ] && ok "  branch pushed" || bad "  branch not pushed"
@@ -764,6 +833,90 @@ expect_exit 0 "finish: without GHWF_HUMAN" flow_r finish --commit-message-file "
 contains "  warns and names the fix" "kit init" "$LAST"
 echo "https://github.com/u473t8/fake/pull/99" > "$FAKE/pr-list"
 
+echo "- ready workflow: draft, hold, release (ADR-0007)"
+touch "$FAKE/ready-workflow"; : > "$FAKE/pr-list"; : > "$FAKE_GH_LOG"; echo draft >> f; git add f
+printf 'fix(GH-12): open as a draft\n' > "$WORK/msg4.txt"
+expect_exit 0 "finish: the base holds the ready workflow, so the PR opens as a draft" flow_rh finish --commit-message-file "$WORK/msg4.txt" --pr-body-file "$WORK/body.md"
+grep -q '^pr create .*--draft' "$FAKE_GH_LOG" && ok "  gh pr create --draft" || bad "  not a draft" "$(cat "$FAKE_GH_LOG")"
+grep -q '^pr merge' "$FAKE_GH_LOG" && bad "  auto-merge turned on a draft" "$(grep '^pr merge' "$FAKE_GH_LOG")" || ok "  no auto-merge: the workflow turns it on after marking the PR ready"
+grep -q -- '--add-label hold' "$FAKE_GH_LOG" && bad "  held without --hold" || ok "  no hold unless asked"
+grep -qx 'pr edit https://github.com/u473t8/fake/pull/99 --add-assignee the-human' "$FAKE_GH_LOG" \
+  && ok "  the owners are not asked on a draft, the assignee is set" || bad "  review requested on a draft" "$(grep '^pr edit' "$FAKE_GH_LOG")"
+contains "  says when the owners are asked" "asked once its required checks pass" "$LAST"
+
+: > "$FAKE/pr-list"; : > "$FAKE_GH_LOG"; echo held >> f; git add f
+printf 'fix(GH-12): open held\n' > "$WORK/msg5.txt"
+expect_exit 0 "finish --hold: the PR carries the label hold" flow_rh finish --hold --commit-message-file "$WORK/msg5.txt" --pr-body-file "$WORK/body.md"
+grep -q '^label create hold -R u473t8/fake' "$FAKE_GH_LOG" && ok "  the label is created when the repository has none" || bad "  no label create" "$(cat "$FAKE_GH_LOG")"
+grep -q '^pr create .*--label hold' "$FAKE_GH_LOG" && ok "  the PR is created with the label, so the workflow never sees it unheld" || bad "  no --label hold" "$(cat "$FAKE_GH_LOG")"
+echo "https://github.com/u473t8/fake/pull/99" > "$FAKE/pr-list"; : > "$FAKE_GH_LOG"; echo again >> f; git add f
+printf 'fix(GH-12): hold an open PR\n' > "$WORK/msg7.txt"
+echo true > "$FAKE/pr-draft"
+expect_exit 0 "finish --hold: an open PR gets the label too" flow_rh finish --hold --commit-message-file "$WORK/msg7.txt"
+grep -qx 'pr edit https://github.com/u473t8/fake/pull/99 --add-label hold' "$FAKE_GH_LOG" \
+  && ok "  gh pr edit --add-label hold" || bad "  no hold label" "$(grep '^pr edit' "$FAKE_GH_LOG")"
+grep -q '^pr create' "$FAKE_GH_LOG" && bad "  opened a second PR" || ok "  no second PR"
+grep -q -- '--add-reviewer' "$FAKE_GH_LOG" && bad "  asked the owners on an open draft" "$(grep '^pr edit' "$FAKE_GH_LOG")" || ok "  an open draft asks nobody: its own state decides, not the base's"
+grep -q '^pr merge' "$FAKE_GH_LOG" && bad "  turned auto-merge on for a draft" || ok "  no auto-merge on a draft"
+contains "  says it waits for kit release" "kit release" "$LAST"
+echo false > "$FAKE/pr-draft"; : > "$FAKE_GH_LOG"; echo ready >> f; git add f
+printf 'fix(GH-12): a ready PR\n' > "$WORK/msg8.txt"
+expect_exit 0 "finish: an open PR that is ready gets the review request and auto-merge, as before" flow_rh finish --commit-message-file "$WORK/msg8.txt"
+grep -qx 'pr edit https://github.com/u473t8/fake/pull/99 --add-reviewer shundeev/owners --add-assignee the-human' "$FAKE_GH_LOG" \
+  && ok "  the owners are asked" || bad "  no review request" "$(grep '^pr edit' "$FAKE_GH_LOG")"
+grep -q '^pr merge https://github.com/u473t8/fake/pull/99 --auto --squash' "$FAKE_GH_LOG" && ok "  auto-merge on" || bad "  no auto-merge" "$(cat "$FAKE_GH_LOG")"
+echo again2 >> f; git add f; before=$(head_now)
+expect_exit 1 "finish --hold: an open PR that is ready is refused before the commit" flow_rh finish --hold --commit-message-file "$WORK/msg8.txt"
+contains "  says the workflow reads drafts only" "only reads drafts" "$LAST"
+contains "  and what to do" "gh pr ready" "$LAST"
+[ "$(head_now)" = "$before" ] && ok "  nothing committed" || bad "  committed anyway"
+git reset -q --hard HEAD; rm -f "$FAKE/pr-draft"
+: > "$FAKE/pr-list"
+
+echo more >> f; git add f
+printf 'fix(GH-12): refused hold\n' > "$WORK/msg6.txt"
+rm "$FAKE/ready-workflow"; : > "$FAKE/pr-list"; before=$(head_now)
+expect_exit 1 "finish --hold: without the workflow on the base it stops before the commit" flow_rh finish --hold --commit-message-file "$WORK/msg6.txt" --pr-body-file "$WORK/body.md"
+contains "  names the way out" "run kit finish without --hold" "$LAST"
+[ "$(head_now)" = "$before" ] && ok "  nothing committed" || bad "  committed anyway"
+touch "$FAKE/gh-fails"
+expect_exit 1 "finish: a base branch that cannot be read stops before the commit" flow_rh finish --commit-message-file "$WORK/msg6.txt" --pr-body-file "$WORK/body.md"
+contains "  says what to do" "run it again" "$LAST"
+[ "$(head_now)" = "$before" ] && ok "  nothing committed" || bad "  committed anyway"
+rm "$FAKE/gh-fails"; git reset -q --hard HEAD
+
+echo "https://github.com/u473t8/fake/pull/99" > "$FAKE/pr-list"
+echo '{"state":"OPEN","isDraft":true,"labels":[{"name":"hold"}],"url":"https://github.com/u473t8/fake/pull/99"}' > "$FAKE/pr-release"
+echo '[{"name":"checks","bucket":"pass"}]' > "$FAKE/pr-checks.json"; : > "$FAKE_GH_LOG"
+expect_exit 0 "release: a held draft with green required checks" flow release
+calls="$(grep -E '^pr (edit|ready|merge)' "$FAKE_GH_LOG" | sed -E 's/ https:[^ ]*//; s/ -R [^ ]*//' | tr '\n' ',')"
+[ "$calls" = "pr edit --remove-label hold,pr ready,pr merge --auto --squash," ] \
+  && ok "  removes hold, marks it ready, turns auto-merge on" || bad "  the calls" "$calls"
+echo '[{"name":"checks","bucket":"pending"},{"name":"lint","bucket":"fail"},{"name":"docs","bucket":"pass"}]' > "$FAKE/pr-checks.json"
+echo 8 > "$FAKE/pr-checks.exit"; : > "$FAKE_GH_LOG"
+expect_exit 1 "release: refuses while a required check is not green" flow release
+contains "  names the pending check" "checks (pending)" "$LAST"
+contains "  and the failed one" "lint (fail)" "$LAST"
+contains "  says what to do" "run kit release again" "$LAST"
+grep -qE '^pr (edit|ready|merge)' "$FAKE_GH_LOG" && bad "  changed the PR anyway" "$(cat "$FAKE_GH_LOG")" || ok "  the PR is left as it was"
+echo '[]' > "$FAKE/pr-checks.json"; echo 1 > "$FAKE/pr-checks.exit"
+expect_exit 1 "release: no required check reported is not green" flow release
+contains "  says so" "no required check" "$LAST"
+echo '[{"name":"checks","bucket":"pass"}]' > "$FAKE/pr-checks.json"; echo 0 > "$FAKE/pr-checks.exit"
+echo '{"state":"OPEN","isDraft":false,"labels":[],"url":"https://github.com/u473t8/fake/pull/99"}' > "$FAKE/pr-release"; : > "$FAKE_GH_LOG"
+expect_exit 0 "release: a PR that is ready already only gets auto-merge" flow release
+calls="$(grep -E '^pr (edit|ready|merge)' "$FAKE_GH_LOG" | sed -E 's/ https:[^ ]*//; s/ -R [^ ]*//' | tr '\n' ',')"
+[ "$calls" = "pr merge --auto --squash," ] && ok "  no label to remove, no ready" || bad "  the calls" "$calls"
+expect_exit 0 "release --help: covers a draft that was never held" flow release --help
+contains "  says so" "never held" "$LAST"
+echo '{"state":"MERGED","isDraft":false,"labels":[],"url":"https://github.com/u473t8/fake/pull/99"}' > "$FAKE/pr-release"
+expect_exit 1 "release: a PR that is not open is refused" flow release
+contains "  says its state" "is MERGED" "$LAST"
+: > "$FAKE/pr-list"
+expect_exit 1 "release: a branch without an open PR names the way out" flow release
+contains "  says --pr" "--pr" "$LAST"
+echo "https://github.com/u473t8/fake/pull/99" > "$FAKE/pr-list"
+
 git switch -q -c 13-typo main
 echo typo >> f; git commit -qam "fix(GH-13): correct the typo"
 : > "$FAKE/pr-list"; : > "$FAKE_GH_LOG"
@@ -787,7 +940,7 @@ if grep -q '^pr merge' "$FAKE_GH_LOG"; then bad "  tried to merge"; else ok "  n
 echo "APPROVED CLEAN" > "$FAKE/pr-review"
 touch "$FAKE/no-auto-merge"; : > "$FAKE_GH_LOG"
 expect_exit 1 "merge: without auto-merge in the repository" flow merge
-calls="$(grep -E '^pr merge' "$FAKE_GH_LOG" | sed 's/ https:[^ ]*//' | tr '\n' ',')"
+calls="$(grep -E '^pr merge' "$FAKE_GH_LOG" | sed -E 's/ https:[^ ]*//; s/ -R [^ ]*//' | tr '\n' ',')"
 [ "$calls" = "pr merge --auto --squash,pr merge --squash," ] && ok "  falls back to a plain squash merge" || bad "  no fallback" "$calls"
 rm "$FAKE/no-auto-merge"
 expect_exit 1 "merge: a PR that did not merge keeps its branch" flow merge

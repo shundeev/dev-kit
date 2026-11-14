@@ -130,19 +130,31 @@ component is an M: stop, resize it and ask for G1.
 ## 9. Pull request
 
 - Write the body from `.github/pull_request_template.md`, then run `kit finish`
-  (`gh-project-workflow`). It commits, pushes, opens the PR, turns on auto-merge and moves the
-  card to **In review**. It first runs the shape rules CI's pull request gate holds (branch,
-  title, `ADR:` line, filled **Review** and **User-level test**), so a PR that would fail them is
-  never opened (#21).
+  (`gh-project-workflow`). It commits, pushes, opens the PR and moves the card to **In review**.
+  It first runs the shape rules CI's pull request gate holds (branch, title, `ADR:` line, filled
+  **Review** and **User-level test**), so a PR that would fail them is never opened (#21).
+- Where `main` holds `ready-when-green.yml`, the PR opens as a **draft**. GitHub asks the owners
+  for a review only when the workflow marks it ready, once every required check passed, and it
+  turns auto-merge on then (ADR-0007, #104). A failed check leaves the draft and tells the owners
+  nothing. Elsewhere the PR opens ready, with auto-merge on, as before.
 - Never sleep or use `--watch` in the foreground; the guard refuses it (#109). A long wait runs as a background command, and
-  the agent is woken when it exits. To wait for CI: `gh pr checks <pr> --watch --fail-fast
-  --required` in the background; its exit code is the result.
+  the agent is woken when it exits. After `kit finish`, the failure alarm is
+  `gh pr checks <pr> --watch --fail-fast --required` in the background; its exit code is the result. A failure wakes
+  you: fix it and push. A pass means the PR became ready, unless the PR is held. Known gap: a watch
+  started right after a push can end before the head's checks exist; `kit checks` (#109) closes it.
+- Ask the owner for the Approve once the PR is ready, not before: a draft is not yet asked for.
 - Anything the owner must do by hand goes into a PR comment that starts with `## Owner steps`, as
   numbered steps: where to click, what to type, what the result looks like, what to do if it
   fails. A step that checks a hook says "ask the agent, without `!`": a `!` command bypasses the
   hooks (site#18). The report gives the link.
-- A PR that changes the same lines as one already waiting is opened as a draft until that one
-  merges (#81, #27).
+- A PR that changes the same lines as one already waiting is opened with `kit finish --hold`: the
+  workflow leaves it a draft. When the earlier PR has merged, run `kit release`: it removes the
+  label, marks the PR ready and turns on auto-merge, and refuses, naming the check, while a
+  required check is not green (#81, #27).
+- When the checks have passed and the PR is still a draft without `hold` (a required check comes
+  from outside the CI workflow, or CI was renamed or disabled), run `kit release`: it refuses
+  unless the required checks are green. If the workflow is not on `main` yet the PR opened ready,
+  and `kit merge` follows the Approve.
 
 ## 10. Review round and merge on the owner's Approve
 

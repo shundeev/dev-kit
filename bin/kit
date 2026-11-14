@@ -5,7 +5,7 @@
 ;;   .shared/bin/kit init     --local   per-machine items only (the SessionStart hook runs it)
 ;;   .shared/bin/kit doctor   [--ci] [--quiet]
 ;;   .shared/bin/kit modules
-;;   .shared/bin/kit start | finish | merge   the delivery flow's GitHub steps (#95); --help on each
+;;   .shared/bin/kit start | finish | release | merge   the delivery flow's GitHub steps (#95); --help on each
 ;;   .shared/bin/kit board set <project-number> <owner> <issue-url> <field> <option>   one card's field (#41)
 ;;   .shared/bin/kit user-test   the project's user-level test, :user-test in kit.edn (#27)
 ;;   .shared/bin/kit identity [--dir PATH]   the agent's GitHub identity alone, for any repository
@@ -25,7 +25,7 @@
 ;;              project part of AGENTS.md; with --scaffold also README.md, adr/, docs/experiments/)
 ;;   managed  — owned by dev-kit, rewritten by init, verified by doctor (the AGENTS.md block,
 ;;              .claude/settings.json, .claude/skills links, .claude/agents copies,
-;;              .github/workflows/ci.yml, .github/CODEOWNERS, the issue form and PR template,
+;;              .github/workflows/ci.yml and ready-when-green.yml, .github/CODEOWNERS, the issue form and PR template,
 ;;              clojure module: .zprint.edn link, clj-kondo config-paths;
 ;;              per machine and git-ignored: the agent identity env in .claude/settings.local.json)
 (ns kit
@@ -435,6 +435,10 @@
      {:kind :file :path ".claude/settings.json" :content (settings-text cfg)}
      {:kind :file :path ".github/workflows/ci.yml"
       :content (slurp (str (fs/path kit-dir "managed" "ci.yml")))}
+     ;; ADR-0007: marks a draft pull request ready when its required checks passed; kit finish opens drafts
+     ;; only where the base branch holds this file
+     {:kind :file :path ".github/workflows/ready-when-green.yml"
+      :content (slurp (str (fs/path kit-dir "managed" "ready-when-green.yml")))}
      {:kind :file :path ".github/CODEOWNERS" :content (codeowners-text cfg)}
      {:kind :file :path ".github/ISSUE_TEMPLATE/task.yml"
       :content (slurp (str (fs/path kit-dir "managed" "github" "ISSUE_TEMPLATE" "task.yml")))}
@@ -1605,7 +1609,7 @@
       "gate" (gate! (parse-args args))
       "retro" (retro! args)
       "hook" (hook! args)
-      ("start" "finish" "merge" "board") (flow! cmd args)
+      ("start" "finish" "release" "merge" "board") (flow! cmd args)
       nil (usage)
       (do (usage) (die "unknown command" cmd)))
     (catch clojure.lang.ExceptionInfo e

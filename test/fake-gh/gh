@@ -7,6 +7,11 @@
 #   pr-state        output of `pr view … --json state…`
 #   pr-state.seq    when present, one answer per call for the same query, the last line repeating
 #   pr-review       output of `pr view --json reviewDecision,mergeStateStatus …`, e.g. "APPROVED CLEAN"
+#   ready-workflow  when present, the base branch holds ready-when-green.yml: `api repos/…/contents/…` answers, else 404
+#   pr-release      output of `pr view … --json state,isDraft,labels,url` (kit release)
+#   pr-draft        output of `pr view … --json isDraft` (default false); pr-view-<n> that of the ready workflow's
+#                   state,isDraft,headRefOid,labels read; ready-fails-<n> makes `pr ready <n>` fail
+#   pr-checks.json  output of `pr checks … --json name,bucket`; pr-checks.exit its exit code (default 0)
 #   no-auto-merge   when present, `pr merge --auto` fails as in a repository without auto-merge
 #   gate-issue.json the full response of `api graphql` (the gate's issue query)
 #   retro.json      the full response of `api graphql` for the retrospective's query
@@ -73,9 +78,16 @@ case "${1:-} ${2:-}" in
       echo "GraphQL: Auto merge is not allowed for this repository (enablePullRequestAutoMerge)" >&2
       exit 1
     fi ;;
+  "pr checks") answer pr-checks.json; exit "$(answer_or pr-checks.exit 0)" ;;
+  "pr ready")
+    [ -e "$FAKE_GH_DIR/ready-fails-${3:-0}" ] && { echo "GraphQL: Pull request is not ready" >&2; exit 1; }
+    exit 0 ;;
   "pr view")
     case "$*" in
       *reviewDecision*) answer pr-review ;;
+      *headRefOid*) answer "pr-view-${3:-0}" ;;
+      *"--json isDraft --jq"*) answer_or pr-draft false ;;
+      *isDraft*) answer pr-release ;;
       *) answer_seq pr-state ;;
     esac ;;
   "issue view")
@@ -118,6 +130,8 @@ case "${1:-} ${2:-}" in
           *closedByPullRequestsReferences*) answer retro.json ;;
           *) answer gate-issue.json ;;
         esac ;;
+      */contents/*)
+        [ -e "$FAKE_GH_DIR/ready-workflow" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; } ;;
       */permission) u="${2%/permission}"; answer "perm-${u##*/}" ;;
       */files*) answer pr-files.json ;;
       */pulls/*) answer pr.json ;;
