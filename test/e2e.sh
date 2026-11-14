@@ -174,8 +174,9 @@ git config credential.helper '!gh auth git-credential'
 
 STEP="1 start files an issue"
 printf 'e2e-runner: %s\n' "$WHO" > "$WORK/runner.md"
+# Sandbox issues are test artifacts: no retrospective, so the starts skip that gate.
 out="$(bb "$KIT/bin/kit" start --title "$RUN: task" --body-file "$WORK/runner.md" --priority Low --size XS --showcase "$SHOWCASE" \
-         --status "In progress" 2>&1)" || fail "$out"
+         --skip-retro --status "In progress" 2>&1)" || fail "$out"
 n1="$(sed -n 's/^Issue Number: //p' <<<"$out")"; b1="$(branch_in "$out")"
 [ -n "$n1" ] && issues+=("$n1"); [ -n "$b1" ] && branches+=("$b1") # cleaned up whatever follows
 [ -n "$n1" ] && [ -n "$b1" ] || fail "no issue number or branch in: $out"
@@ -201,7 +202,7 @@ until [ -n "$(item | jq -r --arg t "$RUN: draft" 'select(.content.title == $t) |
   sleep 2
 done
 out="$(bb "$KIT/bin/kit" start --title "$RUN: draft" --priority Low --size XS --showcase "$SHOWCASE" \
-         --no-checkout 2>&1)" || fail "$out"
+         --skip-retro --no-checkout 2>&1)" || fail "$out"
 n2="$(sed -n 's/^Issue Number: //p' <<<"$out")"; b2="$(branch_in "$out")"
 [ -n "$n2" ] && issues+=("$n2"); [ -n "$b2" ] && branches+=("$b2")
 [ -n "$n2" ] || fail "no issue number in: $out"
