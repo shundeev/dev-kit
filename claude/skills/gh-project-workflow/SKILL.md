@@ -77,7 +77,7 @@ auto-merge has merged the PR by the time the agent looks. Either way, run:
 .shared/bin/kit merge
 ```
 
-Run it as a background command. It looks at the PR every 10 seconds inside, and the agent is
+Run it as a background command; the guard refuses it otherwise (#109). It looks at the PR every 10 seconds inside, and the agent is
 woken when it exits. Never wait for it, or for checks, with `sleep` or `--watch` in the foreground.
 
 - Open PR: refuses without the owner's Approve and says so. A branch behind `main` is updated

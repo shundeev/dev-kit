@@ -616,6 +616,17 @@ passes "lets through: --force-with-lease to an issue branch (#38)" "$(call Bash 
 passes "lets through: git status" "$(call Bash '{"command":"git status"}')"
 passes "lets through: a Read of README.md" "$(call Read '{"file_path":"README.md"}')"
 refused "the delivery guard still runs after it" "$(call Bash '{"command":"gh issue create --title x"}')"
+# #109: a command that waits runs in the background, so the agent is woken when it exits.
+waitcalls=('sleep 5' 'gh pr checks 12 --watch --fail-fast' 'gh run watch 99' '.shared/bin/kit merge' 'bb .shared/bin/kit merge'
+           'bb bin/kit merge' 'bash -c "sleep 2"' 'echo $(sleep 1)' 'git status && sleep 3')
+for c in "${waitcalls[@]}"; do
+  refused "a waiting command in the foreground is refused: $c" "$(call Bash "$(jq -nc --arg c "$c" '{command:$c}')")"
+  passes "  and runs in the background: $c" "$(call Bash "$(jq -nc --arg c "$c" '{command:$c, run_in_background:true}')")"
+done
+contains "  the refusal says what to do" "run_in_background" "$(call Bash '{"command":"sleep 5"}')"
+for c in 'echo "kit merge later"' 'git merge main' 'gh pr checks 12' 'echo sleep'; do
+  passes "a word like merge or sleep in text or another command is not refused: $c" "$(call Bash "$(jq -nc --arg c "$c" '{command:$c}')")"
+done
 [ -f .cc-safety-net/policy.json ] && ok "init writes the project's policy" || bad "no .cc-safety-net/policy.json"
 cp .cc-safety-net/policy.json "$WORK/policy.json"; echo hi > notes.txt
 jq '.secret_protection = {deny_paths: ["notes.txt"]}' "$WORK/policy.json" > .cc-safety-net/policy.json

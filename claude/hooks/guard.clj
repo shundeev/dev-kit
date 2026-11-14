@@ -35,12 +35,17 @@
 (def run? (= *file* (System/getProperty "babashka.file")))
 (def input (when run? (try (json/parse-string (slurp *in*)) (catch Exception e e))))
 (def command (when (map? input) (get-in input ["tool_input" "command"])))
+;; Claude Code sets run_in_background on a Bash call (https://code.claude.com/docs/en/hooks, the tool_input of a
+;; PreToolUse call); only `true` counts, a missing or false field is a foreground call (#109).
+(def background? (when (map? input) (true? (get-in input ["tool_input" "run_in_background"]))))
 
 (when (and run? (map? input))
   (let [bare (str/replace (str command) #"[\\'\"]" "")
         zsh? (= "zsh" (some-> (System/getenv "SHELL") (str/replace #".*/" "")))]
     (when-not (or (str/includes? bare "gh")
                   (str/includes? bare "DELIVERY_GUARD")
+                  (str/includes? bare "sleep")
+                  (str/includes? bare "kit")
                   (and (str/includes? bare "git") (str/includes? bare "force"))
                   (and zsh? (str/includes? bare "$")))
       (System/exit 0))))
@@ -360,6 +365,19 @@
         (and (= (get ts 0) "for") (= (get ts 2) "in") (v? (get ws 3))))))
 
 
+(defn waits?
+  "A statement that waits: sleep, gh pr checks --watch, gh run watch, kit merge (#109)."
+  [ts]
+  (let [[head sub verb] ts
+        base  #(some-> % (str/replace #".*/" ""))
+        kit   (if (= (base head) "bb") (rest ts) ts)]
+    (boolean
+      (or (= (base head) "sleep")
+          (and (= (base head) "gh") (= sub "run") (= verb "watch"))
+          (and (= (base head) "gh") (= sub "pr") (= verb "checks") (some #{"--watch" "-w"} ts))
+          (and (= (base (first kit)) "kit") (= (second kit) "merge"))))))
+
+
 (defn judge [statements]
   (let [base   (or (System/getenv "GHWF_DEFAULT_BASE") "main")
         repo   (or (System/getenv "GHWF_REPO") "<owner/repo>")
@@ -385,6 +403,8 @@
 only its own issue branches, named <number>-<slug> (#38); main is also protected on the server.
 
 Push without rewriting, or rewrite the issue branch the work is on."))))
+              (when (and (not background?) (waits? ts))
+                (decide "deny" "Refused: this command waits. Run it as a background command (run_in_background); you are woken when it exits (#109)."))
               (when (and zsh? (zsh-split? ws))
                 (decide "deny" (str "Refused: zsh does not split an unquoted variable into words, so '" text "' would get one word where it needs several.
 
