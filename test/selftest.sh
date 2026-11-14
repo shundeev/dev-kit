@@ -759,6 +759,13 @@ for c in "${waitcalls[@]}"; do
   passes "  and runs in the background: $c" "$(call Bash "$(jq -nc --arg c "$c" '{command:$c, run_in_background:true}')")"
 done
 contains "  the refusal says what to do" "run_in_background" "$(call Bash '{"command":"sleep 5"}')"
+# #109, third PR: Monitor runs its command in the background by nature (tool_input: command, description, timeout_ms; no
+# run_in_background). Its command is still judged by every other rule.
+for c in 'sleep 5' 'gh pr checks 1 --watch'; do
+  passes "Monitor waiting is background, not refused: $c" "$(call Monitor "$(jq -nc --arg c "$c" '{command:$c, description:"wait", timeout_ms:600000}')")"
+done
+refused "Bash without run_in_background and with sleep 5 is still refused" "$(call Bash '{"command":"sleep 5","description":"x"}')"
+refused "Monitor running a command another rule refuses is still refused" "$(call Monitor '{"command":"gh issue create --title x","description":"x","timeout_ms":1000}')"
 for c in 'echo "kit merge later"' 'echo kit checks' 'git merge main' 'gh pr checks 12' 'echo sleep'; do
   passes "a word like merge or sleep in text or another command is not refused: $c" "$(call Bash "$(jq -nc --arg c "$c" '{command:$c}')")"
 done
