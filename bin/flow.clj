@@ -1035,7 +1035,8 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
     (println (str "Merged: " pr-url))
     (close-linked-issues! pr-url)
     (when board-error (die board-error))
-    (println (str "Status: " done-status))))
+    (println (str "Status: " done-status))
+    (println (str "Next: post the retrospective: kit retro " number))))
 
 
 ;; ------------------------------------------------------------------ entry

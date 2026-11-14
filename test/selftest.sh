@@ -1032,6 +1032,7 @@ script_views "OPEN APPROVED BEHIND" "OPEN APPROVED BEHIND" "MERGED APPROVED CLEA
 expect_exit 0 "merge: works while main is checked out in another worktree" flow merge
 calls="$(grep -E '^pr (update-branch|merge)' "$FAKE_GH_LOG" | cut -d' ' -f1,2 | tr '\n' ',')"
 [ "$calls" = "pr update-branch,pr merge," ] && ok "  a branch behind main is updated, then merged" || bad "  update and merge order" "$calls"
+contains "  points to the retrospective" "Next: post the retrospective: kit retro 12" "$LAST"
 git rev-parse -q --verify refs/heads/12-landing >/dev/null && bad "  local branch left" || ok "  local branch deleted"
 git ls-remote --exit-code --heads origin 12-landing >/dev/null 2>&1 && bad "  remote branch left" || ok "  remote branch deleted"
 [ "$(git rev-parse --abbrev-ref HEAD)" = HEAD ] && ok "  this worktree detached on the base" || bad "  not detached"
