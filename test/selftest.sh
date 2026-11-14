@@ -964,6 +964,13 @@ expect_exit 0 "finish --no-commit without --type" flow finish --no-commit --summ
 contains "  the PR type comes from the branch's first commit" "Subject: fix(GH-13): correct a typo" "$LAST"
 expect_exit 0 "finish --no-commit with --type" flow finish --no-commit --type docs --summary "correct a typo" --pr-body-file "$WORK/body.md"
 contains "  an explicit --type wins" "Subject: docs(GH-13): correct a typo" "$LAST"
+# #117: a leading docs commit does not set the type of a branch that also changes something else
+for t in "14-mixed|docs(GH-14): explain it,refactor(GH-14): reshape it|refactor(GH-14)" "15-docs|docs(GH-15): explain it,docs(GH-15): more|docs(GH-15)"; do
+  IFS='|' read -r b msgs want <<<"$t"; git switch -q -c "$b" main
+  IFS=, read -ra ms <<<"$msgs"; for m in "${ms[@]}"; do echo "$m" >> f; git commit -qam "$m"; done
+  expect_exit 0 "finish: type of $b" flow finish --no-commit --summary "x" --pr-body-file "$WORK/body.md"
+  contains "  the first commit that is not docs, else the first: $want" "Subject: $want: x" "$LAST"
+done
 : > "$FAKE_GH_LOG"
 expect_exit 0 "finish: --owner \"\" leaves the board alone" flow finish --no-commit --summary "x" --owner "" --pr-body-file "$WORK/body.md"
 grep -q '^project' "$FAKE_GH_LOG" && bad "  the board was touched" "$(grep '^project' "$FAKE_GH_LOG")" || ok "  no board call"

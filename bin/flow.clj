@@ -586,10 +586,11 @@ Options:
         base           (or (:base o) (env "GHWF_DEFAULT_BASE" "main"))
         status-field   (or (:status-field o) (env "GHWF_STATUS_FIELD" "Status"))
         review-status  (or (:review-status o) (env "GHWF_REVIEW_STATUS" "In review"))
-        ;; Without --type the PR follows the branch: the type of its first `type(GH-n): …` commit, else feat.
+        ;; Without --type the PR follows the branch: its first `type(GH-n): …` commit that is not docs, else the first, else feat.
         ctype          (or (:type o)
-                           (some->> (git-out "log" "--reverse" "--format=%s" (str "origin/" base "..HEAD"))
-                                    str/split-lines first (re-find #"^([a-z]+)\(GH-[0-9]+\): ") second)
+                           (let [types (keep #(second (re-find #"^([a-z]+)\(GH-[0-9]+\): " %))
+                                             (str/split-lines (git-out "log" "--reverse" "--format=%s" (str "origin/" base "..HEAD"))))]
+                             (or (first (remove #{"docs"} types)) (first types)))
                            "feat")
         repo           (resolve-repo (:repo o))
         branch         (git-out "rev-parse" "--abbrev-ref" "HEAD")
