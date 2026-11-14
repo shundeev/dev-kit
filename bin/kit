@@ -536,8 +536,9 @@
 (def policy-default
   "The safety guard's policy as init first writes it (#20). Strict by default; worktree_mode relaxes `git restore`
   and `git checkout <ref> -- <path>` in a linked worktree only (#107): in the main checkout and for
-  `git reset --hard` everywhere they stay refused."
-  {"version" 1 "safety" {"level" "standard"} "workflow" {"worktree_mode" true}})
+  `git reset --hard` everywhere they stay refused. allow_paths lets an agent `rm -rf` under ~/.claude/jobs only (#117)."
+  {"version" 1 "safety" {"level" "standard"} "workflow" {"worktree_mode" true}
+   "destructive_command_protection" {"allow_paths" ["~/.claude/jobs"]}})
 
 
 (defn policy-map
@@ -569,13 +570,15 @@
             (not= target (str (fs/read-link f))) (str "points to " (fs/read-link f) ", expected " target)
             (not (fs/exists? f)) (str "dangling: " target " does not exist"))
 
-      ;; the project owns the file after the first write: init only adds worktree_mode when the key is absent
+      ;; the project owns the file after the first write: init only adds worktree_mode and allow_paths when the key is absent
       :policy
       (let [m (policy-map f)]
         (cond (not (fs/exists? f)) "missing"
               (= m ::unreadable) "cannot be read as a JSON object: fix it by hand"
               (not (contains? (get m "workflow") "worktree_mode"))
-              "lacks workflow.worktree_mode (a linked worktree may then not discard its own work)"))
+              "lacks workflow.worktree_mode (a linked worktree may then not discard its own work)"
+              (not (contains? (get m "destructive_command_protection") "allow_paths"))
+              "lacks destructive_command_protection.allow_paths (an agent may then not remove its scratch folders)"))
 
       :kondo
       (let [m (some-> (slurp-if f) kondo-config)]
@@ -807,8 +810,8 @@
           (cond
             (nil? m) (write! f (json-text policy-default))
             (= m ::unreadable) (fail! path problem)
-            :else (write! f (json-text (assoc-in m ["workflow" "worktree_mode"]
-                                                 (get-in m ["workflow" "worktree_mode"] true))))))
+            :else (write! f (json-text (reduce (fn [m path] (assoc-in m path (get-in m path (get-in policy-default path))))
+                                               m [["workflow" "worktree_mode"] ["destructive_command_protection" "allow_paths"]])))))
 
         :kondo
         (let [s (slurp-if f)

@@ -756,6 +756,23 @@ jq '.workflow.worktree_mode = false' .cc-safety-net/policy.json > "$WORK/p.json"
 bb $kit init >/dev/null 2>&1
 jq -e '.workflow.worktree_mode == false' .cc-safety-net/policy.json >/dev/null && ok "init leaves a project's own choice of worktree_mode" || bad "init overrode worktree_mode"
 cp "$WORK/policy.json" .cc-safety-net/policy.json; bb $kit init >/dev/null 2>&1
+# #117: an agent removes its own scratch folders under ~/.claude/jobs, and nothing else (~ is expanded, $HOME is not)
+mkdir -p "$HOME/.claude/jobs/x" "$HOME/Projects/y"
+jq -e '.destructive_command_protection.allow_paths == ["~/.claude/jobs"]' .cc-safety-net/policy.json >/dev/null \
+  && ok "init allows rm -rf under ~/.claude/jobs in the policy" || bad "no allow_paths in the policy" "$(cat .cc-safety-net/policy.json)"
+passes "rm -rf inside ~/.claude/jobs/<x> is allowed" "$(call Bash '{"command":"rm -rf ~/.claude/jobs/x"}')"
+refused "rm -rf outside that folder stays refused" "$(call Bash '{"command":"rm -rf ~/Projects/y"}')"
+jq 'del(.destructive_command_protection)' .cc-safety-net/policy.json > "$WORK/p.json" && cp "$WORK/p.json" .cc-safety-net/policy.json
+expect_exit 1 "doctor names a policy without allow_paths" bb $kit doctor --local
+contains "  naming the key" "allow_paths" "$LAST"
+bb $kit init >/dev/null 2>&1
+jq -e '.destructive_command_protection.allow_paths == ["~/.claude/jobs"] and .workflow.worktree_mode == true' .cc-safety-net/policy.json >/dev/null \
+  && ok "init adds allow_paths to an existing policy" || bad "init missed allow_paths" "$(cat .cc-safety-net/policy.json)"
+jq '.destructive_command_protection.allow_paths = ["~/mine"]' .cc-safety-net/policy.json > "$WORK/p.json" && cp "$WORK/p.json" .cc-safety-net/policy.json
+bb $kit init >/dev/null 2>&1
+jq -e '.destructive_command_protection.allow_paths == ["~/mine"]' .cc-safety-net/policy.json >/dev/null \
+  && ok "init keeps a project's own allow_paths" || bad "init overrode allow_paths" "$(cat .cc-safety-net/policy.json)"
+cp "$WORK/policy.json" .cc-safety-net/policy.json; bb $kit init >/dev/null 2>&1
 oldnode="$WORK/oldnode"; mkdir -p "$oldnode"; printf '#!/bin/sh\necho v18.19.0\n' > "$oldnode/node"; chmod +x "$oldnode/node"
 out="$(PATH="$oldnode:$PATH" call Bash '{"command":"git status"}')"; code=$?
 [ "$code" -eq 2 ] && ok "with Node older than 22 every guarded call is refused (exit 2)" || bad "old Node (exit $code)" "$out"
