@@ -962,18 +962,29 @@ Options:
 
 
 (defn- read-pr
-  "A pull request's JSON fields: :state, :decision (nil when there is no review decision), :merge-state, :head, :base."
+  "A pull request's JSON fields: :state, :decision (nil when there is no review decision), :merge-state, :head, :base,
+  :draft, :hold (it carries the label hold), :owners (who is asked for a review), :auto-merge."
   [pr repo fail]
-  (let [j (apply gh-json
-                 fail
-                 "pr"
-                 "view"
-                 (concat (pr-args pr repo) ["--json" "state,reviewDecision,mergeStateStatus,headRefOid,baseRefName"]))]
+  (let
+    [j
+     (apply
+      gh-json
+      fail
+      "pr"
+      "view"
+      (concat
+       (pr-args pr repo)
+       ["--json"
+        "state,reviewDecision,mergeStateStatus,headRefOid,baseRefName,isDraft,labels,reviewRequests,autoMergeRequest"]))]
     {:state       (:state j)
      :decision    (not-empty (:reviewDecision j))
      :merge-state (:mergeStateStatus j)
      :head        (:headRefOid j)
-     :base        (:baseRefName j)}))
+     :base        (:baseRefName j)
+     :draft       (:isDraft j)
+     :hold        (boolean (some #(= "hold" (:name %)) (:labels j)))
+     :owners      (map #(or (:login %) (:slug %)) (:reviewRequests j))
+     :auto-merge  (some? (:autoMergeRequest j))}))
 
 
 (defn- required-checks
@@ -1011,10 +1022,12 @@ Options:
   "Usage: kit checks [options]
 
 Waits until the checks the base branch requires exist on the pull request's head commit and have
-finished. They are read from the base's rulesets (classic branch protection needs admin to read);
-a base that requires none ends it at once. Run it as a background command: the agent is woken when it exits.
+finished, and, where the base has the ready workflow, until that workflow has decided (ADR-0007). The checks are read from the base's rulesets
+(classic branch protection needs admin to read); a base that requires none ends it at once. Run it as a background command: the agent is woken when it exits.
 
-  exit 0  every required check passed, or the base requires none
+  exit 0  every required check passed, or the base requires none. Where the base has the ready workflow, it
+          also waits for that workflow's decision on this head and reports it: ready (owners asked, auto-merge
+          on), held (the label hold: kit release), or still a draft (the run's own decision line)
   exit 1  a required check failed (or was cancelled): each is named with its link, at once
   exit 2  no result: the pull request was closed or merged, its head moved (a push: the new
           commit's checks are the ones to await; run it again), or gh could not be read (its message is printed)
@@ -1059,6 +1072,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
                                 repo
                                 ". Fix: open it with kit finish, or name it: kit checks --pr <number>")))
         {:keys [head base]} (read-pr pr repo no-result)
+        ready?    (ready-workflow? repo base)
         sha7      #(subs (str %) 0 (min 7 (count (str %))))
         ;; What the base requires, once: a check that is not registered yet is told from one the base never asks for.
         wanted    (->> (gh-json no-result "api" (str "repos/" repo "/rules/branches/" base))
@@ -1070,17 +1084,65 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
       (println (str "No required checks on " base "; nothing to wait for: " pr))
       (do
         (println (str "Waiting for " (str/join ", " wanted) " on " (sha7 head) " (" pr ")."))
-        (loop [shown nil]
-          (let [checks  (required-checks pr repo no-result)
-                now     (read-pr pr repo no-result)
-                failed  (failed-checks checks)
+        (loop [shown nil
+               ruled #{}]
+          (let [checks (required-checks pr repo no-result)
+                now (read-pr pr repo no-result)
+                failed (failed-checks checks)
                 missing (remove (set (map :name checks)) wanted)
                 pending (filter #(= "pending" (:bucket %)) checks)
-                status  (cond (seq missing) (str "Not registered yet: " (str/join ", " missing) ".")
-                              (seq pending) (str (count pending)
-                                                 " of " (count checks)
-                                                 " required checks have not finished: "
-                                                 (str/join ", " (map :name pending))))]
+                status (cond (seq missing) (str "Not registered yet: " (str/join ", " missing) ".")
+                             (seq pending) (str (count pending)
+                                                " of " (count checks)
+                                                " required checks have not finished: "
+                                                (str/join ", " (map :name pending))))
+                ;; The ready workflow's decision (ADR-0007). Its run is found by the log line `CI run id: …, … at <head>`:
+                ;; a workflow_run run carries the default branch's sha, not the PR's, so only the log names the head.
+                settled (and ready? (nil? status) (empty? failed) (= head (:head now)))
+                runs (when (and settled (:draft now) (not (:hold now)))
+                       (->> (gh-json no-result
+                                     "run"        "list"
+                                     "-R"         repo
+                                     "--workflow" (last (str/split ready-workflow-path #"/"))
+                                     "--event"    "workflow_run"
+                                     "--limit"    "20"
+                                     "--json"     "databaseId,status")
+                            (filter #(and (= "completed" (:status %)) (not (ruled (:databaseId %)))))
+                            (mapv
+                             #(assoc % :log (:out (run "gh" "run" "view" (str (:databaseId %)) "-R" repo "--log"))))))
+                hit (first (filter #(str/includes? (str (:log %)) (str " at " head)) runs))
+                st (if hit
+                     (read-pr pr repo no-result)
+                     now) ; the run completed after `now` was read
+                done
+                (when settled
+                  (cond
+                    (:hold st)
+                    (str
+                     "Held: "
+                     pr
+                     " carries the label hold and stays a draft. Fix: kit release, once what it waited for has merged.")
+                    (not (:draft st)) (str "Ready: "
+                                           pr
+                                           " is marked ready; owners asked: "
+                                           (if (seq (:owners st))
+                                             (str/join ", " (:owners st))
+                                             "nobody")
+                                           "; auto-merge "
+                                           (if (:auto-merge st) "on" "off")
+                                           ".")
+                    hit (str "Still a draft: the ready workflow ran for "
+                             (sha7 head)
+                             " and left it. "
+                             (str/join " " (re-seq #"decision: [^\n]*" (:log hit)))
+                             " Fix: see its run; kit release once every required check is green.")))
+                ;; No event exists for a workflow_run delivery that never comes: the wait has no end of its own then.
+                ;; It is told so, with the way out, rather than bounded by a timer (#109).
+                status (or status
+                           (when (and settled (not done))
+                             (str "Waiting for the ready workflow's run for "
+                                  (sha7 head)
+                                  ". If GitHub never delivers it, kit release is the way out.")))]
             (cond
               (= "MERGED" (:state now)) (stop 2 (str "The pull request merged, so there is nothing to wait for: " pr))
               (not= "OPEN" (:state now))
@@ -1099,9 +1161,10 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 
               status (do (when (not= status shown) (println status))
                          (Thread/sleep (* 1000 poll))
-                         (recur status))
+                         (recur status (into ruled (map :databaseId runs))))
 
-              :else (println (str "All " (count checks) " required checks passed on " (sha7 head) ": " pr)))))))))
+              :else (do (println (str "All " (count checks) " required checks passed on " (sha7 head) ": " pr))
+                        (some-> done println)))))))))
 
 
 ;; ------------------------------------------------------------------ kit release
