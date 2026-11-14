@@ -1026,7 +1026,8 @@ finished, and, where the base has the ready workflow, until that workflow has de
 (classic branch protection needs admin to read); a base that requires none ends it at once. Run it as a background command: the agent is woken when it exits.
 
   exit 0  every required check passed, or the base requires none. Where the base has the ready workflow, it
-          also waits for that workflow's decision on this head and reports it: ready (owners asked, auto-merge
+          also waits for the completion of that workflow's run for this head (not for the PR to leave draft: its review
+          request and auto-merge come after) and reports the PR's state: ready (owners asked, auto-merge
           on), held (the label hold: kit release), or still a draft (the run's own decision line)
   exit 1  a required check failed (or was cancelled): each is named with its link, at once
   exit 2  no result: the pull request was closed or merged, its head moved (a push: the new
@@ -1099,7 +1100,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
                 ;; The ready workflow's decision (ADR-0007). Its run is found by the log line `CI run id: …, … at <head>`:
                 ;; a workflow_run run carries the default branch's sha, not the PR's, so only the log names the head.
                 settled (and ready? (nil? status) (empty? failed) (= head (:head now)))
-                runs (when (and settled (:draft now) (not (:hold now)))
+                runs (when (and settled (not (:hold now)))
                        (->> (gh-json no-result
                                      "run"        "list"
                                      "-R"         repo
@@ -1114,8 +1115,10 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
                 st (if hit
                      (read-pr pr repo no-result)
                      now) ; the run completed after `now` was read
+                ;; Leaving draft is only the workflow's first step (it then asks the owners and turns auto-merge on), so
+                ;; only its completed run, or the label hold, ends the wait; the PR's state is read after the run.
                 done
-                (when settled
+                (when (and settled (or hit (:hold now)))
                   (cond
                     (:hold st)
                     (str
