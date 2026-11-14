@@ -1212,9 +1212,10 @@
 
 
 (defn gate-g1!
-  "The design approval of one issue, as the hook and a person need it."
+  "The design approval of one issue, as the hook and a person need it. :cfg in opts is the config of the
+  repository the hook judges, instead of this kit's own project."
   [n opts]
-  (let [cfg   (gate-config)
+  (let [cfg   (or (:cfg opts) (gate-config))
         repo  (gate-repo opts cfg)
         issue (fetch-issue repo n)
         size  (issue-size issue)]
@@ -1223,34 +1224,75 @@
       (g1-verdict repo n issue (get-in cfg [:agent :login])))))
 
 
+(defn edited-file-repo
+  "Where an edit lands (#99, ADR-0006): {:top :branch :path :dir} of the git repository holding file, from the
+  real path of its nearest existing part (a symlink is followed, a directory not yet made is walked past), with
+  :path the file's path from that root. nil when the file is in no repository."
+  [file]
+  (let [full     (fs/absolutize file)
+        existing (first (filter fs/exists? (take-while some? (iterate fs/parent full))))
+        real     (when existing (fs/real-path existing))
+        dir      (when real (if (fs/directory? real) real (fs/parent real)))
+        [top branch] (when dir (some-> (sh-in dir "git" "rev-parse" "--show-toplevel" "--abbrev-ref" "HEAD") str/split-lines))]
+    (when (and top branch)
+      {:top top :branch branch :dir (str dir)
+       :path (str (fs/relativize top (fs/path real (fs/relativize existing full))))})))
+
+
+(defn on-dev-kit?
+  "A repository whose root holds kit.edn (a project) or kit-defaults.edn (dev-kit itself)."
+  [top]
+  (or (fs/regular-file? (fs/path top "kit.edn")) (fs/regular-file? (fs/path top "kit-defaults.edn"))))
+
+
+(defn repo-config
+  "The gate's config for the repository at top: its kit.edn over the defaults."
+  [top]
+  (merge-config (read-defaults) (or (some-> (slurp-if (str (fs/path top "kit.edn"))) edn/read-string) {})))
+
+
 (defn gate-hook!
-  "PreToolUse for Edit/Write/NotebookEdit: on an issue branch, outside adr/, refuses an edit while the
-  design approval is missing. Verdicts are cached for 10 minutes; GitHub unreachable means refused."
+  "PreToolUse for Edit/Write/NotebookEdit (ADR-0006): judges the repository and branch of the edited file, not
+  the session's folder; an input with no path is judged by the session's folder (the input's cwd, else .). In a
+  repository on dev-kit, on an issue branch, outside adr/, refuses an edit while the design approval is missing.
+  The repository asked is the file's own (its origin, else :repo of its kit.edn). Verdicts are cached for 10
+  minutes in that repository; GitHub unreachable means refused."
   [opts]
-  (let [input  (json/parse-string (slurp *in*))
+  (let [input  (try (json/parse-string (slurp *in*)) (catch Exception _ nil))
         file   (or (get-in input ["tool_input" "file_path"]) (get-in input ["tool_input" "notebook_path"]))
-        top    (sh-in "." "git" "rev-parse" "--show-toplevel")
-        branch (sh-in "." "git" "rev-parse" "--abbrev-ref" "HEAD")
+        {:keys [top branch path dir]} (edited-file-repo (or file (get input "cwd") "."))
+        path   (when file path)
         n      (branch-issue branch)
-        path   (when (and top file) (str (fs/relativize top (fs/absolutize file))))]
-    (when (and n (not (str/starts-with? (str path) "adr/")))
-      (let [cache (str (fs/absolutize (sh-in "." "git" "rev-parse" "--git-path" (str "kit/g1-" n))))
+        deny!  (fn [reason]
+                 (println (json/generate-string
+                            {:hookSpecificOutput {:hookEventName "PreToolUse" :permissionDecision "deny"
+                                                  :permissionDecisionReason (str "Refused: " reason)}})))]
+    (when (and n (on-dev-kit? top) (not (some-> path (str/starts-with? "adr/"))))
+      (let [cfg   (try (repo-config top) (catch Exception _ nil))
+            repo  (when cfg (or (origin-repo top) (:repo cfg)))
+            cache (str (fs/absolutize (fs/path dir (sh-in dir "git" "rev-parse" "--git-path" (str "kit/g1-" n)))))
             now   (quot (System/currentTimeMillis) 1000)
-            [t level reason] (some-> (slurp-if cache) (str/split #" " 3))
-            [level reason]
-            (if (and t (< (- now (parse-long t)) 600))
-              [(keyword level) reason]
-              (try (let [[l r] (gate-g1! n opts)]
-                     (fs/create-dirs (fs/parent cache))
-                     (spit cache (str now " " (name l) " " r))
-                     [l r])
-                   (catch Exception e
-                     [:error (str "could not check the design approval of #" n " (" (ex-message e)
-                                  "); retry, or check by hand: kit gate --g1 " n)])))]
-        (when (not= level :ok)
-          (println (json/generate-string
-                     {:hookSpecificOutput {:hookEventName "PreToolUse" :permissionDecision "deny"
-                                           :permissionDecisionReason (str "Refused: " reason)}})))))))
+            [t level reason] (some-> (slurp-if cache) (str/split #" " 3))]
+        (cond
+          (nil? cfg)
+          (deny! (str "kit.edn of " top " cannot be read: fix it by hand, then retry"))
+
+          (nil? repo)
+          (deny! (str "cannot tell which GitHub repository holds #" n " for " top ": set :repo in that repository's kit.edn, "
+                      "or add its GitHub origin (git remote add origin https://github.com/<owner>/<name>.git)"))
+
+          :else
+          (let [[level reason]
+                (if (and t (< (- now (parse-long t)) 600))
+                  [(keyword level) reason]
+                  (try (let [[l r] (gate-g1! n (assoc opts :cfg cfg :repo repo))]
+                         (fs/create-dirs (fs/parent cache))
+                         (spit cache (str now " " (name l) " " r))
+                         [l r])
+                       (catch Exception e
+                         [:error (str "could not check the design approval of #" n " (" (ex-message e)
+                                      "); retry, or check by hand: kit gate --g1 " n)])))]
+            (when (not= level :ok) (deny! reason))))))))
 
 
 (defn gate!

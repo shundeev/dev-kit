@@ -1044,7 +1044,8 @@ done
 
 echo "- design approval hook (fake gh)"
 H="$WORK/hookrepo"; git init -q -b main "$H"; cd "$H" || exit 1
-git commit -q --allow-empty -m "chore: base"; git switch -q -c 26-gate
+echo '{}' > kit.edn; git add kit.edn; git commit -q -m "chore: base"; git switch -q -c 26-gate
+git remote add origin https://github.com/u473t8/fake.git
 hook() { jq -nc --arg p "$H/$1" '{tool_name: "Edit", tool_input: {file_path: $p}}' | gate --hook; }
 issue '["size:M"]' the-owner $T1 null $T0 null; : > "$G/log"
 contains "hook: an edit on an unapproved M branch is refused" '"permissionDecision":"deny"' "$(hook src/a.clj)"
@@ -1057,6 +1058,78 @@ rm -rf "$(git rev-parse --git-path kit)"; touch "$G/gh-fails"
 contains "hook: GitHub unreachable means refused, with the retry" "gate --g1 26" "$(hook src/a.clj)"
 rm "$G/gh-fails"; git switch -q main
 [ -z "$(hook src/a.clj)" ] && ok "hook: a branch without an issue is not gated" || bad "hook gated main"
+
+# The hook judges the edited file's repository and branch, not the session's folder (#99). The session is in
+# $H; B is another repository on dev-kit (kit.edn at its root) on the branch of an M issue.
+echo "- design approval hook: the edited file's repository (#99, fake gh)"
+B="$WORK/hookB"; git init -q -b main "$B"; echo '{}' > "$B/kit.edn"; git -C "$B" add kit.edn
+git -C "$B" commit -q -m "chore: base"; git -C "$B" switch -q -c 26-other; git -C "$B" remote add origin https://github.com/u473t8/fake.git
+hookf() { jq -nc --arg p "$1" '{tool_name: "Edit", tool_input: {file_path: $p}}' | (cd "$H" && gate --hook); } # hookf <abs path>
+nocache() { rm -rf "$(git -C "$1" rev-parse --absolute-git-dir)/kit"; }
+issue '["size:M"]' the-owner $T1 null $T0 null; nocache "$B"; nocache "$H"
+contains "hook: a file in another repository on an unapproved M branch is refused" '"permissionDecision":"deny"' "$(hookf "$B/src/a.clj")"
+nocache "$B"
+contains "hook: a new file in a directory that does not exist yet is refused too" '"permissionDecision":"deny"' "$(hookf "$B/new/deep/dir/a.clj")"
+mkdir -p "$B/src"; : > "$B/src/a.clj"; ln -s "$B/src" "$WORK/skill-dir"; ln -s "$B/src/a.clj" "$H/link.clj"
+nocache "$B"
+contains "hook: a file reached through a symlinked folder is judged by its repository" '"permissionDecision":"deny"' "$(hookf "$WORK/skill-dir/a.clj")"
+nocache "$B"
+contains "hook: a symlinked file is judged by the repository it points into" '"permissionDecision":"deny"' "$(hookf "$H/link.clj")"
+nocache "$B"; issue '["design-approved","size:M"]' the-owner $T1 null $T0 null
+[ -z "$(hookf "$B/src/a.clj")" ] && ok "hook: with the approval, the other repository may be edited" || bad "hook refused an approved branch of another repository"
+nocache "$B"; touch "$G/gh-fails"
+contains "hook: another repository, GitHub unreachable: refused, with the retry" "gate --g1 26" "$(hookf "$B/src/a.clj")"
+rm "$G/gh-fails"
+# From here the session's own branch is an unapproved M branch: nothing below may be judged by it.
+issue '["size:M"]' the-owner $T1 null $T0 null; nocache "$B"; nocache "$H"; git switch -q 26-gate; : > "$G/log"
+mkdir "$WORK/plain"
+[ -z "$(hookf "$WORK/plain/notes.txt")" ] && ok "hook: a file outside any repository is allowed" || bad "hook gated a file outside a repository"
+N="$WORK/hookN"; git init -q -b main "$N"; git -C "$N" commit -q --allow-empty -m "chore: base"; git -C "$N" switch -q -c 26-n
+[ -z "$(hookf "$N/src/a.clj")" ] && ok "hook: a repository without kit.edn or kit-defaults.edn is not on dev-kit, so allowed" || bad "hook gated a repository not on dev-kit"
+D="$WORK/hookD"; git init -q -b main "$D"; echo '{}' > "$D/kit.edn"; git -C "$D" add kit.edn; git -C "$D" commit -q -m "chore: base"
+git -C "$D" switch -q --detach
+[ -z "$(hookf "$D/src/a.clj")" ] && ok "hook: a detached HEAD (the .shared submodule) is not gated" || bad "hook gated a detached HEAD"
+[ -z "$(hookf "$B/adr/0009-x.md")" ] && ok "hook: adr/ of the other repository keeps its exception" || bad "hook refused adr/ of another repository"
+[ ! -s "$G/log" ] && ok "hook: none of these asked GitHub" || bad "hook asked GitHub" "$(cat "$G/log")"
+# dev-kit itself has kit-defaults.edn at its root, not kit.edn
+K="$WORK/hookK"; git init -q -b main "$K"; echo '{}' > "$K/kit-defaults.edn"; git -C "$K" add kit-defaults.edn
+git -C "$K" commit -q -m "chore: base"; git -C "$K" switch -q -c 26-k; git -C "$K" remote add origin https://github.com/u473t8/fake.git
+contains "hook: dev-kit itself (kit-defaults.edn) is gated" '"permissionDecision":"deny"' "$(hookf "$K/bin/a.clj")"
+
+# An input without a path is judged by the session's folder, as before (#99): an unknown field name must not open the gate.
+: > "$G/log"; nocache "$H"
+for in in '{"tool_name":"MultiEdit","tool_input":{"path":"X"}}' '{"tool_name":"Edit","tool_input":{}}' '{"tool_name":"Edit"}' ''; do
+  contains "hook: no file_path or notebook_path, judged by the session's branch: ${in:-empty input}" '"permissionDecision":"deny"' \
+    "$(cd "$H" && printf '%s' "$in" | gate --hook)"
+  nocache "$H"
+done
+contains "hook: no path, the folder named by the input's cwd is judged" '"permissionDecision":"deny"' \
+  "$(cd "$WORK" && jq -nc --arg d "$H" '{tool_name:"Edit",tool_input:{},cwd:$d}' | gate --hook)"
+
+# The repository is the edited file's own: its origin, else :repo of its kit.edn. Never the session's, never GITHUB_REPOSITORY.
+echo "- design approval hook: the repository to ask (#99)"
+issue '["size:M"]' the-owner $T1 null $T0 null
+O="$WORK/hookO"; git init -q -b main "$O"; echo '{}' > "$O/kit.edn"; git -C "$O" add kit.edn; git -C "$O" commit -q -m "chore: base"; git -C "$O" switch -q -c 26-o
+: > "$G/log"
+out="$(hookf "$O/src/a.clj")"
+contains "hook: a repository with no GitHub origin and no :repo is refused" '"permissionDecision":"deny"' "$out"
+contains "  and the refusal names the fix" ':repo in that repository' "$out"
+[ ! -s "$G/log" ] && ok "  and GitHub is not asked about another repository" || bad "  GitHub was asked" "$(cat "$G/log")"
+git -C "$O" remote add origin https://gitlab.com/someone/o-repo.git; nocache "$O"
+contains "hook: a gitlab origin counts as none" ':repo in that repository' "$(hookf "$O/src/a.clj")"
+echo '{:repo "u473t8/from-kit-edn"}' > "$O/kit.edn"; nocache "$O"
+contains "hook: :repo of its kit.edn is used" '"permissionDecision":"deny"' "$(hookf "$O/src/a.clj")"
+grep -q 'n=from-kit-edn' "$G/log" && ok "  and that repository is asked" || bad "  the kit.edn repository was not asked" "$(cat "$G/log")"
+git -C "$O" remote remove origin; git -C "$O" remote add origin https://github.com/u473t8/o-repo.git; nocache "$O"; : > "$G/log"; hookf "$O/src/a.clj" >/dev/null
+grep -q 'n=o-repo' "$G/log" && ! grep -q 'n=fake' "$G/log" && ok "hook: its origin comes before :repo and before GITHUB_REPOSITORY" || bad "hook asked the wrong repository" "$(cat "$G/log")"
+
+# Two repositories with the same issue number keep separate verdicts.
+nocache "$B"; nocache "$H"
+contains "hook: the session repository's refusal of #26" '"permissionDecision":"deny"' "$(hookf "$H/src/a.clj")"
+issue '["design-approved","size:M"]' the-owner $T1 null $T0 null
+[ -z "$(hookf "$B/src/a.clj")" ] && ok "hook: its cached refusal does not reach another repository's #26" || bad "hook leaked a verdict across repositories"
+contains "hook: nor does the other's approval reach it" '"permissionDecision":"deny"' "$(hookf "$H/src/a.clj")"
+git switch -q main; rm -f "$H/link.clj"
 cd "$P" || exit 1
 
 echo "- user-level test in CI (#27)"
