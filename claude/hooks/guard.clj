@@ -366,7 +366,7 @@
 
 
 (defn waits?
-  "A statement that waits: sleep, gh pr checks --watch, gh run watch, kit merge (#109)."
+  "A statement that waits: sleep, gh pr checks --watch, gh run watch, kit merge, kit checks (#109)."
   [ts]
   (let [[head sub verb] ts
         base  #(some-> % (str/replace #".*/" ""))
@@ -375,7 +375,7 @@
       (or (= (base head) "sleep")
           (and (= (base head) "gh") (= sub "run") (= verb "watch"))
           (and (= (base head) "gh") (= sub "pr") (= verb "checks") (some #{"--watch" "-w"} ts))
-          (and (= (base (first kit)) "kit") (= (second kit) "merge"))))))
+          (and (= (base (first kit)) "kit") (#{"merge" "checks"} (second kit)))))))
 
 
 (defn judge [statements]

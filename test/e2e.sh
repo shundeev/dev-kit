@@ -16,8 +16,10 @@
 # A failing step names itself and GitHub's answer.
 #
 #   test/e2e.sh        as the gh login in use: the agent's in a Claude session; in CI, the E2E_GH_TOKEN secret
-#   test/e2e.sh --clean   removes the leftovers of interrupted runs started more than E2E_CLEAN_AGE seconds ago
-#                      (default 1800; a run takes about 2 minutes), so a run in progress is never touched (#98)
+#   test/e2e.sh --clean   removes the leftovers of runs that have ended, decided by state, not by age (#98, #109):
+#                      each run writes who runs it into its first issue ("e2e-runner: ..."): in CI the run's URL,
+#                      locally the host and process id. A CI run that is completed, or a process that is gone from
+#                      this host, has ended. A live run, or one on another host, is left alone and named.
 # Environment: E2E_REPO (default shundeev/flow-sandbox), E2E_BOARD (the board's title, default "Flow sandbox").
 set -uo pipefail
 
@@ -42,6 +44,23 @@ case "${1:-}" in
   *) fail "unknown argument $1: run test/e2e.sh, or test/e2e.sh --clean to remove old leftovers" ;;
 esac
 
+# Who runs this: what --clean needs to tell a run that has ended from one in progress.
+if [ -n "${GITHUB_RUN_ID:-}" ]; then WHO="ci $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+else WHO="local $(hostname) $$"; fi
+runner_state() { # runner_state <who>: "ended|live|left <why>"; only an ended run is cleaned
+  local kind a b st repo; read -r kind a b <<<"$1"
+  case "$kind" in
+    ci) repo="${a#*://*/}"; repo="${repo%/actions/*}"
+        st="$(gh run view "${a##*/}" -R "$repo" --json status --jq .status 2>&1)" \
+          || { echo "left CI run $a could not be read: $st"; return; }
+        if [ "$st" = completed ]; then echo "ended CI run $a is completed"; else echo "live CI run $a is $st"; fi ;;
+    local) if [ "$a" != "$(hostname)" ]; then echo "left process $b runs on host $a, not on this host"
+           elif kill -0 "$b" 2>/dev/null; then echo "live process $b is running on this host"
+           else echo "ended process $b is gone from this host"; fi ;;
+    *) echo "left no runner is written for it: it may have just started; if no run is going, remove it by hand" ;;
+  esac
+}
+
 # Only the sandbox, never another repository or the real board (#40, invariant 2). The real board is
 # recognised by its number, so that number must be known before anything else.
 [[ -n "${BOWNER:-}" && "${REAL_NUM:-}" =~ ^[0-9]+$ ]] \
@@ -59,7 +78,7 @@ SHOWCASE="$(gh project field-list "$NUM" --owner "$BOWNER" --format json --jq '.
   || fail "the fields of board #$NUM could not be read (gh's answer above)"
 [ -n "$SHOWCASE" ] || fail "the board \"$BOARD\" has no Showcase options: copy the Portfolio board, which has them"
 
-export GHWF_OWNER="$BOWNER" GHWF_PROJECT_NUMBER="$NUM" GHWF_REPO="$REPO" GHWF_MERGE_WAIT=0
+export GHWF_OWNER="$BOWNER" GHWF_PROJECT_NUMBER="$NUM" GHWF_REPO="$REPO"
 
 # One board item per issue: Status|Priority|Size|Showcase, or the draft's title for a draft.
 # Every page of the board: a card just added is not among the last 100 of a long board.
@@ -120,32 +139,26 @@ cleanup() {
   say "ok    5 cleanup: the PR closed, branches deleted, issues closed as not planned, cards deleted"
   exit "$rc"
 }
-# The labels ("e2e <time>-<pid>") of the runs started at least $1 seconds ago, from open issues, cards and branches.
-old_labels() {
-  local now titles cards names t
-  now="$(date -u +%s)"
-  titles="$(gh issue list --repo "$REPO" --state open --limit 200 --json title --jq '.[].title')" \
-    && cards="$(all_items | jq -r '.content.title // empty')" \
-    && names="$(gh api --paginate "repos/$REPO/branches?per_page=100" --jq '.[].name' \
-                  | sed -nE 's/^.*e2e-([0-9]{4}-[0-9]{2}-[0-9]{2})t([0-9]{6})z-([0-9]+).*$/e2e \1T\2Z-\3/p')" \
-    || fail "the issues, cards or branches of $REPO could not be listed (gh's answer above): check gh auth status"
-  printf '%s\n' "$titles" "$cards" "$names" | { grep -oE '^e2e [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{6}Z-[0-9]+' || true; } | sort -u \
-    | while IFS= read -r l; do
-        t="${l#e2e }"; t="${t%-*}"
-        t="$(date -u -d "${t:0:10} ${t:11:2}:${t:13:2}:${t:15:2}" +%s 2>/dev/null)" || continue
-        if [ $((now - t)) -ge "$1" ]; then echo "$l"; fi
-      done
+# The labels ("e2e <time>-<pid>") of the open issues, each with the runner its issue names (tab-separated, empty if none).
+# Only an open issue holds a leftover: cleanup closes the issues of a run that got that far, and nothing else is left.
+found_labels() {
+  local l='e2e [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{6}Z-[0-9]+'
+  gh issue list --repo "$REPO" --state open --limit 200 --json title,body \
+    --jq ".[] | (.title | capture(\"^(?<l>$l)\")? | .l) as \$l | select(\$l) | \"\(\$l)\\t\" + ((.body | capture(\"e2e-runner: (?<w>[^\\n]*)\")? | .w) // \"\")" \
+    | sort -t$'\t' -k1,1 -k2,2r | awk -F'\t' '!seen[$1]++' \
+    || fail "the issues of $REPO could not be listed (gh's answer above): check gh auth status"
 }
 
-if [ "$CLEAN" = 1 ]; then # each old run is cleaned as the run itself cleans up after a failure
-  STEP="clean"; age="${E2E_CLEAN_AGE:-1800}"; rc=0
-  [[ "$age" =~ ^[0-9]+$ ]] || fail "E2E_CLEAN_AGE is $age, not a number of seconds: unset it or set e.g. 1800"
-  labels="$(old_labels "$age")" || exit 1
-  while IFS= read -r l; do
+if [ "$CLEAN" = 1 ]; then # each run that has ended is cleaned as the run itself cleans up after a failure
+  STEP="clean"; rc=0; left=0
+  labels="$(found_labels)" || exit 1
+  while IFS=$'\t' read -r l who; do
     [ -n "$l" ] || continue
-    say "clean: $l"; (RUN="$l"; cleanup) || rc=1
+    st="$(runner_state "$who")"
+    if [ "${st%% *}" = ended ]; then say "clean: $l (${st#* })"; (RUN="$l"; cleanup) || rc=1
+    else say "left alone: $l (${st#* })"; left=$((left + 1)); fi
   done <<<"$labels"
-  [ "$rc" = 0 ] && say "ok    clean: $REPO has no e2e leftovers older than $((age / 60)) minutes"
+  [ "$rc" = 0 ] && say "ok    clean: $REPO has no leftovers of ended runs ($left left alone)"
   rm -rf "$WORK"; exit "$rc"
 fi
 trap cleanup EXIT
@@ -160,7 +173,8 @@ git config user.email "e2e@users.noreply.github.com"
 git config credential.helper '!gh auth git-credential'
 
 STEP="1 start files an issue"
-out="$(bb "$KIT/bin/kit" start --title "$RUN: task" --priority Low --size XS --showcase "$SHOWCASE" \
+printf 'e2e-runner: %s\n' "$WHO" > "$WORK/runner.md"
+out="$(bb "$KIT/bin/kit" start --title "$RUN: task" --body-file "$WORK/runner.md" --priority Low --size XS --showcase "$SHOWCASE" \
          --status "In progress" 2>&1)" || fail "$out"
 n1="$(sed -n 's/^Issue Number: //p' <<<"$out")"; b1="$(branch_in "$out")"
 [ -n "$n1" ] && issues+=("$n1"); [ -n "$b1" ] && branches+=("$b1") # cleaned up whatever follows
@@ -172,10 +186,18 @@ gh api "repos/$REPO/branches/$b1" --jq .name >/dev/null 2>&1 || fail "branch $b1
 say "ok    1 start: #$n1 on the board as In progress|Low|XS|$SHOWCASE; branch $b1 on GitHub and checked out"
 
 STEP="2 a draft card is converted"
-gh project item-create "$NUM" --owner "$BOWNER" --title "$RUN: draft" >/dev/null 2>&1 || fail "the draft card could not be created"
-# A card just created reaches the board's item list a moment later; the owner's drafts are older than that.
-for _ in $(seq 20); do
-  [ -n "$(item | jq -r --arg t "$RUN: draft" 'select(.content.title == $t) | .id' 2>/dev/null)" ] && break
+card="$(gh project item-create "$NUM" --owner "$BOWNER" --title "$RUN: draft" --format json --jq .id 2>&1)" \
+  || fail "the draft card could not be created: $card"
+card_kind() { # the card's content type and title, read by its id: a read by id does not lag behind a write
+  gh api graphql -f query='query($id:ID!){node(id:$id){... on ProjectV2Item{content{__typename ... on DraftIssue{title}}}}}' -f id="$card" \
+    --jq '.data.node.content | "\(.__typename) \(.title // "")"' 2>&1
+}
+[ "$(card_kind)" = "DraftIssue $RUN: draft" ] || fail "the new card $card reads \"$(card_kind)\", not a draft titled \"$RUN: draft\""
+# kit start finds the draft in the board's item list, which shows a new card a moment after the write. No event says
+# when the list has caught up, so this looks every 2 s; it ends when the list shows the card, and fails when the card
+# is gone by id (the list could then never show it).
+until [ -n "$(item | jq -r --arg t "$RUN: draft" 'select(.content.title == $t) | .id' 2>/dev/null)" ]; do
+  [ "$(card_kind)" = "DraftIssue $RUN: draft" ] || fail "the new card $card is gone before the board's list showed it: $(card_kind)"
   sleep 2
 done
 out="$(bb "$KIT/bin/kit" start --title "$RUN: draft" --priority Low --size XS --showcase "$SHOWCASE" \
@@ -183,8 +205,7 @@ out="$(bb "$KIT/bin/kit" start --title "$RUN: draft" --priority Low --size XS --
 n2="$(sed -n 's/^Issue Number: //p' <<<"$out")"; b2="$(branch_in "$out")"
 [ -n "$n2" ] && issues+=("$n2"); [ -n "$b2" ] && branches+=("$b2")
 [ -n "$n2" ] || fail "no issue number in: $out"
-left="$(item | jq -r --arg t "$RUN: draft" 'select(.content.__typename == "DraftIssue" and .content.title == $t) | .id' 2>/dev/null)"
-[ -z "$left" ] || fail "the draft card is still a draft ($left) after the start"
+[[ "$(card_kind)" == Issue* ]] || fail "the draft card $card reads \"$(card_kind)\" after the start, not an issue"
 [ -n "$(fields_of "$n2")" ] || fail "#$n2 has no card on the board"
 say "ok    2 draft: the card became issue #$n2, the draft is gone"
 

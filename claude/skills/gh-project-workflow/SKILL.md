@@ -106,7 +106,9 @@ woken when it exits. Never wait for it, or for checks, with `sleep` or `--watch`
 
 - Open PR: refuses without the owner's Approve and says so. A branch behind `main` is updated
   first by merging `main` into it, which keeps the approval (tested on #45). Then it turns on
-  auto-merge and waits up to `GHWF_MERGE_WAIT` seconds (900) for GitHub to merge.
+  auto-merge and waits until GitHub merges. It stops, and names the reason, when merging became
+  impossible: the PR was closed, a required check failed (each named with its link), the branch
+  conflicts (`DIRTY`), or the approval is gone. No time limit ends it.
 - PR already merged by auto-merge: only the closeout.
 - Closeout after a confirmed `MERGED`: card **Done**, branch deleted locally and on GitHub,
   back to `main` (or detached on `origin/main` when `main` is checked out in another worktree).
@@ -115,6 +117,26 @@ woken when it exits. Never wait for it, or for checks, with `sleep` or `--watch`
 It runs without a permission prompt: the server enforces the approval, and the `main` ruleset
 merges only an up-to-date branch with every review thread resolved. A raw `gh pr merge` stays
 under `ask`.
+
+## Waiting for checks
+
+```bash
+.shared/bin/kit checks [--pr <number>]
+```
+
+Run it as a background command too (the guard refuses it otherwise). No time limit ends it. It
+reads the checks the base branch requires from its rulesets (classic branch protection needs
+admin), then waits until each exists on the head commit (right after a push they are not
+registered yet) and has finished.
+
+| Exit | Meaning |
+|---|---|
+| 0 | all passed, or the base requires none |
+| 1 | a required check failed or was cancelled: each is named with its link, at once, without waiting for the others |
+| 2 | no result: the PR closed or merged, its head moved (run it again for the new head), or gh could not be read (its message is printed) |
+
+`kit merge` ends the same way on its own reasons: PR closed, a required check failed, a
+conflict (`DIRTY`), the approval gone; it names which and says what to do.
 
 ## Dependencies between issues
 

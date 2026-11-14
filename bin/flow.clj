@@ -5,6 +5,7 @@
 ;;                otherwise ready, with auto-merge on), sets the card In review
 ;;   kit release  a held pull request: removes the label hold, marks it ready, turns auto-merge on (ADR-0007)
 ;;   kit merge    after the owner's Approve: waits for the merge, sets the card Done, removes the branch
+;;   kit checks   waits until the pull request's required checks exist and have finished, and says how they ended (#109)
 ;;   kit board set <project-number> <owner> <issue-url> <field> <option>   one field of one card (#41)
 ;;
 ;; They were start_issue_flow.sh, finish_issue_flow.sh, merge_issue_flow.sh and board.sh: the same options, the
@@ -740,7 +741,7 @@ Options:
                    (checks-not-green repo pr))]
     (when (seq bad)
       (die (str "A required check of " url " is not green: " (str/join ", " bad) ". Nothing was changed: "
-                "wait for it (gh pr checks " pr " --watch --required, in the background), then run kit release again; "
+                "wait for it (kit checks, in the background), then run kit release again; "
                 "a failed check is fixed first.")))
     (when held?
       (ok! (shell "gh" "pr" "edit" pr "-R" repo "--remove-label" "hold"))
@@ -752,17 +753,153 @@ Options:
     (println (str "Released: " url))))
 
 
+;; ------------------------------------------------------------------ waiting on a pull request
+
+;; Nothing here waits on a clock (#109). A wait ends when what it waits for happens, or when that became impossible,
+;; and it says which. The only number is the pause between two looks at GitHub, which no event replaces: GitHub cannot
+;; call a process on this machine.
+
+(defn- pause
+  "The pause between two looks, in seconds: GHWF_MERGE_POLL, for kit merge and kit checks alike."
+  []
+  (let [v (env "GHWF_MERGE_POLL" "10")]
+    (or (parse-long v) (die (str "GHWF_MERGE_POLL is '" v "': give it a whole number of seconds, or unset it for 10")))))
+
+
+(defn- pr-args
+  "The pull request as gh takes it: a URL alone, a number with its repository."
+  [pr repo]
+  (if (re-matches #"\d+" (str pr)) [(str pr) "-R" repo] [pr]))
+
+
+(defn- gh-json
+  "A gh call's JSON output. A call that fails goes to `fail` (die, or a stop with its own exit code) with gh's message."
+  [fail & args]
+  (let [{:keys [exit out err]} (apply run "gh" args)]
+    (if (zero? exit)
+      (json/parse-string out true)
+      (fail (str "gh " (str/join " " (take 2 args)) " failed: " (str/trim (str out err))
+                 ". Fix: run it by hand to see why; an unreachable GitHub and an expired token both show there.")))))
+
+
+(defn- read-pr
+  "A pull request's JSON fields: :state, :decision (nil when there is no review decision), :merge-state, :head, :base."
+  [pr repo fail]
+  (let [j (apply gh-json fail "pr" "view" (concat (pr-args pr repo) ["--json" "state,reviewDecision,mergeStateStatus,headRefOid,baseRefName"]))]
+    {:state (:state j) :decision (not-empty (:reviewDecision j)) :merge-state (:mergeStateStatus j) :head (:headRefOid j)
+     :base (:baseRefName j)}))
+
+
+(defn- required-checks
+  "The required checks registered on the pull request's head commit, as {:name :bucket :link}; [] when none is."
+  [pr repo fail]
+  (let [{:keys [out err]} (apply run "gh" "pr" "checks" (concat (pr-args pr repo) ["--required" "--json" "name,bucket,link"]))
+        parsed (try (json/parse-string out true) (catch Exception _ nil))]
+    (cond (sequential? parsed) parsed
+          (re-find #"(?i)no (required )?checks reported" (str out err)) []
+          :else (fail (str "gh pr checks failed: " (str/trim (str out err)) ". Fix: run `gh pr checks " (first (pr-args pr repo))
+                           " --required` by hand to see why; an unreachable GitHub and an expired token both show there.")))))
+
+
+(defn- failed-text
+  [failed where]
+  (str (count failed) " required check" (when (> (count failed) 1) "s") " failed " where ":\n"
+       (str/join "\n" (map #(str "  " (:name %) ": " (:link %)) failed))))
+
+
+(defn- failed-checks [checks] (filter #(#{"fail" "cancel"} (:bucket %)) checks))
+
+
+;; ------------------------------------------------------------------ kit checks
+
+(def checks-usage
+  "Usage: kit checks [options]
+
+Waits until the checks the base branch requires exist on the pull request's head commit and have
+finished. They are read from the base's rulesets (classic branch protection needs admin to read);
+a base that requires none ends it at once. Run it as a background command: the agent is woken when it exits.
+
+  exit 0  every required check passed, or the base requires none
+  exit 1  a required check failed (or was cancelled): each is named with its link, at once
+  exit 2  no result: the pull request was closed or merged, its head moved (a push: the new
+          commit's checks are the ones to await; run it again), or gh could not be read (its message is printed)
+
+Options:
+  --pr <number>                 The pull request (default: the open one of the current branch)
+  --repo <owner/repo>           Default: the folder's origin on GitHub, then GHWF_REPO
+  --help                        Show this help
+
+Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else bounds the wait.")
+
+
+(def checks-spec
+  {"--pr" [:pr :value] "--repo" [:repo :value] "--help" [:help :flag] "-h" [:help :flag]})
+
+
+(defn checks!
+  [_kit args]
+  (let [o (parse-opts checks-spec args)
+        _ (when (:help o) (println checks-usage) (System/exit 0))
+        repo   (resolve-repo (:repo o))
+        poll   (pause)
+        stop   (fn [code & msg] (binding [*out* *err*] (println (str/join " " msg))) (System/exit code))
+        no-result #(stop 2 (str %))
+        branch (git-out "rev-parse" "--abbrev-ref" "HEAD")
+        _ (when (and (:pr o) (not (re-matches #"\d+" (:pr o)))) (die (str "--pr is '" (:pr o) "': give the pull request's number")))
+        pr     (or (:pr o)
+                   (do (when (#{(env "GHWF_DEFAULT_BASE" "main") "HEAD"} branch)
+                         (die (str "Run from the issue branch, not '" branch "', or name the pull request: kit checks --pr <number>")))
+                       (not-empty (gh! "pr" "list" "-R" repo "--head" branch "--state" "open" "--json" "url" "--jq" ".[0].url // empty")))
+                   (die (str "No open pull request for branch '" branch "' in " repo ". Fix: open it with kit finish, or name it: kit checks --pr <number>")))
+        {:keys [head base]} (read-pr pr repo no-result)
+        sha7   #(subs (str %) 0 (min 7 (count (str %))))
+        ;; What the base requires, once: a check that is not registered yet is told from one the base never asks for.
+        wanted (->> (gh-json no-result "api" (str "repos/" repo "/rules/branches/" base))
+                    (filter #(= "required_status_checks" (:type %)))
+                    (mapcat #(get-in % [:parameters :required_status_checks])) (map :context) distinct)]
+    (if (empty? wanted)
+      (println (str "No required checks on " base "; nothing to wait for: " pr))
+      (do
+        (println (str "Waiting for " (str/join ", " wanted) " on " (sha7 head) " (" pr ")."))
+        (loop [shown nil]
+          (let [checks  (required-checks pr repo no-result)
+                now     (read-pr pr repo no-result)
+                failed  (failed-checks checks)
+                missing (remove (set (map :name checks)) wanted)
+                pending (filter #(= "pending" (:bucket %)) checks)
+                status  (cond (seq missing) (str "Not registered yet: " (str/join ", " missing) ".")
+                              (seq pending) (str (count pending) " of " (count checks) " required checks have not finished: "
+                                                 (str/join ", " (map :name pending))))]
+            (cond
+              (= "MERGED" (:state now)) (stop 2 (str "The pull request merged, so there is nothing to wait for: " pr))
+              (not= "OPEN" (:state now)) (stop 2 (str "Ended with no result: the pull request is " (str/lower-case (:state now)) ", " pr "."))
+              (not= head (:head now))
+              (stop 2 (str "Ended with no result: the head moved from " (sha7 head) " to " (sha7 (:head now))
+                           " (a push). Fix: run kit checks again for the new commit."))
+
+              (seq failed)
+              (die (str (failed-text failed (str "on " (sha7 head)))
+                        "\nFix: open the link, fix the cause, push; then run kit checks again for the new commit."))
+
+              status (do (when (not= status shown) (println status))
+                         (Thread/sleep (* 1000 poll))
+                         (recur status))
+
+              :else (println (str "All " (count checks) " required checks passed on " (sha7 head) ": " pr)))))))))
+
+
 ;; ------------------------------------------------------------------ kit merge
 
 (def merge-usage
   "Usage: kit merge [options]
 
-Run from the issue branch. When the pull request is open, it needs the owner's Approve of the
-latest commit. A branch behind the base is first updated by merging the base into it, which
-keeps the approval. It then turns on auto-merge (squash) and waits until GitHub reports the
-pull request MERGED. When GitHub already merged it, only the closeout runs: board Status
-\"Done\", the branch deleted locally and on GitHub, back to the base branch. A pull request that
-did not merge keeps its branch.
+Run from the issue branch, as a background command: the agent is woken when it exits. When the pull
+request is open, it needs the owner's Approve of the latest commit. A branch behind the base is
+updated by merging the base into it, which keeps the approval. It turns on auto-merge (squash) and
+waits until GitHub reports the pull request MERGED, or until merging became impossible (closed, a
+required check failed, DIRTY, the approval gone); it then stops and names the reason.
+When GitHub already merged it, only the closeout runs: board Status \"Done\", the branch deleted
+locally and on GitHub, back to the base branch. A pull request that did not merge keeps its branch.
 
 Options:
   --repo <owner/repo>           Default: the folder's origin on GitHub, then GHWF_REPO
@@ -773,8 +910,7 @@ Options:
   --done-status <option>        Default: Done
   --help                        Show this help
 
-Environment: GHWF_MERGE_WAIT, seconds to wait for GitHub to merge (default 900);
-GHWF_MERGE_POLL, seconds between looks (default 10).")
+Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else bounds the wait.")
 
 
 (def merge-spec
@@ -802,13 +938,48 @@ GHWF_MERGE_POLL, seconds between looks (default 10).")
         branch         (git-out "rev-parse" "--abbrev-ref" "HEAD")
         _ (when (#{base "HEAD"} branch) (die (str "Run from the issue branch, not '" branch "'")))
         number         (or (issue-branch-number branch) (die (str "Branch '" branch "' is not <number>-<slug>")))
-        seconds        (fn [k default]
-                         (let [v (env k default)]
-                           (or (parse-long v) (die (str k " is '" v "': give it a whole number of seconds, or unset it for " default)))))
-        wait           (seconds "GHWF_MERGE_WAIT" "900")
-        poll           (seconds "GHWF_MERGE_POLL" "10")
+        poll           (pause)
         pr-list        #(not-empty (gh! "pr" "list" "-R" repo "--head" branch "--state" % "--json" "url" "--jq" ".[0].url // empty"))
         open-url       (pr-list "open")
+        shown          (atom nil)
+        ;; One look at the pull request. It ends the run when merging is impossible, and brings a branch that is behind
+        ;; up to date. It returns the pull request as last read.
+        look!
+        (fn [url first?]
+          (let [pr (read-pr url repo die)
+                ms (:merge-state pr)
+                seen (str (:state pr) " " ms)]
+            (when (not= seen @shown) (println (str "GitHub reports " (:state pr) ", " ms ": " url)) (reset! shown seen))
+            (cond
+              (= "MERGED" (:state pr)) pr
+
+              (= "CLOSED" (:state pr))
+              (die (str "The pull request was closed without merging: " url ". Branch '" branch "' is kept. Fix: reopen it "
+                        "(gh pr reopen " url ") if it was closed by mistake, then run kit merge again."))
+
+              (not= "APPROVED" (:decision pr))
+              (die (str (if first? "Waiting for the owner's Approve of the latest commit" "The owner's approval is gone")
+                        " (review: " (str/lower-case (or (:decision pr) "none")) "): " url ". Fix: ask the owner to approve the "
+                        "latest commit, then run kit merge again."))
+
+              (= "DIRTY" ms) (dirty-die url base)
+
+              :else
+              (let [failed (when (= "BLOCKED" ms) (failed-checks (required-checks url repo die)))]
+                (when (seq failed)
+                  (die (str (failed-text failed (str "on " url))
+                            "\nFix: open the link and fix the cause, push, ask the owner to approve the new commit, "
+                            "then run kit merge again.")))
+                (if (= "BEHIND" ms)
+                  ;; GitHub may have merged it since the last read, and then its branch is gone: look again first (#99).
+                  ;; A refused update is no end: the next look reads why (a conflict, a merge that went through).
+                  (let [again (read-pr url repo die)]
+                    (when (and (= "OPEN" (:state again)) (= "BEHIND" (:merge-state again)))
+                      (println (str "The branch is behind " base ": merging " base " into it; the approval stays."))
+                      (when-not (zero? (shell "gh" "pr" "update-branch" url))
+                        (warn "The update was refused; looking again.")))
+                    again)
+                  pr)))))
         pr-url
         (if-not open-url
           ;; Merged by GitHub's auto-merge after the owner's Approve: only the closeout is left.
@@ -816,71 +987,59 @@ GHWF_MERGE_POLL, seconds between looks (default 10).")
                       (die (str "No open or merged pull request for branch '" branch "' in " repo "; if that is the wrong repository, pass --repo owner/name")))]
             (println (str "Already merged by GitHub: " u))
             u)
-          (let [[decision state] (str/split (gh! "pr" "view" open-url "--json" "reviewDecision,mergeStateStatus"
-                                                 "--jq" "\"\\(.reviewDecision // \"NONE\") \\(.mergeStateStatus)\"")
-                                            #"\s+")]
-            (when-not (= decision "APPROVED")
-              (die (str "Waiting for the owner's Approve of the latest commit (review: " decision "): " open-url)))
-            (when (= state "DIRTY") (dirty-die open-url base))
-            (when (= state "BEHIND")
-              (println (str "The branch is behind " base ": merging " base " into it; the approval stays."))
-              (ok! (shell "gh" "pr" "update-branch" open-url)))
-            ;; Auto-merge merges at once when everything is in place, or as soon as the checks pass. Without
-            ;; auto-merge in the repository, a plain squash merge works when nothing is pending.
-            (let [r (run "gh" "pr" "merge" open-url "--auto" "--squash")]
-              ;; A refusal is read against the PR's state first: one GitHub already merged needs no second try (#97).
-              (when (and (not (zero? (:exit r)))
-                         (not= "MERGED" (first (str/split (gh! "pr" "view" open-url "--json" "state,mergeStateStatus" "--jq" "\"\\(.state) \\(.mergeStateStatus)\"") #"\s+"))))
-                (warn (str "Auto-merge not available (" (str/trim (str (:out r) (:err r))) "); trying a plain squash merge."))
-                (when-not (zero? (shell "gh" "pr" "merge" open-url "--squash"))
-                  (die (str "Could not merge " open-url ". If checks are still running, run this again when they pass; for a merge that waits by itself, the owner turns on Settings > General > 'Allow auto-merge' (dev-kit#37).")))))
+          (do
+            (when-not (= "MERGED" (:state (look! open-url true)))
+              ;; Auto-merge merges at once when everything is in place, or as soon as the checks pass. Without
+              ;; auto-merge in the repository, a plain squash merge works when nothing is pending.
+              (let [r (run "gh" "pr" "merge" open-url "--auto" "--squash")]
+                ;; A refusal is read against the PR's state first: one GitHub already merged needs no second try (#97).
+                (when (and (not (zero? (:exit r)))
+                           (not= "MERGED" (:state (read-pr open-url repo die))))
+                  (warn (str "Auto-merge not available (" (str/trim (str (:out r) (:err r))) "); trying a plain squash merge."))
+                  (when-not (zero? (shell "gh" "pr" "merge" open-url "--squash"))
+                    (die (str "Could not merge " open-url ": auto-merge is off in this repository, so nothing merges by itself. "
+                              "Fix: if checks are still running, run this again when they pass; otherwise the owner turns on "
+                              "Settings > General > 'Allow auto-merge' (dev-kit#37).")))))
+              ;; Only a confirmed merge may delete the branch: cleaning up after a failed merge closes the pull request with
+              ;; the work still in it. A branch can fall behind while it waits, when another pull request merges first;
+              ;; auto-merge then waits for ever, since the base requires up-to-date branches, so every look updates it (#72).
+              ;; The wait ends only in MERGED, or in a look that finds merging impossible (it ends the run).
+              (loop []
+                (when-not (= "MERGED" (:state (look! open-url false)))
+                  (Thread/sleep (* 1000 poll))
+                  (recur))))
             open-url))
-        ;; Only a confirmed merge may delete the branch: cleaning up after a failed merge closes the pull request with
-        ;; the work still in it. A branch can fall behind while it waits, when another pull request merges first;
-        ;; auto-merge then waits for ever, since the base requires up-to-date branches, so the loop updates it (#72).
-        read-state #(str/split (gh! "pr" "view" pr-url "--json" "state,mergeStateStatus" "--jq" "\"\\(.state) \\(.mergeStateStatus)\"") #"\s+")
-        pr-state
-        (loop [[pr-state merge-state] (read-state) waited 0]
-          (if (or (= pr-state "MERGED") (>= waited wait))
-            pr-state
-            (do (when (= merge-state "DIRTY") (dirty-die pr-url base))
-                (when (= merge-state "BEHIND")
-                  (println (str "The branch fell behind " base " while waiting: merging " base " into it; the approval stays."))
-                  (shell "gh" "pr" "update-branch" pr-url))
-                (Thread/sleep (* 1000 poll))
-                (recur (read-state) (+ waited (if (pos? poll) poll 1))))))]
-    (when-not (= pr-state "MERGED")
-      (die (str "Pull request is " pr-state ", not merged yet; auto-merge stays on and branch '" branch "' is kept. Run this again later: " pr-url)))
-    ;; A failed board update ends the run with an error (#41), after the closeout below: the merge is done.
-    (let [board-error
-          (when (not-any? str/blank? [owner project-number])
-            (let [url (gh! "issue" "view" number "-R" repo "--json" "url" "--jq" ".url")]
-              (when-let [e (board-set-field project-number owner url status-field done-status)]
-                (str "The board " status-field " of #" number " is not '" done-status "': " (board-reason e) ". Set it alone: "
-                     (board-set-command kit project-number owner url status-field done-status)))))]
-      ;; Leave the issue branch. When the base branch is checked out in another worktree, this one cannot switch to
-      ;; it; it stays detached on the merged base instead.
-      (ok! (shell "git" "fetch" "-q" "origin" base))
-      (if (some #{(str "branch refs/heads/" base)} (str/split-lines (git-out "worktree" "list" "--porcelain")))
-        (ok! (shell "git" "switch" "-q" "--detach" (str "origin/" base)))
-        (do (ok! (shell "git" "switch" "-q" base))
-            (ok! (shell "git" "pull" "-q" "--ff-only"))))
-      (ok! (shell "git" "branch" "-D" branch))
-      (when (zero? (:exit (run "git" "ls-remote" "--exit-code" "--heads" "origin" branch)))
-        (ok! (shell "git" "push" "origin" "--delete" branch)))
-      (println (str "Merged: " pr-url))
-      (when board-error (die board-error))
-      (println (str "Status: " done-status)))))
+        ;; A failed board update ends the run with an error (#41), after the closeout below: the merge is done.
+        board-error
+        (when (not-any? str/blank? [owner project-number])
+          (let [url (gh! "issue" "view" number "-R" repo "--json" "url" "--jq" ".url")]
+            (when-let [e (board-set-field project-number owner url status-field done-status)]
+              (str "The board " status-field " of #" number " is not '" done-status "': " (board-reason e) ". Set it alone: "
+                   (board-set-command kit project-number owner url status-field done-status)))))]
+    ;; Leave the issue branch. When the base branch is checked out in another worktree, this one cannot switch to
+    ;; it; it stays detached on the merged base instead.
+    (ok! (shell "git" "fetch" "-q" "origin" base))
+    (if (some #{(str "branch refs/heads/" base)} (str/split-lines (git-out "worktree" "list" "--porcelain")))
+      (ok! (shell "git" "switch" "-q" "--detach" (str "origin/" base)))
+      (do (ok! (shell "git" "switch" "-q" base))
+          (ok! (shell "git" "pull" "-q" "--ff-only"))))
+    (ok! (shell "git" "branch" "-D" branch))
+    (when (zero? (:exit (run "git" "ls-remote" "--exit-code" "--heads" "origin" branch)))
+      (ok! (shell "git" "push" "origin" "--delete" branch)))
+    (println (str "Merged: " pr-url))
+    (when board-error (die board-error))
+    (println (str "Status: " done-status))))
 
 
 ;; ------------------------------------------------------------------ entry
 
 (defn main
-  "kit start | finish | merge | board, with the path of bin/kit for the commands that call it back."
+  "kit start | finish | merge | checks | board, with the path of bin/kit for the commands that call it back."
   [cmd args kit]
   (case cmd
     "start" (start! kit args)
     "finish" (finish! kit args)
     "release" (release! kit args)
     "merge" (merge! kit args)
+    "checks" (checks! kit args)
     "board" (board! kit args)))
