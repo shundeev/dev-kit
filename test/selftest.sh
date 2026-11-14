@@ -759,6 +759,13 @@ for c in "${waitcalls[@]}"; do
   passes "  and runs in the background: $c" "$(call Bash "$(jq -nc --arg c "$c" '{command:$c, run_in_background:true}')")"
 done
 contains "  the refusal says what to do" "run_in_background" "$(call Bash '{"command":"sleep 5"}')"
+# #109, third PR: Monitor runs its command in the background by nature (tool_input: command, description, timeout_ms; no
+# run_in_background). Its command is still judged by every other rule.
+for c in 'sleep 5' 'gh pr checks 1 --watch'; do
+  passes "Monitor waiting is background, not refused: $c" "$(call Monitor "$(jq -nc --arg c "$c" '{command:$c, description:"wait", timeout_ms:600000}')")"
+done
+refused "Bash without run_in_background and with sleep 5 is still refused" "$(call Bash '{"command":"sleep 5","description":"x"}')"
+refused "Monitor running a command another rule refuses is still refused" "$(call Monitor '{"command":"gh issue create --title x","description":"x","timeout_ms":1000}')"
 for c in 'echo "kit merge later"' 'echo kit checks' 'git merge main' 'gh pr checks 12' 'echo sleep'; do
   passes "a word like merge or sleep in text or another command is not refused: $c" "$(call Bash "$(jq -nc --arg c "$c" '{command:$c}')")"
 done
@@ -1105,6 +1112,20 @@ echo "https://github.com/u473t8/fake/pull/95" > "$FAKE/pr-list"; touch "$FAKE/up
 expect_exit 0 "merge: an update-branch that is refused does not end the wait" flow merge
 contains "  says the update was refused" "update was refused" "$LAST"
 rm "$FAKE/update-fails"; unscript; : > "$FAKE/pr-list"; git switch -q --detach origin/main
+
+# While GitHub recomputes a PR (mergeStateStatus UNKNOWN, the review decision empty for a moment) no stop reason is
+# judged: the approval is "gone" only on a settled state. Seen live: update-branch, then an UNKNOWN look (#109).
+git switch -q -c 18-unknown origin/main && git push -q -u origin 18-unknown
+echo "https://github.com/u473t8/fake/pull/94" > "$FAKE/pr-list"
+script_views "OPEN - UNKNOWN" "OPEN APPROVED CLEAN" "MERGED APPROVED CLEAN"
+expect_exit 0 "merge: an UNKNOWN look with no review decision is looked at again, not read as a lost approval" flow merge
+contains "  reaches the closeout" "Merged: " "$LAST"
+unscript; : > "$FAKE/pr-list"; git switch -q --detach origin/main
+git switch -q -c 19-unknown origin/main && git push -q -u origin 19-unknown
+echo "https://github.com/u473t8/fake/pull/93" > "$FAKE/pr-list"
+script_views "OPEN APPROVED BLOCKED" "OPEN - UNKNOWN" "OPEN APPROVED BLOCKED" "MERGED APPROVED CLEAN"
+expect_exit 0 "merge: the same while waiting after auto-merge is on" flow merge
+unscript; : > "$FAKE/pr-list"; git switch -q --detach origin/main
 
 git switch -q -c 14-auto origin/main && git push -q -u origin 14-auto
 : > "$FAKE/pr-list"; echo "https://github.com/u473t8/fake/pull/98" > "$FAKE/pr-list-merged"; : > "$FAKE_GH_LOG"
@@ -2042,6 +2063,54 @@ touch "$WORK/kit-hook-ran"; khook "rm $WORK/kit-hook-ran" >/dev/null
 [ -e "$WORK/kit-hook-ran" ] && ok "  the command is never run" || bad "  the command ran"
 expect_exit 2 "kit hook: no command says what to pass" bb $kit hook
 contains "  names the usage" "kit hook '<command>'" "$LAST"
+
+# #129: kit sync brings the owner's checkout and its .shared up to the remote, and never changes anything it cannot
+# fast-forward. A scratch project with local bare remotes for the project and for dev-kit.
+echo "- kit sync"
+SY="$WORK/sync"
+mkdir -p "$SY/kitsrc" && (cd "$KIT" && tar --exclude=.git -cf - .) | (cd "$SY/kitsrc" && tar -xf -)
+git -C "$SY/kitsrc" init -q -b main && git -C "$SY/kitsrc" add -A && git -C "$SY/kitsrc" commit -qm "dev-kit v1"
+git clone -q --bare "$SY/kitsrc" "$SY/kit.git"
+git init -q --bare -b main "$SY/origin.git"
+git init -q -b main "$SY/co"
+git -C "$SY/co" remote add origin "$SY/origin.git"
+git -C "$SY/co" -c protocol.file.allow=always submodule add -q "$SY/kit.git" .shared
+(cd "$SY/co" && bb .shared/bin/kit init --repo u473t8/kit-sync --showcase Site >/dev/null 2>&1 && git add -A && git commit -qm "chore: project" && git push -q -u origin main)
+export GIT_ALLOW_PROTOCOL=file
+sync() { (cd "$SY/co" && bb .shared/bin/kit sync 2>&1); }
+expect_exit 0 "sync: a checkout already current" sync
+contains "  prints the one line" "Up to date: " "$LAST"
+git -C "$SY/co" switch -q -c topic
+expect_exit 1 "sync: not on the base branch stops" sync
+contains "  names the fix" "switch to main first" "$LAST"
+contains "  names the current branch" "topic" "$LAST"
+git -C "$SY/co" switch -q main
+echo changed >> "$SY/co/kit.edn"
+echo scratch > "$SY/co/untracked.txt"
+expect_exit 1 "sync: a dirty tracked file stops" sync
+contains "  names the file" "kit.edn" "$LAST"
+contains "  says commit or stash" "commit or stash them first" "$LAST"
+git -C "$SY/co" checkout -q kit.edn
+expect_exit 0 "sync: an untracked file is fine" sync
+rm "$SY/co/untracked.txt"
+# the remote moves: dev-kit gets a commit, and the project pins it
+git clone -q "$SY/kit.git" "$SY/kitw" && echo v2 > "$SY/kitw/V2" && git -C "$SY/kitw" add V2 && git -C "$SY/kitw" commit -qm "dev-kit v2" && git -C "$SY/kitw" push -q origin main
+git clone -q "$SY/origin.git" "$SY/pw" && git -C "$SY/pw" -c protocol.file.allow=always submodule update -q --init
+git -C "$SY/pw/.shared" fetch -q origin && git -C "$SY/pw/.shared" checkout -q origin/main
+git -C "$SY/pw" add .shared && git -C "$SY/pw" commit -qm "chore: update dev-kit" && git -C "$SY/pw" push -q origin main
+NEWKIT="$(git -C "$SY/kitw" rev-parse --short HEAD)"; NEWPRJ="$(git -C "$SY/pw" rev-parse --short HEAD)"
+expect_exit 0 "sync: the remote moved the project and its pinned dev-kit" sync
+contains "  line names both commits" "Up to date: $NEWPRJ chore: update dev-kit; dev-kit $NEWKIT" "$LAST"
+[ "$(git -C "$SY/co/.shared" rev-parse --short HEAD)" = "$NEWKIT" ] && ok "  .shared is at the new pin" || bad "  .shared pin"
+# the local base has a commit of its own and the remote another: nothing may change
+git -C "$SY/co" commit -q --allow-empty -m "local only"
+git -C "$SY/pw" commit -q --allow-empty -m "remote only" && git -C "$SY/pw" push -q origin main
+LOCAL="$(git -C "$SY/co" rev-parse HEAD)"
+expect_exit 1 "sync: a base that cannot fast-forward stops" sync
+contains "  says the local base has commits of its own" "has commits of its own" "$LAST"
+contains "  says nothing was changed" "nothing was changed" "$LAST"
+[ "$(git -C "$SY/co" rev-parse HEAD)" = "$LOCAL" ] && ok "  the local commit is untouched" || bad "  local base moved"
+unset GIT_ALLOW_PROTOCOL
 
 echo
 echo "passed $pass, failed $fail"
