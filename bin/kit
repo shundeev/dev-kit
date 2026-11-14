@@ -30,18 +30,22 @@
 ;;              per machine and git-ignored: the agent identity env in .claude/settings.local.json)
 (ns kit
   (:require
-    [babashka.fs :as fs]
-    [babashka.process :as p]
-    [cheshire.core :as json]
-    [clj-yaml.core :as yaml]
-    [clojure.edn :as edn]
-    [clojure.string :as str]
-    [rewrite-clj.parser :as rewrite-parser]
-    [rewrite-clj.zip :as z]))
+   [babashka.fs :as fs]
+   [babashka.process :as p]
+   [cheshire.core :as json]
+   [clj-yaml.core :as yaml]
+   [clojure.edn :as edn]
+   [clojure.string :as str]
+   [rewrite-clj.parser :as rewrite-parser]
+   [rewrite-clj.zip :as z]))
 
 
 (def kit-dir (-> *file* fs/absolutize fs/normalize fs/parent fs/parent))
+
+
 (def mount (str (fs/file-name kit-dir)))
+
+
 (def root (fs/parent kit-dir))
 
 
@@ -72,6 +76,7 @@
 
 ;; ------------------------------------------------------------------ config
 
+
 (def config-file (rel "kit.edn"))
 
 
@@ -98,9 +103,14 @@
   (when-let [s (slurp-if config-file)]
     (let [m (try (edn/read-string s)
                  (catch Exception e
-                   (let [why (or (try (rewrite-parser/parse-string-all s) nil (catch Exception e2 (ex-message e2))) (ex-message e))
+                   (let [why (or (try (rewrite-parser/parse-string-all s) nil (catch Exception e2 (ex-message e2)))
+                                 (ex-message e))
                          [_ msg line] (re-find #"(.*) \[at line (\d+), column \d+\]" why)]
-                     (fail! (str "kit.edn" (when line (str " line " line)) " cannot be read (" (or msg why) "): fix it by hand")))))]
+                     (fail! (str "kit.edn"
+                                 (when line (str " line " line))
+                                 " cannot be read ("
+                                 (or msg why)
+                                 "): fix it by hand")))))]
       (when-not (map? m) (fail! "kit.edn is not a map: make it {:repo \"owner/name\" :showcase \"…\" :modules #{}}"))
       (merge-config (read-defaults) m))))
 
@@ -116,7 +126,9 @@
         artifacts (when (map? user-test) (:artifacts user-test))]
     (cond-> []
       (not (and (string? repo) (re-matches #"[^/\s]+/[^/\s]+" repo)))
-      (conj (str ":repo is " (pr-str repo) ", not \"owner/name\": set it in kit.edn (kit init --repo owner/name in a new project)"))
+      (conj (str ":repo is "
+                 (pr-str repo)
+                 ", not \"owner/name\": set it in kit.edn (kit init --repo owner/name in a new project)"))
 
       (not (and (string? showcase) (not (str/blank? showcase))))
       (conj (str ":showcase is missing: set it in kit.edn to the board's Showcase option for this project"
@@ -125,7 +137,8 @@
       (not (coll? modules)) (conj ":modules must be a set, e.g. #{} or #{:clojure}")
 
       (seq unknown)
-      (conj (str ":modules has " (str/join ", " (map pr-str unknown)) "; known modules: "
+      (conj (str ":modules has " (str/join ", " (map pr-str unknown))
+                 "; known modules: "
                  (str/join ", " (map name (sort known-modules)))))
 
       (not (and (string? base) (not (str/blank? base)))) (conj ":base must name the base branch, e.g. \"main\"")
@@ -136,7 +149,8 @@
       (not (and (string? (:owner board)) (int? (:number board)))) (conj ":board must be {:owner \"login\" :number N}")
 
       (not (or (nil? agent) (and (map? agent) (every? #(string? (get agent %)) [:login :email :gh-config-dir]))))
-      (conj ":agent must be nil, or a map with :login, :email and :gh-config-dir (the agent's account; see kit-defaults.edn)")
+      (conj
+       ":agent must be nil, or a map with :login, :email and :gh-config-dir (the agent's account; see kit-defaults.edn)")
 
       (not (or (nil? user-test) (and (string? run) (not (str/blank? run)))))
       (conj (str ":user-test must be nil, or {:run \"<command>\" :artifacts \"<folder>\"} with :run the command of the"
@@ -144,9 +158,11 @@
 
       ;; A plain path: upload-artifact reads *, !, ~ and the like as patterns, and "." would be the whole checkout.
       (not (or (nil? artifacts)
-               (and (string? artifacts) (re-matches #"[A-Za-z0-9_][A-Za-z0-9._/-]*" artifacts)
+               (and (string? artifacts)
+                    (re-matches #"[A-Za-z0-9_][A-Za-z0-9._/-]*" artifacts)
                     (not-any? #{".."} (str/split artifacts #"/")))))
-      (conj (str ":user-test :artifacts is " (pr-str artifacts) ": it must be a folder inside the project, named with"
+      (conj (str ":user-test :artifacts is " (pr-str artifacts)
+                 ": it must be a folder inside the project, named with"
                  " letters, digits, . _ - and /, e.g. \"test-results\"")))))
 
 
@@ -158,7 +174,7 @@
   (#27). CI runs it inside the `checks` job, after the other checks."
   []
   (let [cfg (or (read-config) (fail! "no kit.edn: run .shared/bin/kit init first"))
-        _   (some->> (seq (config-problems cfg)) (map #(str "kit.edn: " %)) (str/join "; ") fail!)
+        _ (some->> (seq (config-problems cfg)) (map #(str "kit.edn: " %)) (str/join "; ") fail!)
         run (get-in cfg [:user-test :run])]
     (when-not run
       (fail! "kit.edn has no :user-test: add :user-test {:run \"<the command of the user-level test>\""
@@ -170,8 +186,12 @@
 
 ;; ------------------------------------------------------------------ expected state
 
+
 (def block-begin
-  (str "<!-- dev-kit:begin — generated from " mount "/rules by " mount
+  (str "<!-- dev-kit:begin — generated from "
+       mount
+       "/rules by "
+       mount
        "/bin/kit init. Edit it in dev-kit, not here. -->"))
 
 
@@ -180,11 +200,13 @@
 
 (defn block-text
   [cfg]
-  (str block-begin "\n\n"
+  (str block-begin
+       "\n\n"
        (slurp (str (fs/path kit-dir "rules" "shared.md")))
        (when (clojure? cfg)
          (str "\n" (slurp (str (fs/path kit-dir "rules" "clojure.md")))))
-       "\n" block-end))
+       "\n"
+       block-end))
 
 
 (defn deep-merge
@@ -197,9 +219,10 @@
 
 (defn json-text
   [m]
-  (str (json/generate-string m {:pretty {:indentation 2
-                                         :indent-arrays? true
-                                         :object-field-value-separator ": "}})
+  (str (json/generate-string m
+                             {:pretty {:indentation    2
+                                       :indent-arrays? true
+                                       :object-field-value-separator ": "}})
        "\n"))
 
 
@@ -230,14 +253,17 @@
 ;; review is a review by the owner. Claude Code applies settings env to the session, its hooks
 ;; and every command it runs; the owner's own terminal is untouched.
 
+
 (def local-settings ".claude/settings.local.json")
 
 
 (defn expand-home
   "~ as the shell and gh read it: from HOME, not from the JVM's user.home."
   [path]
-  (str/replace-first (str path) #"^~(?=/|$)"
-                     (str/re-quote-replacement (or (not-empty (System/getenv "HOME")) (System/getProperty "user.home")))))
+  (str/replace-first (str path)
+                     #"^~(?=/|$)"
+                     (str/re-quote-replacement (or (not-empty (System/getenv "HOME"))
+                                                   (System/getProperty "user.home")))))
 
 
 (defn agent-env
@@ -296,10 +322,14 @@
         m (read-json-object f)]
     (when (= ::invalid m) (fail! local-settings "is not a JSON object; fix or remove it, then run again"))
     (fs/create-dirs (fs/parent f))
-    (spit f (json-text (update m "env" #(into (sorted-map)
-                                              (merge % env
-                                                     (when-let [h (human-login)]
-                                                       (when (str/blank? (get % "GHWF_HUMAN")) {"GHWF_HUMAN" h})))))))))
+    (spit f
+          (json-text (update m
+                             "env"
+                             #(into (sorted-map)
+                                    (merge %
+                                           env
+                                           (when-let [h (human-login)]
+                                             (when (str/blank? (get % "GHWF_HUMAN")) {"GHWF_HUMAN" h})))))))))
 
 
 (defn ignored-problem
@@ -314,8 +344,10 @@
                (die (str dir) "is not a git repository"))
         s  (slurp-if ex)]
     (fs/create-dirs (fs/parent ex))
-    (spit ex (str (when (and s (not (str/blank? s)) (not (str/ends-with? s "\n"))) "\n") "/" path "\n")
-          :append true)))
+    (spit ex
+          (str (when (and s (not (str/blank? s)) (not (str/ends-with? s "\n"))) "\n") "/" path "\n")
+          :append
+          true)))
 
 
 (defn gh-config-dir-in-use
@@ -342,7 +374,7 @@
   [{:keys [login gh-config-dir]}]
   (let [dir  (expand-home gh-config-dir)
         user (gh-login dir)]
-    (cond (nil? user) (str "the agent's gh config " dir " is not logged in")
+    (cond (nil? user)       (str "the agent's gh config " dir " is not logged in")
           (not= login user) (str "the agent's gh config " dir " is logged in as " user ", not " login))))
 
 
@@ -360,13 +392,22 @@
   [{:keys [login gh-config-dir]}]
   (let [dir  (expand-home gh-config-dir)
         opts {:continue true :extra-env {"GH_CONFIG_DIR" dir}}]
-    (println (str "\nLogging the agent's GitHub account " login " into " dir ".\n"
-                  "On the github.com/login/device page check that you are signed in as " login
+    (println (str "\nLogging the agent's GitHub account "
+                  login
+                  " into "
+                  dir
+                  ".\n"
+                  "On the github.com/login/device page check that you are signed in as "
+                  login
                   " (switch account, or use a private window), then enter the code gh shows.\n"))
     (when-let [user (gh-login dir)]
       (p/shell opts "gh" "auth" "logout" "--hostname" "github.com" "--user" user))
-    (p/shell opts "gh" "auth" "login" "--hostname" "github.com" "--git-protocol" "https" "--web"
-             "--scopes" "project,workflow")))
+    (p/shell opts
+             "gh"         "auth"
+             "login"      "--hostname"
+             "github.com" "--git-protocol"
+             "https"      "--web"
+             "--scopes"   "project,workflow")))
 
 
 (defn offer-login!
@@ -392,8 +433,14 @@
           (str "unset " token " in the shell that starts claude, then restart the session")]]
 
         (and session? (not (same-dir? want have)))
-        [[:fail (str "this Claude session runs gh from " have (if user (str ", logged in as " user) ", logged out")
-                     ", not from the agent's config " want)
+        [[:fail
+          (str "this Claude session runs gh from "
+               have
+               (if user
+                 (str ", logged in as " user)
+                 ", logged out")
+               ", not from the agent's config "
+               want)
           (if (local-env-problem root (agent-env agent))
             (str mount "/bin/kit init, then restart this Claude session")
             (str "restart this Claude session: " local-settings " is in place and applies at start"))]]
@@ -409,7 +456,9 @@
   (str "# Managed by dev-kit (`kit init`); the code owners come from :owners in kit.edn.\n"
        "# With \"Require review from Code Owners\" in the main ruleset, a pull request merges only\n"
        "# with the approval of one of them, whoever else approves it.\n"
-       "* " (str/join " " (map #(str "@" %) owners)) "\n"))
+       "* "
+       (str/join " " (map #(str "@" %) owners))
+       "\n"))
 
 
 (def agent-marker
@@ -424,6 +473,8 @@
 
 
 (defn kondo-entry [] (str "../" mount "/clojure/clj-kondo"))
+
+
 (defn kondo-map-text [] (str "{:config-paths [\"" (kondo-entry) "\"]}"))
 
 
@@ -431,51 +482,56 @@
   "Everything init writes and doctor verifies, derived from kit.edn."
   [cfg]
   (concat
-    [{:kind :block :path "AGENTS.md" :content (block-text cfg)}
-     {:kind :file :path ".claude/settings.json" :content (settings-text cfg)}
-     {:kind :file :path ".github/workflows/ci.yml"
-      :content (slurp (str (fs/path kit-dir "managed" "ci.yml")))}
-     ;; ADR-0007: marks a draft pull request ready when its required checks passed; kit finish opens drafts
-     ;; only where the base branch holds this file
-     {:kind :file :path ".github/workflows/ready-when-green.yml"
-      :content (slurp (str (fs/path kit-dir ".github" "workflows" "ready-when-green.yml")))}
-     {:kind :file :path ".github/CODEOWNERS" :content (codeowners-text cfg)}
-     {:kind :file :path ".github/ISSUE_TEMPLATE/task.yml"
-      :content (slurp (str (fs/path kit-dir "managed" "github" "ISSUE_TEMPLATE" "task.yml")))}
-     {:kind :file :path ".github/pull_request_template.md"
-      :content (slurp (str (fs/path kit-dir "managed" "github" "pull_request_template.md")))}
-     {:kind :file :path ".claude/hooks/pretooluse.sh"
-      :content (str/replace (slurp (str (fs/path kit-dir "managed" "pretooluse.sh"))) "{{kit}}" mount)}
-     ;; the safety guard's policy (#20): the one file Claude Code, Codex and OpenCode all read
-     {:kind :policy :path ".cc-safety-net/policy.json"}]
-    ;; Claude Code's worktrees live inside the project; per clone, so no file of the project's own is touched (#97)
-    [{:kind :ignored :path ".claude/worktrees/" :local true}]
-    (when-let [a (:agent cfg)]
-      [{:kind :ignored :path local-settings :local true}
-       {:kind :local-env :path local-settings :env (agent-env a) :local true}])
-    (for [dir (sort (fs/list-dir (fs/path kit-dir "claude" "skills")))
-          :when (fs/directory? dir)
-          :let [n (str (fs/file-name dir))]]
-      {:kind :symlink :path (str ".claude/skills/" n) :target (str "../../" mount "/claude/skills/" n)})
-    (for [dir (cond-> [(fs/path kit-dir "claude" "agents")]
-                (clojure? cfg) (conj (fs/path kit-dir "claude" "agents" "clojure")))
-          f (sort (fs/glob dir "*.md"))]
-      {:kind :file :path (str ".claude/agents/" (fs/file-name f)) :content (agent-text f)})
-    (when (clojure? cfg)
-      [{:kind :symlink :path ".zprint.edn" :target (str mount "/clojure/.zprint.edn")}
-       {:kind :kondo :path ".clj-kondo/config.edn"}])
-    [{:kind :git-config :key "core.hooksPath" :value (str mount "/githooks") :local true}]))
+   [{:kind :block :path "AGENTS.md" :content (block-text cfg)}
+    {:kind :file :path ".claude/settings.json" :content (settings-text cfg)}
+    {:kind    :file
+     :path    ".github/workflows/ci.yml"
+     :content (slurp (str (fs/path kit-dir "managed" "ci.yml")))}
+    ;; ADR-0007: marks a draft pull request ready when its required checks passed; kit finish opens drafts
+    ;; only where the base branch holds this file
+    {:kind    :file
+     :path    ".github/workflows/ready-when-green.yml"
+     :content (slurp (str (fs/path kit-dir ".github" "workflows" "ready-when-green.yml")))}
+    {:kind :file :path ".github/CODEOWNERS" :content (codeowners-text cfg)}
+    {:kind    :file
+     :path    ".github/ISSUE_TEMPLATE/task.yml"
+     :content (slurp (str (fs/path kit-dir "managed" "github" "ISSUE_TEMPLATE" "task.yml")))}
+    {:kind    :file
+     :path    ".github/pull_request_template.md"
+     :content (slurp (str (fs/path kit-dir "managed" "github" "pull_request_template.md")))}
+    {:kind    :file
+     :path    ".claude/hooks/pretooluse.sh"
+     :content (str/replace (slurp (str (fs/path kit-dir "managed" "pretooluse.sh"))) "{{kit}}" mount)}
+    ;; the safety guard's policy (#20): the one file Claude Code, Codex and OpenCode all read
+    {:kind :policy :path ".cc-safety-net/policy.json"}]
+   ;; Claude Code's worktrees live inside the project; per clone, so no file of the project's own is touched (#97)
+   [{:kind :ignored :path ".claude/worktrees/" :local true}]
+   (when-let [a (:agent cfg)]
+     [{:kind :ignored :path local-settings :local true}
+      {:kind :local-env :path local-settings :env (agent-env a) :local true}])
+   (for [dir   (sort (fs/list-dir (fs/path kit-dir "claude" "skills")))
+         :when (fs/directory? dir)
+         :let  [n (str (fs/file-name dir))]]
+     {:kind :symlink :path (str ".claude/skills/" n) :target (str "../../" mount "/claude/skills/" n)})
+   (for [dir (cond-> [(fs/path kit-dir "claude" "agents")]
+               (clojure? cfg) (conj (fs/path kit-dir "claude" "agents" "clojure")))
+         f   (sort (fs/glob dir "*.md"))]
+     {:kind :file :path (str ".claude/agents/" (fs/file-name f)) :content (agent-text f)})
+   (when (clojure? cfg)
+     [{:kind :symlink :path ".zprint.edn" :target (str mount "/clojure/.zprint.edn")}
+      {:kind :kondo :path ".clj-kondo/config.edn"}])
+   [{:kind :git-config :key "core.hooksPath" :value (str mount "/githooks") :local true}]))
 
 
 (defn stale-paths
   "Managed files left over from an older dev-kit version or a module that was switched off."
   [items]
   (let [wanted (set (map :path items))
-        links  (for [f (when (fs/directory? (rel ".claude/skills")) (fs/list-dir (rel ".claude/skills")))
+        links  (for [f     (when (fs/directory? (rel ".claude/skills")) (fs/list-dir (rel ".claude/skills")))
                      :when (and (fs/sym-link? f)
                                 (str/includes? (str (fs/read-link f)) (str mount "/")))]
                  f)
-        agents (for [f (when (fs/directory? (rel ".claude/agents")) (fs/glob (rel ".claude/agents") "*.md"))
+        agents (for [f     (when (fs/directory? (rel ".claude/agents")) (fs/glob (rel ".claude/agents") "*.md"))
                      :when (str/includes? (slurp (str f)) agent-marker)]
                  f)
         zprint (when (and (fs/sym-link? (rel ".zprint.edn"))
@@ -489,30 +545,38 @@
 
 ;; ------------------------------------------------------------------ checks
 
+
 (defn block-markers
   "The dev-kit blocks of AGENTS.md text: {:pairs [[first-line last-line] …], :stray [line numbers]}, lines counted
   from 0 in :pairs and from 1 in :stray. A marker is found by its start, so another version's wording still counts."
   [s]
-  (loop [[l & more :as ls] (str/split s #"\n" -1) i 0 open nil pairs [] stray []]
+  (loop [[l & more :as ls] (str/split s #"\n" -1)
+         i     0
+         open  nil
+         pairs []
+         stray []]
     (cond
       (empty? ls) {:pairs pairs :stray (cond-> stray open (conj (inc open)))}
       (str/starts-with? l "<!-- dev-kit:begin") (recur more (inc i) i pairs (cond-> stray open (conj (inc open))))
       (str/starts-with? l "<!-- dev-kit:end") (if open
-                                                 (recur more (inc i) nil (conj pairs [open i]) stray)
-                                                 (recur more (inc i) nil pairs (conj stray (inc i))))
+                                                (recur more (inc i) nil (conj pairs [open i]) stray)
+                                                (recur more (inc i) nil pairs (conj stray (inc i))))
       :else (recur more (inc i) open pairs stray))))
 
 
 (defn with-block
   "AGENTS.md text with every dev-kit block removed and content put where the first one was, in the file's line ends."
   [s content pairs]
-  (let [content (if (str/includes? s "\r\n") (str (str/replace content "\n" "\r\n") "\r") content) ; lines join on \n
-        lines (str/split s #"\n" -1)
+  (let [content      (if (str/includes? s "\r\n")
+                       (str (str/replace content "\n" "\r\n") "\r")
+                       content) ; lines join on \n
+        lines        (str/split s #"\n" -1)
         [first-line] (first pairs)
-        in-pair? (fn [i] (some (fn [[a b]] (<= a i b)) pairs))]
-    (str/join "\n" (concat (subvec lines 0 first-line)
-                           [content]
-                           (keep-indexed (fn [i l] (when (and (> i first-line) (not (in-pair? i))) l)) lines)))))
+        in-pair?     (fn [i] (some (fn [[a b]] (<= a i b)) pairs))]
+    (str/join "\n"
+              (concat (subvec lines 0 first-line)
+                      [content]
+                      (keep-indexed (fn [i l] (when (and (> i first-line) (not (in-pair? i))) l)) lines)))))
 
 
 (defn block-problem
@@ -520,10 +584,11 @@
   [s content]
   (let [{:keys [pairs stray]} (block-markers s)]
     (cond
-      (seq stray) (str "line " (str/join ", " stray) " has a dev-kit marker without its pair: delete what is left of the"
-                       " old block, or restore the missing marker, then run kit init")
+      (seq stray)    (str "line " (str/join ", " stray)
+                          " has a dev-kit marker without its pair: delete what is left of the"
+                          " old block, or restore the missing marker, then run kit init")
       (empty? pairs) "has no dev-kit block"
-      (next pairs) (str "has " (count pairs) " dev-kit blocks")
+      (next pairs)   (str "has " (count pairs) " dev-kit blocks")
       (not= s (with-block s content pairs)) "the dev-kit block differs from dev-kit's rules")))
 
 
@@ -537,7 +602,9 @@
   "The safety guard's policy as init first writes it (#20). Strict by default; worktree_mode relaxes `git restore`
   and `git checkout <ref> -- <path>` in a linked worktree only (#107): in the main checkout and for
   `git reset --hard` everywhere they stay refused. allow_paths lets an agent `rm -rf` under ~/.claude/jobs only (#117)."
-  {"version" 1 "safety" {"level" "standard"} "workflow" {"worktree_mode" true}
+  {"version"  1
+   "safety"   {"level" "standard"}
+   "workflow" {"worktree_mode" true}
    "destructive_command_protection" {"allow_paths" ["~/.claude/jobs"]}})
 
 
@@ -559,16 +626,18 @@
       :local-env (local-env-problem root env)
 
       :file
-      (cond (not (fs/exists? f)) "missing"
+      (cond (not (fs/exists? f))        "missing"
             (not= content (slurp-if f)) "differs from what dev-kit generates")
 
       :block
-      (if-let [s (slurp-if f)] (block-problem s content) "missing")
+      (if-let [s (slurp-if f)]
+        (block-problem s content)
+        "missing")
 
       :symlink
       (cond (not (fs/sym-link? f)) (if (fs/exists? f) "is a real file, not the dev-kit link" "missing")
             (not= target (str (fs/read-link f))) (str "points to " (fs/read-link f) ", expected " target)
-            (not (fs/exists? f)) (str "dangling: " target " does not exist"))
+            (not (fs/exists? f))   (str "dangling: " target " does not exist"))
 
       ;; the project owns the file after the first write: init only adds worktree_mode and allow_paths when the key is absent
       :policy
@@ -586,7 +655,8 @@
               (= m ::unreadable) "cannot be read: fix it by hand"
               (and (some? m) (not (map? m)))
               (str "is not a map: make it a map, e.g. " (kondo-map-text))
-              (not (contains? (set (:config-paths m)) (kondo-entry))) (str ":config-paths lacks \"" (kondo-entry) "\"")))
+              (not (contains? (set (:config-paths m)) (kondo-entry)))
+              (str ":config-paths lacks \"" (kondo-entry) "\"")))
 
       :git-config
       (let [v (sh "git" "config" "--local" "--get" git-key)]
@@ -595,7 +665,9 @@
 
 (defn label
   [{git-key :key :keys [kind path]}]
-  (if (= kind :git-config) (str "git config " git-key) path))
+  (if (= kind :git-config)
+    (str "git config " git-key)
+    path))
 
 
 (defn submodule-problems
@@ -629,31 +701,34 @@
   (when-let [out (sh "bash" "-c" "command -v claude >/dev/null && claude --version")]
     (let [v (some->> (re-find #"(\d+)\.(\d+)\.(\d+)" out) rest (mapv parse-long))]
       (when (and v (neg? (compare v min-claude-version)))
-        [[:fail (str "Claude Code " (str/join "." v) " ignores onFailure, so a failing guard would let commands through")
+        [[:fail
+          (str "Claude Code " (str/join "." v) " ignores onFailure, so a failing guard would let commands through")
           (str "update Claude Code to " (str/join "." min-claude-version) " or later")]]))))
 
 
 (defn node-problems
   "The safety guard (#20) runs on Node 22 or later; without it every guarded call is refused."
   []
-  (let [v (sh "node" "--version")
+  (let [v     (sh "node" "--version")
         major (some->> v (re-find #"^v(\d+)\.") second parse-long)]
     (when-not (and major (>= major 22))
-      [[:fail (str "Node 22 or later is needed for the safety guard, which refuses every guarded call without it ("
-                   (or v "node not found") ")")
+      [[:fail
+        (str "Node 22 or later is needed for the safety guard, which refuses every guarded call without it ("
+             (or v "node not found")
+             ")")
         "install Node 22 or later (e.g. nvm install 22), then restart the Claude session"]])))
 
 
 (defn tool-problems
   [cfg]
   (concat
-    (for [[tool why] (cond-> [["git" "everything"]
-                              ["gh" "the issue flow scripts"]
-                              ["jq" "the flow scripts and the friction recorder"]]
-                       (clojure? cfg) (into [["clj-kondo" "lint"] ["zprint" "format check"]]))
-          :when (nil? (sh "bash" "-c" (str "command -v " tool)))]
-      [:fail (str tool " is not installed (needed for " why ")") (str "install " tool)])
-    (node-problems)))
+   (for [[tool why] (cond-> [["git" "everything"]
+                             ["gh" "the issue flow scripts"]
+                             ["jq" "the flow scripts and the friction recorder"]]
+                      (clojure? cfg) (into [["clj-kondo" "lint"] ["zprint" "format check"]]))
+         :when      (nil? (sh "bash" "-c" (str "command -v " tool)))]
+     [:fail (str tool " is not installed (needed for " why ")") (str "install " tool)])
+   (node-problems)))
 
 
 (defn ownership-problems
@@ -662,20 +737,28 @@
   dev-kit's counts by its content (#20), and .claude/settings.json found before the first init moves into kit.edn."
   [items]
   (for [{git-key :key :keys [kind path value content] :as item} items
-        :let [f       (some-> path rel)
-              problem (case kind
-                        :file (when (and (fs/regular-file? f) (not= path ".claude/settings.json") (not= content (slurp f))
-                                         (not (str/includes? (slurp f) "Managed by dev-kit")))
-                                (if (str/starts-with? path ".claude/agents/")
-                                  "is an agent of the project's own with dev-kit's name: rename it"
-                                  "holds a file dev-kit did not write: move it away, or merge what it needs elsewhere"))
-                        :symlink (when (and (fs/exists? f) (not (fs/sym-link? f)))
-                                   (str "is a real " (if (fs/directory? f) "folder" "file") " where dev-kit puts a link to "
-                                        (:target item) ": move it away"))
-                        :git-config (let [v (sh "git" "config" "--local" "--get" git-key)]
-                                      (when (and v (not= v value))
-                                        (str "is " v ": call those hooks from " value " or drop them, then git config --unset " git-key)))
-                        nil)]
+        :let  [f       (some-> path rel)
+               problem (case kind
+                         :file
+                         (when (and (fs/regular-file? f)
+                                    (not= path ".claude/settings.json")
+                                    (not= content (slurp f))
+                                    (not (str/includes? (slurp f) "Managed by dev-kit")))
+                           (if (str/starts-with? path ".claude/agents/")
+                             "is an agent of the project's own with dev-kit's name: rename it"
+                             "holds a file dev-kit did not write: move it away, or merge what it needs elsewhere"))
+                         :symlink (when (and (fs/exists? f) (not (fs/sym-link? f)))
+                                    (str "is a real "
+                                         (if (fs/directory? f) "folder" "file")
+                                         " where dev-kit puts a link to "
+                                         (:target item)
+                                         ": move it away"))
+                         :git-config (let [v (sh "git" "config" "--local" "--get" git-key)]
+                                       (when (and v (not= v value))
+                                         (str "is " v
+                                              ": call those hooks from " value
+                                              " or drop them, then git config --unset " git-key)))
+                         nil)]
         :when problem]
     (str (label item) " " problem "; then run kit init again")))
 
@@ -696,11 +779,15 @@
   (let [real  #(str (fs/real-path %))
         user  (let [u (expand-home "~/.claude/CLAUDE.md")] (when (fs/exists? u) (real u)))
         found (distinct
-                (for [d (if ci [root] (take-while some? (iterate fs/parent (fs/real-path root))))
-                      f (if ci ["CLAUDE.md" ".claude/CLAUDE.md"] ["CLAUDE.md" ".claude/CLAUDE.md" "CLAUDE.local.md"])
-                      :let [p (fs/path d f)]
-                      :when (and (fs/exists? p) (not= (real p) user))]
-                  (real p)))]
+               (for [d     (if ci
+                             [root]
+                             (take-while some? (iterate fs/parent (fs/real-path root))))
+                     f     (if ci
+                             ["CLAUDE.md" ".claude/CLAUDE.md"]
+                             ["CLAUDE.md" ".claude/CLAUDE.md" "CLAUDE.local.md"])
+                     :let  [p (fs/path d f)]
+                     :when (and (fs/exists? p) (not= (real p) user))]
+                 (real p)))]
     (when (and (seq found) (or ci (not (user-reads-both?))))
       [[:fail (str (str/join ", " found) " hides AGENTS.md: Claude Code then never reads the rules")
         "move its content into AGENTS.md below the dev-kit block and delete it, or set Project instructions to claude-md-and-agents-md in /config"]])))
@@ -722,12 +809,16 @@
           (let [main (some #(when (= "main" (:name %)) %)
                            (json/parse-string (gh! "api" (str "repos/" repo "/rulesets?per_page=100")) true))
                 rs   (when main (json/parse-string (gh! "api" (str "repos/" repo "/rulesets/" (:id main))) true))
-                n    (some #(when (= "pull_request" (:type %)) (get-in % [:parameters :required_approving_review_count]))
+                n    (some #(when (= "pull_request" (:type %))
+                              (get-in % [:parameters :required_approving_review_count]))
                            (:rules rs))
-                perm (str/trim (gh! "api" (str "repos/" repo "/collaborators/" login "/permission") "--jq" ".permission"))]
+                perm (str/trim (gh! "api"  (str "repos/" repo "/collaborators/" login "/permission")
+                                    "--jq" ".permission"))]
             (cond-> []
               (nil? rs)
-              (conj [:fail (str repo " has no main ruleset, so the agent's pull requests could merge without an Approve") fix])
+              (conj [:fail
+                     (str repo " has no main ruleset, so the agent's pull requests could merge without an Approve")
+                     fix])
 
               (and rs (not= "active" (:enforcement rs)))
               (conj [:fail (str repo ": the main ruleset is " (:enforcement rs) ", not active") fix])
@@ -736,13 +827,18 @@
               (conj [:fail (str repo ": the main ruleset requires no approving review") fix])
 
               (and rs (not= "never" (:current_user_can_bypass rs)))
-              (conj [:fail (str repo ": the agent " login " can bypass the main ruleset (" (:current_user_can_bypass rs) ")") fix])
+              (conj [:fail
+                     (str repo ": the agent " login " can bypass the main ruleset (" (:current_user_can_bypass rs) ")")
+                     fix])
 
               (not= "write" perm)
               (conj [:fail (str repo ": the agent's permission is " perm ", not write") fix])))
           (catch clojure.lang.ExceptionInfo e
-            [[:warn (str repo ": GitHub could not be read to check the main ruleset ("
-                         (first (str/split-lines (ex-message e))) ")")
+            [[:warn
+              (str repo
+                   ": GitHub could not be read to check the main ruleset ("
+                   (first (str/split-lines (ex-message e)))
+                   ")")
               "check the connection; the next session start checks it again"]]))))))
 
 
@@ -757,19 +853,21 @@
 
     :else
     (concat
-      (claude-md-problems ci)
-      (submodule-problems)
-      (for [item (managed-items cfg)
-            :when (not (and ci (:local item)))
-            :let [problem (check item)]
-            :when problem]
-        [:fail (str (label item) ": " problem) (str mount "/bin/kit init")])
-      (for [p (stale-paths (managed-items cfg))]
-        [:fail (str p ": left over from dev-kit, no longer managed") (str mount "/bin/kit init")])
-      (when-not ci (concat (tool-problems cfg) (claude-version-problems) (identity-problems cfg) (github-problems cfg))))))
+     (claude-md-problems ci)
+     (submodule-problems)
+     (for [item  (managed-items cfg)
+           :when (not (and ci (:local item)))
+           :let  [problem (check item)]
+           :when problem]
+       [:fail (str (label item) ": " problem) (str mount "/bin/kit init")])
+     (for [p (stale-paths (managed-items cfg))]
+       [:fail (str p ": left over from dev-kit, no longer managed") (str mount "/bin/kit init")])
+     (when-not ci
+       (concat (tool-problems cfg) (claude-version-problems) (identity-problems cfg) (github-problems cfg))))))
 
 
 ;; ------------------------------------------------------------------ init
+
 
 (defn write!
   [path content]
@@ -793,10 +891,10 @@
         (let [s (slurp-if f)
               {:keys [pairs stray]} (some-> s block-markers)]
           (cond
-            (nil? s) (write! f (str content "\n" (slurp (str (fs/path kit-dir "scaffold" "AGENTS.md")))))
-            (seq stray) (fail! problem)
+            (nil? s)       (write! f (str content "\n" (slurp (str (fs/path kit-dir "scaffold" "AGENTS.md")))))
+            (seq stray)    (fail! problem)
             (empty? pairs) (write! f (str content "\n\n" s))
-            :else (write! f (with-block s content pairs))))
+            :else          (write! f (with-block s content pairs))))
 
         :symlink
         (if (and (fs/exists? f) (not (fs/sym-link? f)))
@@ -810,21 +908,27 @@
           (cond
             (nil? m) (write! f (json-text policy-default))
             (= m ::unreadable) (fail! path problem)
-            :else (write! f (json-text (reduce (fn [m path] (assoc-in m path (get-in m path (get-in policy-default path))))
-                                               m [["workflow" "worktree_mode"] ["destructive_command_protection" "allow_paths"]])))))
+            :else (write! f
+                          (json-text
+                           (reduce (fn [m path] (assoc-in m path (get-in m path (get-in policy-default path))))
+                                   m
+                                   [["workflow" "worktree_mode"] ["destructive_command_protection" "allow_paths"]])))))
 
         :kondo
-        (let [s (slurp-if f)
-              m (some-> s kondo-config)
+        (let [s     (slurp-if f)
+              m     (some-> s kondo-config)
               entry (str (kondo-map-text) "\n")]
           (cond
-            (nil? s) (write! f (str ";; Project settings for clj-kondo. Shared strict linters come from dev-kit.\n" entry))
-            (nil? m) (write! f (str s (when-not (str/ends-with? s "\n") "\n") entry)) ; empty, or comments only
+            (nil? s)       (write! f
+                                   (str ";; Project settings for clj-kondo. Shared strict linters come from dev-kit.\n"
+                                        entry))
+            (nil? m)       (write! f (str s (when-not (str/ends-with? s "\n") "\n") entry)) ; empty, or comments only
             (not (map? m)) (fail! path problem)
-            :else (let [zloc (z/of-string s)]
-                    (write! f (z/root-string (if (z/get zloc :config-paths)
-                                               (z/edit (z/get zloc :config-paths) conj (kondo-entry))
-                                               (z/assoc zloc :config-paths [(kondo-entry)]))))))
+            :else          (let [zloc (z/of-string s)]
+                             (write! f
+                                     (z/root-string (if (z/get zloc :config-paths)
+                                                      (z/edit (z/get zloc :config-paths) conj (kondo-entry))
+                                                      (z/assoc zloc :config-paths [(kondo-entry)]))))))
           (when (check item) (fail! path "could not be updated; add" (kondo-entry) "to :config-paths by hand")))
 
         :git-config (sh "git" "config" "--local" git-key value))
@@ -845,7 +949,8 @@
   (let [settings (read-json-object (rel ".claude/settings.json"))
         ;; settings dev-kit wrote run its hook; kit.edn went missing, they are not the project's own
         settings (if (str/includes? (json/generate-string settings) ".claude/hooks/pretooluse.sh") {} settings)]
-    (when (= ::invalid settings) (fail! ".claude/settings.json is not a JSON object: fix it or move it away, then run kit init again"))
+    (when (= ::invalid settings)
+      (fail! ".claude/settings.json is not a JSON object: fix it or move it away, then run kit init again"))
     (cond-> {:repo     (or repo (origin-repo root) (fail! "no origin remote on GitHub: pass --repo owner/name"))
              :showcase showcase
              :modules  (into #{} (comp (remove str/blank?) (map keyword)) (some-> modules (str/split #",")))}
@@ -855,14 +960,24 @@
 (defn create-config!
   [{:keys [repo showcase modules claude-settings]}]
   (write! config-file
-          (str ";; dev-kit settings for this project, read by " mount "/bin/kit (see " mount "/README.md).\n"
-               "{:repo     " (pr-str repo) "\n"
-               " :showcase " (pr-str showcase) "\n"
+          (str ";; dev-kit settings for this project, read by "
+               mount
+               "/bin/kit (see "
+               mount
+               "/README.md).\n"
+               "{:repo     "
+               (pr-str repo)
+               "\n"
+               " :showcase "
+               (pr-str showcase)
+               "\n"
                " ;; #{:clojure} adds the shared zprint/clj-kondo setup and Clojure rules\n"
-               " :modules  " (pr-str modules)
+               " :modules  "
+               (pr-str modules)
                (when claude-settings
                  (str "\n ;; merged into the generated .claude/settings.json; it was the project's own before dev-kit\n"
-                      " :claude-settings " (pr-str claude-settings)))
+                      " :claude-settings "
+                      (pr-str claude-settings)))
                "}\n")))
 
 
@@ -876,13 +991,14 @@
         files (cond-> ["LICENSE"]
                 all? (into ["README.md" "adr/README.md" "docs/experiments/README.md"]))]
     (doall
-      (for [f files
-            :when (not (fs/exists? (rel f)))]
-        (do (write! (rel f) (reduce-kv str/replace (slurp (str (fs/path kit-dir "scaffold" f))) vars))
-            (str f " (created)"))))))
+     (for [f     files
+           :when (not (fs/exists? (rel f)))]
+       (do (write! (rel f) (reduce-kv str/replace (slurp (str (fs/path kit-dir "scaffold" f))) vars))
+           (str f " (created)"))))))
 
 
 ;; ------------------------------------------------------------------ commands
+
 
 (defn print-problems
   [ps quiet]
@@ -925,22 +1041,26 @@
   place on its own, so one that fails leaves the others done (#14)."
   [opts]
   (let [new     (when-not (fs/exists? config-file) (new-config opts))
-        cfg     (if new (merge-config (read-defaults) new) (read-config))
-        _       (some-> (seq (config-problems cfg)) refuse!)
+        cfg     (if new
+                  (merge-config (read-defaults) new)
+                  (read-config))
+        _ (some-> (seq (config-problems cfg)) refuse!)
         items   (managed-items cfg)
-        _       (some-> (seq (ownership-problems items)) refuse!)
-        _       (when new (create-config! new))
+        _ (some-> (seq (ownership-problems items)) refuse!)
+        _ (when new (create-config! new))
         stale   (stale-paths items)
-        _       (run! #(fs/delete-if-exists (rel %)) stale)
+        _ (run! #(fs/delete-if-exists (rel %)) stale)
         results (doall (for [item items]
                          (try [:ok (fix! item)]
-                              (catch clojure.lang.ExceptionInfo e [:fail (str (label item) ": " (ex-message e)) (label item)]))))
+                              (catch clojure.lang.ExceptionInfo e
+                                [:fail (str (label item) ": " (ex-message e)) (label item)]))))
         failed  (set (keep (fn [[l _ lbl]] (when (= l :fail) lbl)) results))
-        changes (concat (when (:claude-settings new)
-                          ["kit.edn :claude-settings (the project's .claude/settings.json, which is generated from now on)"])
-                        (scaffold! cfg (:scaffold opts))
-                        (keep (fn [[l c]] (when (= l :ok) c)) results)
-                        (map #(str % " (removed, no longer managed)") stale))]
+        changes (concat
+                 (when (:claude-settings new)
+                   ["kit.edn :claude-settings (the project's .claude/settings.json, which is generated from now on)"])
+                 (scaffold! cfg (:scaffold opts))
+                 (keep (fn [[l c]] (when (= l :ok) c)) results)
+                 (map #(str % " (removed, no longer managed)") stale))]
     (println "dev-kit init" (str "(" root ")"))
     (doseq [c changes] (println "  wrote" c))
     (doseq [[l msg] results :when (= l :fail)] (println (str "  FAIL  " msg)))
@@ -956,23 +1076,36 @@
   "Writes the agent identity into dir's settings.local.json: dev-kit itself, or a repository
   that does not mount dev-kit yet. Uses dir's kit.edn when it has one, else the defaults."
   [{:keys [dir]}]
-  (let [dir  (str (fs/normalize (fs/absolutize (or dir root))))
-        _    (when-not (and (fs/directory? dir) (= (str (fs/real-path dir)) (sh-in dir "git" "rev-parse" "--show-toplevel")))
-               (die dir "is not the root of a git repository"))
-        cfg  (merge (read-defaults) (some-> (slurp-if (str (fs/path dir "kit.edn"))) edn/read-string))
-        agent (or (:agent cfg) (die "no :agent in kit.edn or dev-kit's defaults; add :agent {:login \"<the agent's GitHub login>\" :email \"<its noreply email>\" :gh-config-dir \"~/.config/gh-agent\"} to kit.edn"))
-        env  (agent-env agent)
-        done (cond-> []
-               (ignored-problem dir local-settings)   (conj (do (ignore! dir local-settings) "ignored"))
-               (local-env-problem dir env)            (conj (do (write-local-env! dir env) "wrote")))]
+  (let
+    [dir (str (fs/normalize (fs/absolutize (or dir root))))
+     _ (when-not (and (fs/directory? dir) (= (str (fs/real-path dir)) (sh-in dir "git" "rev-parse" "--show-toplevel")))
+         (die dir "is not the root of a git repository"))
+     cfg (merge (read-defaults) (some-> (slurp-if (str (fs/path dir "kit.edn"))) edn/read-string))
+     agent
+     (or
+      (:agent cfg)
+      (die
+       "no :agent in kit.edn or dev-kit's defaults; add :agent {:login \"<the agent's GitHub login>\" :email \"<its noreply email>\" :gh-config-dir \"~/.config/gh-agent\"} to kit.edn"))
+     env (agent-env agent)
+     done (cond-> []
+            (ignored-problem dir local-settings) (conj (do (ignore! dir local-settings) "ignored"))
+            (local-env-problem dir env) (conj (do (write-local-env! dir env) "wrote")))]
     (println "dev-kit identity" (str "(" dir ")"))
     (println (if (seq done)
                (str "  " (str/join ", " done) " " local-settings " — restart Claude sessions here to use it")
                "  nothing to change"))
     (offer-login! agent)
     (when-let [problem (agent-login-problem agent)]
-      (println (str "  WARN  " problem "  →  in your own terminal: bb " (fs/path kit-dir "bin" "kit")
-                    " identity --dir " dir " — it logs " (:login agent) " in")))))
+      (println (str "  WARN  "
+                    problem
+                    "  →  in your own terminal: bb "
+                    (fs/path kit-dir "bin" "kit")
+                    " identity --dir "
+                    dir
+                    " — it logs "
+                    (:login agent)
+                    " in")))))
+
 
 ;; ------------------------------------------------------------------ gate (ADR-0002, #26, #21)
 ;; The pull request gate, in CI: `kit gate --branch … --pr …`. In order:
@@ -984,6 +1117,7 @@
 ;;   issue body and its `## Design` comments last changed, by someone with write access who is not
 ;;   the agent. An XS/S pull request stays within a size threshold.
 ;; The PreToolUse hook runs `kit gate --hook` before Edit/Write.
+
 
 (def size-threshold
   "Lines changed in an XS/S pull request, lock and kit-managed files not counted. Merged before the
@@ -1016,7 +1150,8 @@
   "The text under `## <heading>` up to the next heading or the ADR line, without the template's
   `<!-- … -->` hints; nil when the body has no such heading."
   [body heading]
-  (when-let [[_ text] (re-find (re-pattern (str "(?ms)^## " (java.util.regex.Pattern/quote heading)
+  (when-let [[_ text] (re-find (re-pattern (str "(?ms)^## "
+                                                (java.util.regex.Pattern/quote heading)
                                                 "[ \\t]*$(.*?)(?=^## |^ADR:|\\z)"))
                                body)]
     (str/trim (str/replace text #"(?s)<!--.*?-->" ""))))
@@ -1029,7 +1164,9 @@
   (if-let [n (branch-issue branch)]
     (cond-> []
       (not (re-matches (re-pattern (str "(?:" (str/join "|" commit-types) ")\\(GH-" n "\\): \\S.*")) (str title)))
-      (conj (str "the title '" title "' is not '<type>(GH-" n "): <summary>' with a type from " (str/join ", " commit-types)
+      (conj (str "the title '" title
+                 "' is not '<type>(GH-" n
+                 "): <summary>' with a type from " (str/join ", " commit-types)
                  ": " (if pr
                         (str "rename it: gh pr edit " pr " --title '<type>(GH-" n "): <summary>'")
                         "pass --type from that list, or fix the first line of the commit message")))
@@ -1038,13 +1175,17 @@
       (conj "the body has no 'ADR: none' or 'ADR: adr/NNNN-….md' line: add one (adr skill); a reason may follow it")
 
       body
-      (into (for [heading ["Review" "User-level test"]
-                  :let [text (section-text body heading)]
-                  :when (str/blank? text)]
-              (if (nil? text)
-                (str "the body has no line '## " heading "' (exactly that heading): add the section from the PR template")
-                (str "'## " heading "' is empty, or holds only the template's hint: fill in ## " heading
-                     "; CI reruns when the body is edited")))))
+      (into
+       (for [heading ["Review" "User-level test"]
+             :let    [text (section-text body heading)]
+             :when   (str/blank? text)]
+         (if (nil? text)
+           (str "the body has no line '## " heading "' (exactly that heading): add the section from the PR template")
+           (str "'## "
+                heading
+                "' is empty, or holds only the template's hint: fill in ## "
+                heading
+                "; CI reruns when the body is edited")))))
     [(str "branch '" branch "' is not <issue>-<slug>: open the issue with kit start and move the work to its branch")]))
 
 
@@ -1052,17 +1193,24 @@
   "Accepted ADRs, `adr/NNNN-*.md` that exist on the base, which the pull request's files change."
   [files]
   (for [{:strs [filename status previous_filename]} files
-        :let [f (if (= status "renamed") previous_filename filename)]
+        :let  [f (if (= status "renamed") previous_filename filename)]
         :when (and (#{"modified" "changed" "removed" "renamed"} status) (re-matches #"adr/\d{4}-[^/]+\.md" (str f)))]
-    (str f " was " status ", but accepted ADRs are immutable: revert it, and record the change as a new ADR with "
-         "'Supersedes: ADR-" (subs f 4 8) "' (adr skill)")))
+    (str f
+         " was "
+         status
+         ", but accepted ADRs are immutable: revert it, and record the change as a new ADR with "
+         "'Supersedes: ADR-"
+         (subs f 4 8)
+         "' (adr skill)")))
 
 
 (defn gh-failure
   "The exception for a failed gh call: gh's message, or, when it printed none, the command and its exit code (#97)."
   [args exit text]
   (ex-info (or (not-empty (str/trim text))
-               (str "gh " (str/join " " (take 2 args)) " failed with exit code " exit " and printed no message; "
+               (str "gh " (str/join " " (take 2 args))
+                    " failed with exit code " exit
+                    " and printed no message; "
                     "run the same call by hand to see why"))
            {}))
 
@@ -1077,17 +1225,21 @@
 
 
 (def issue-query
-  (str "query($o:String!,$n:String!,$i:Int!){repository(owner:$o,name:$n){issue(number:$i){"
-       "state lastEditedAt labels(first:50){nodes{name}}"
-       " timelineItems(itemTypes:[LABELED_EVENT],last:50){nodes{... on LabeledEvent{actor{login} label{name} createdAt}}}"
-       " comments(last:100){nodes{author{login} body createdAt lastEditedAt}}}}}"))
+  (str
+   "query($o:String!,$n:String!,$i:Int!){repository(owner:$o,name:$n){issue(number:$i){"
+   "state lastEditedAt labels(first:50){nodes{name}}"
+   " timelineItems(itemTypes:[LABELED_EVENT],last:50){nodes{... on LabeledEvent{actor{login} label{name} createdAt}}}"
+   " comments(last:100){nodes{author{login} body createdAt lastEditedAt}}}}}"))
 
 
 (defn fetch-issue
   [repo n]
   (let [[o r] (str/split repo #"/")]
-    (get-in (json/parse-string (gh! "api" "graphql" "-f" (str "query=" issue-query)
-                                    "-f" (str "o=" o) "-f" (str "n=" r) "-F" (str "i=" n)))
+    (get-in (json/parse-string (gh! "api" "graphql"
+                                    "-f"  (str "query=" issue-query)
+                                    "-f"  (str "o=" o)
+                                    "-f"  (str "n=" r)
+                                    "-F"  (str "i=" n)))
             ["data" "repository" "issue"])))
 
 
@@ -1119,7 +1271,8 @@
       (nil? event) [:fail (str "#" n " carries `design-approved` but GitHub shows no event for it" redo)]
 
       (= by agent)
-      [:fail (str "`design-approved` on #" n " was set by the agent (" by "); only a person with write access approves" redo)]
+      [:fail
+       (str "`design-approved` on #" n " was set by the agent (" by "); only a person with write access approves" redo)]
 
       (not (#{"write" "maintain" "admin"}
             (str/trim (gh! "api" (str "repos/" repo "/collaborators/" by "/permission") "--jq" ".permission"))))
@@ -1140,9 +1293,14 @@
   "The repository gate and retro act on: --repo, CI's, the current folder's origin, then the session's
   GHWF_REPO and kit.edn. The folder comes before the session (#81)."
   [{:keys [repo]} cfg]
-  (or repo (not-empty (System/getenv "GITHUB_REPOSITORY")) (origin-repo ".") (not-empty (System/getenv "GHWF_REPO"))
-      (:repo cfg)
-      (die "no repository: this folder has no GitHub origin and GHWF_REPO is not set; run inside the clone, or pass --repo owner/name")))
+  (or
+   repo
+   (not-empty (System/getenv "GITHUB_REPOSITORY"))
+   (origin-repo ".")
+   (not-empty (System/getenv "GHWF_REPO"))
+   (:repo cfg)
+   (die
+    "no repository: this folder has no GitHub origin and GHWF_REPO is not set; run inside the clone, or pass --repo owner/name")))
 
 
 (defn managed-paths
@@ -1156,8 +1314,11 @@
 (defn pr-files
   "Every file of the pull request, all pages: one JSON object per line from gh."
   [repo pr]
-  (->> (gh! "api" (str "repos/" repo "/pulls/" pr "/files?per_page=100") "--paginate"
-            "--jq" ".[] | {filename, status, previous_filename, additions, deletions}")
+  (->> (gh! "api"
+            (str "repos/" repo "/pulls/" pr "/files?per_page=100")
+            "--paginate"
+            "--jq"
+            ".[] | {filename, status, previous_filename, additions, deletions}")
        str/split-lines
        (remove str/blank?)
        (map json/parse-string)))
@@ -1177,8 +1338,13 @@
   (let [size (issue-size issue)]
     (cond
       (or (nil? issue) (get issue "error"))
-      [:fail (str "#" n " is not an issue of " repo (some->> (get issue "error") (str ": "))
-                  "; the branch must start with the number of the PR's issue")]
+      [:fail
+       (str "#"
+            n
+            " is not an issue of "
+            repo
+            (some->> (get issue "error") (str ": "))
+            "; the branch must start with the number of the PR's issue")]
 
       (not= "OPEN" (get issue "state"))
       [:fail (str "#" n " is closed: reopen it, or move the work to the branch of an open issue")]
@@ -1186,14 +1352,35 @@
       (#{"XS" "S"} size)
       (let [lines (pr-lines files (managed-paths cfg))]
         (if (<= lines size-threshold)
-          [:ok (str "size " size ": " lines " lines changed, within " size-threshold
-                    " (lock and kit-managed files not counted); G1 not required")]
-          [:fail (str "#" n " is size:" size " but the PR changes " lines " lines (over " size-threshold
-                      "): resize #" n " to size:M on the board and its label, post the design, and the owner approves it")]))
+          [:ok
+           (str "size "
+                size
+                ": "
+                lines
+                " lines changed, within "
+                size-threshold
+                " (lock and kit-managed files not counted); G1 not required")]
+          [:fail
+           (str "#"
+                n
+                " is size:"
+                size
+                " but the PR changes "
+                lines
+                " lines (over "
+                size-threshold
+                "): resize #"
+                n
+                " to size:M on the board and its label, post the design, and the owner approves it")]))
 
       :else
       (let [[l m] (g1-verdict repo n issue (get-in cfg [:agent :login]))]
-        [l (str (if size (str "size " size) "no size label, so M") "; " m)]))))
+        [l
+         (str (if size
+                (str "size " size)
+                "no size label, so M")
+              "; "
+              m)]))))
 
 
 (defn size-problems
@@ -1210,13 +1397,23 @@
         branch (or branch (not-empty (System/getenv "GITHUB_HEAD_REF")) (die "gate: pass --branch"))
         pr     (or pr (die "gate: pass --pr"))
         n      (branch-issue branch)
-        read!  #(try (%) (catch Exception e (report! [[:fail (str "could not read PR #" pr " of " repo " from GitHub ("
-                                                                  (ex-message e) "); rerun the job")]])))
-        {:strs [title body]} (read! #(json/parse-string (gh! "api" (str "repos/" repo "/pulls/" pr) "--jq" "{title, body}")))
+        read!  #(try (%)
+                     (catch Exception e
+                       (report! [[:fail
+                                  (str "could not read PR #"
+                                       pr
+                                       " of "
+                                       repo
+                                       " from GitHub ("
+                                       (ex-message e)
+                                       "); rerun the job")]])))
+        {:strs [title body]} (read! #(json/parse-string (gh! "api"  (str "repos/" repo "/pulls/" pr)
+                                                             "--jq" "{title, body}")))
         files  (read! #(doall (pr-files repo pr)))
         issue  (when n (try (fetch-issue repo n) (catch Exception e {"error" (ex-message e)})))]
     (report! (concat (for [p (concat (shape-problems branch title (str body) pr)
-                                     (size-problems issue (str body)) (adr-problems files))]
+                                     (size-problems issue (str body))
+                                     (adr-problems files))]
                        [:fail p])
                      (when n [(issue-verdict repo n issue files cfg)])))))
 
@@ -1245,14 +1442,20 @@
   real path of its nearest existing part (a symlink is followed, a directory not yet made is walked past), with
   :path the file's path from that root. nil when the file is in no repository."
   [file]
-  (let [full     (fs/absolutize file)
-        existing (first (filter fs/exists? (take-while some? (iterate fs/parent full))))
-        real     (when existing (fs/real-path existing))
-        dir      (when real (if (fs/directory? real) real (fs/parent real)))
-        [top branch] (when dir (some-> (sh-in dir "git" "rev-parse" "--show-toplevel" "--abbrev-ref" "HEAD") str/split-lines))]
+  (let [full         (fs/absolutize file)
+        existing     (first (filter fs/exists? (take-while some? (iterate fs/parent full))))
+        real         (when existing (fs/real-path existing))
+        dir          (when real
+                       (if (fs/directory? real)
+                         real
+                         (fs/parent real)))
+        [top branch] (when dir
+                       (some-> (sh-in dir "git" "rev-parse" "--show-toplevel" "--abbrev-ref" "HEAD") str/split-lines))]
     (when (and top branch)
-      {:top top :branch branch :dir (str dir)
-       :path (str (fs/relativize top (fs/path real (fs/relativize existing full))))})))
+      {:top    top
+       :branch branch
+       :dir    (str dir)
+       :path   (str (fs/relativize top (fs/path real (fs/relativize existing full))))})))
 
 
 (defn on-dev-kit?
@@ -1274,15 +1477,16 @@
   The repository asked is the file's own (its origin, else :repo of its kit.edn). Verdicts are cached for 10
   minutes in that repository; GitHub unreachable means refused."
   [opts]
-  (let [input  (try (json/parse-string (slurp *in*)) (catch Exception _ nil))
-        file   (or (get-in input ["tool_input" "file_path"]) (get-in input ["tool_input" "notebook_path"]))
+  (let [input (try (json/parse-string (slurp *in*)) (catch Exception _ nil))
+        file  (or (get-in input ["tool_input" "file_path"]) (get-in input ["tool_input" "notebook_path"]))
         {:keys [top branch path dir]} (edited-file-repo (or file (get input "cwd") "."))
-        path   (when file path)
-        n      (branch-issue branch)
-        deny!  (fn [reason]
-                 (println (json/generate-string
-                            {:hookSpecificOutput {:hookEventName "PreToolUse" :permissionDecision "deny"
-                                                  :permissionDecisionReason (str "Refused: " reason)}})))]
+        path  (when file path)
+        n     (branch-issue branch)
+        deny! (fn [reason]
+                (println (json/generate-string
+                          {:hookSpecificOutput {:hookEventName      "PreToolUse"
+                                                :permissionDecision "deny"
+                                                :permissionDecisionReason (str "Refused: " reason)}})))]
     (when (and n (on-dev-kit? top) (not (some-> path (str/starts-with? "adr/"))))
       (let [cfg   (try (repo-config top) (catch Exception _ nil))
             repo  (when cfg (or (origin-repo top) (:repo cfg)))
@@ -1294,7 +1498,9 @@
           (deny! (str "kit.edn of " top " cannot be read: fix it by hand, then retry"))
 
           (nil? repo)
-          (deny! (str "cannot tell which GitHub repository holds #" n " for " top ": set :repo in that repository's kit.edn, "
+          (deny! (str "cannot tell which GitHub repository holds #" n
+                      " for " top
+                      ": set :repo in that repository's kit.edn, "
                       "or add its GitHub origin (git remote add origin https://github.com/<owner>/<name>.git)"))
 
           :else
@@ -1308,21 +1514,24 @@
                          (spit cache (str now " " (name l) " " r))
                          [l r])
                        (catch Exception e
-                         [:error (str "could not check the design approval of #" n " (" (ex-message e)
-                                      "); retry, or check by hand: kit gate --g1 " n)])))]
+                         [:error
+                          (str "could not check the design approval of #" n
+                               " (" (ex-message e)
+                               "); retry, or check by hand: kit gate --g1 " n)])))]
             (when (not= level :ok) (deny! reason))))))))
 
 
 (defn gate!
   [{:keys [g1 hook shape] :as opts}]
   (cond
-    hook (gate-hook! opts)
+    hook  (gate-hook! opts)
     shape (gate-shape! opts)
-    g1   (report! [(try (gate-g1! g1 opts) (catch Exception e [:fail (ex-message e)]))])
+    g1    (report! [(try (gate-g1! g1 opts) (catch Exception e [:fail (ex-message e)]))])
     :else (gate-ci! opts)))
 
 
 ;; ------------------------------------------------------------------ github (#33)
+
 
 (defn gh-json [& args] (json/parse-string (apply gh! args) true))
 
@@ -1331,7 +1540,10 @@
   "gh api with a JSON body on stdin; stdout, or an exception carrying gh's message."
   [path method body]
   (let [{:keys [exit out err]} (p/sh {:continue true :in (json/generate-string body)}
-                                     "gh" "api" path "-X" method "--input" "-")]
+                                     "gh"
+                                     "api"     path
+                                     "-X"      method
+                                     "--input" "-")]
     (if (zero? exit)
       out
       (throw (gh-failure ["api" path "-X" method "--input" "-"] exit (str err out))))))
@@ -1345,20 +1557,22 @@
                          {:minimum_approvals 1 :file_patterns ["*" "**/*"] :reviewer {:id id :type "Team"}}))]
     (-> (json/parse-string (slurp (str (fs/path kit-dir "managed" "github" "ruleset.json"))) true)
         (assoc :bypass_actors [{:actor_type "User" :actor_id owner-id :bypass_mode "pull_request"}])
-        (update :rules (partial mapv
-                         (fn [r]
-                           (case (:type r)
-                             "pull_request" (cond-> r (seq reviewers) (assoc-in [:parameters :required_reviewers] reviewers))
-                             "required_status_checks" (assoc-in r [:parameters :required_status_checks 0 :context] check-name)
-                             r)))))))
+        (update :rules
+                (partial
+                 mapv
+                 (fn [r]
+                   (case (:type r)
+                     "pull_request" (cond-> r (seq reviewers) (assoc-in [:parameters :required_reviewers] reviewers))
+                     "required_status_checks" (assoc-in r [:parameters :required_status_checks 0 :context] check-name)
+                     r)))))))
 
 
 (defn- norm
   "A value for comparison: lists become sets, at every level, so order does not count."
   [v]
-  (cond (map? v) (update-vals v norm)
+  (cond (map? v)        (update-vals v norm)
         (sequential? v) (set (map norm v))
-        :else v))
+        :else           v))
 
 
 (defn ruleset-differences
@@ -1366,32 +1580,32 @@
   GitHub adds later is no difference."
   [want have]
   (let [by-type #(into {} (map (juxt :type identity)) (:rules %))
-        w (by-type want)
-        h (by-type have)
-        js json/generate-string
-        bypass #(set (map (fn [a] (select-keys a [:actor_type :actor_id :bypass_mode])) %))]
+        w       (by-type want)
+        h       (by-type have)
+        js      json/generate-string
+        bypass  #(set (map (fn [a] (select-keys a [:actor_type :actor_id :bypass_mode])) %))]
     (concat
-      (for [k [:enforcement :target :conditions]
-            :when (not= (norm (get want k)) (norm (get have k)))]
-        (str (name k) ": " (js (get have k)) " → " (js (get want k))))
-      (when (not= (bypass (:bypass_actors want)) (bypass (:bypass_actors have)))
-        [(str "bypass_actors: " (js (:bypass_actors have)) " → " (js (:bypass_actors want)))])
-      (for [t (sort (remove w (keys h)))] (str "rule " t ": not in dev-kit's ruleset, removed"))
-      (for [t (sort (remove h (keys w)))] (str "rule " t ": added"))
-      (for [[t r] (sort-by key w)
-            :when (h t)
-            [k v] (sort-by key (:parameters r))
-            :let [hv (get-in h [t :parameters k])]
-            :when (not= (norm v) (norm hv))]
-        (str "rule " t ", " (name k) ": " (js hv) " → " (js v)))
-      ;; A PUT replaces a rule's parameters: one dev-kit does not set falls back to GitHub's default. Shown when it
-      ;; holds something, e.g. a reviewer team, so it never goes unseen.
-      (for [[t r] (sort-by key w)
-            :when (h t)
-            [k hv] (sort-by key (get-in h [t :parameters]))
-            :when (and (not (contains? (:parameters r) k))
+     (for [k     [:enforcement :target :conditions]
+           :when (not= (norm (get want k)) (norm (get have k)))]
+       (str (name k) ": " (js (get have k)) " → " (js (get want k))))
+     (when (not= (bypass (:bypass_actors want)) (bypass (:bypass_actors have)))
+       [(str "bypass_actors: " (js (:bypass_actors have)) " → " (js (:bypass_actors want)))])
+     (for [t (sort (remove w (keys h)))] (str "rule " t ": not in dev-kit's ruleset, removed"))
+     (for [t (sort (remove h (keys w)))] (str "rule " t ": added"))
+     (for [[t r] (sort-by key w)
+           :when (h t)
+           [k v] (sort-by key (:parameters r))
+           :let  [hv (get-in h [t :parameters k])]
+           :when (not= (norm v) (norm hv))]
+       (str "rule " t ", " (name k) ": " (js hv) " → " (js v)))
+     ;; A PUT replaces a rule's parameters: one dev-kit does not set falls back to GitHub's default. Shown when it
+     ;; holds something, e.g. a reviewer team, so it never goes unseen.
+     (for [[t r]  (sort-by key w)
+           :when  (h t)
+           [k hv] (sort-by key (get-in h [t :parameters]))
+           :when  (and (not (contains? (:parameters r) k))
                        (not (or (nil? hv) (false? hv) (and (coll? hv) (empty? hv)))))]
-        (str "rule " t ", " (name k) ": " (js hv) " → not set by dev-kit, reset")))))
+       (str "rule " t ", " (name k) ": " (js hv) " → not set by dev-kit, reset")))))
 
 
 (defn yes-expr
@@ -1409,7 +1623,8 @@
   [yes]
   (or yes
       (and (interactive?)
-           (do (print "Apply these changes? [y/N] ") (flush)
+           (do (print "Apply these changes? [y/N] ")
+               (flush)
                (let [a (str/trim (or (read-line) ""))]
                  (or ((yes-expr) a)
                      (do (println (str "  the answer was «" a "», not yes (y, or the yes of this system's language)"))
@@ -1422,71 +1637,97 @@
   the agent. Run by the owner, in their own terminal: changing a ruleset takes an admin. Safe to run again."
   [{check-name :check :keys [yes] :as opts}]
   (when (System/getenv "CLAUDECODE")
-    (fail! "kit github changes the repository's settings, which an agent session never does: run it in your own terminal,"
-           "logged in to gh as the owner"))
-  (let [cfg     (gate-config)
-        repo    (gate-repo opts cfg)
+    (fail!
+     "kit github changes the repository's settings, which an agent session never does: run it in your own terminal,"
+     "logged in to gh as the owner"))
+  (let [cfg        (gate-config)
+        repo       (gate-repo opts cfg)
         first-line #(first (str/split-lines (str %)))
-        read!   (fn [what & args]
-                  (try (apply gh-json args)
-                       (catch clojure.lang.ExceptionInfo e
-                         (fail! what "could not be read (" (first-line (ex-message e)) "): check `gh auth status` and the"
-                                "connection, then run kit github again"))))
-        _       (when-not (get-in (read! repo "api" (str "repos/" repo)) [:permissions :admin])
-                  (fail! "gh is not logged in as an admin of" repo "(gh auth status): changing its ruleset takes an admin;"
-                         "run kit github as the owner"))
-        org     (first (str/split repo #"/"))
-        teams   (filter #(str/includes? % "/") (:owners cfg))
-        users   (remove #(str/includes? % "/") (:owners cfg))
-        _       (doseq [t teams :when (not (str/starts-with? t (str org "/")))]
-                  (fail! "the team" t "in :owners is not of" org "; a team gives access only to its own organization's"
-                         "repositories: fix :owners in kit.edn"))
-        sets    (read! (str "the rulesets of " repo) "api" (str "repos/" repo "/rulesets?per_page=100"))
-        mains   (filter #(= "main" (:name %)) sets)
-        _       (when (next mains)
-                  (fail! repo "has" (count mains) "rulesets named main (ids" (str (str/join ", " (map :id mains)) "):")
-                         "keep one in Settings → Rules → Rulesets, then run kit github again"))
-        _       (when (and (empty? mains) (seq sets))
-                  (fail! repo "has rulesets, none named main (" (str/join ", " (map :name sets)) "): rename the one that"
-                         "protects the default branch to main in Settings → Rules → Rulesets, or delete it, then run"
-                         "kit github again"))
-        main    (first mains)
-        have    (when main (read! "the main ruleset" "api" (str "repos/" repo "/rulesets/" (:id main))))
+        read!      (fn [what & args]
+                     (try (apply gh-json args)
+                          (catch clojure.lang.ExceptionInfo e
+                            (fail! what
+                                   "could not be read (" (first-line (ex-message e))
+                                   "): check `gh auth status` and the"
+                                   "connection, then run kit github again"))))
+        _ (when-not (get-in (read! repo "api" (str "repos/" repo)) [:permissions :admin])
+            (fail! "gh is not logged in as an admin of" repo
+                   "(gh auth status): changing its ruleset takes an admin;"
+                   "run kit github as the owner"))
+        org        (first (str/split repo #"/"))
+        teams      (filter #(str/includes? % "/") (:owners cfg))
+        users      (remove #(str/includes? % "/") (:owners cfg))
+        _ (doseq [t     teams
+                  :when (not (str/starts-with? t (str org "/")))]
+            (fail! "the team" t
+                   "in :owners is not of" org
+                   "; a team gives access only to its own organization's"
+                   "repositories: fix :owners in kit.edn"))
+        sets       (read! (str "the rulesets of " repo) "api" (str "repos/" repo "/rulesets?per_page=100"))
+        mains      (filter #(= "main" (:name %)) sets)
+        _ (when (next mains)
+            (fail! repo
+                   "has"
+                   (count mains)
+                   "rulesets named main (ids"
+                   (str (str/join ", " (map :id mains)) "):")
+                   "keep one in Settings → Rules → Rulesets, then run kit github again"))
+        _ (when (and (empty? mains) (seq sets))
+            (fail! repo
+                   "has rulesets, none named main ("
+                   (str/join ", " (map :name sets))
+                   "): rename the one that"
+                   "protects the default branch to main in Settings → Rules → Rulesets, or delete it, then run"
+                   "kit github again"))
+        main       (first mains)
+        have       (when main (read! "the main ruleset" "api" (str "repos/" repo "/rulesets/" (:id main))))
         ;; Without --check an existing ruleset keeps its check: dev-kit's own is selftest, a project's is checks.
         check-name (or check-name
-                    (some #(when (= "required_status_checks" (:type %))
-                             (get-in % [:parameters :required_status_checks 0 :context]))
-                          (:rules have))
-                    "checks")
-        _       (when-not (re-matches #"[A-Za-z0-9 ._/()-]+" check-name) (fail! "--check" (pr-str check-name) "is not a check name"))
-        me      (read! "your GitHub account" "api" "user")
-        want    (expected-ruleset check-name (for [t teams]
-                                          (:id (read! (str "the team " t " of :owners") "api"
-                                                      (str "orgs/" (str/replace t "/" "/teams/")))))
-                                  (:id me))
-        diffs   (when have (seq (ruleset-differences want have)))
-        perm    #(try (str/trim (gh! "api" (str "repos/" repo "/collaborators/" % "/permission") "--jq" ".permission"))
-                      (catch clojure.lang.ExceptionInfo _ "none"))
-        agent   (get-in cfg [:agent :login])
-        _       (when-let [p (some-> agent perm #{"admin" "maintain"})]
-                  (fail! "the agent" agent "has" p "on" repo ", more than Write: with it the agent could change the rules"
-                         "it works under. Lower it to Write in Settings → Collaborators and teams, then run kit github again"))
-        pending (set (keep #(get-in % [:invitee :login]) (read! "the invitations" "api" (str "repos/" repo "/invitations"))))
-        access  (into {} (map (juxt :slug :permission)) (read! "the teams" "api" (str "repos/" repo "/teams")))
-        plan    (concat
-                  (cond (nil? have) [["ruleset main: created" #(gh-send! (str "repos/" repo "/rulesets") "POST" want)]]
-                        diffs [[(str "ruleset main: updated\n" (str/join "\n" (map #(str "        " %) diffs)))
-                                #(gh-send! (str "repos/" repo "/rulesets/" (:id main)) "PUT" want)]])
-                  (for [u (distinct (remove nil? (cons agent users)))
-                        :let [p (perm u)]
-                        :when (and (not (#{"write" "maintain" "admin"} p)) (not (pending u)))]
-                    [(str u ": invited with Write (now " p ")")
-                     #(gh! "api" (str "repos/" repo "/collaborators/" u) "-X" "PUT" "-f" "permission=push")])
-                  (for [t teams
-                        :let [slug (second (str/split t #"/"))]
-                        :when (not (#{"push" "maintain" "admin"} (access slug)))]
-                    [(str "team " t ": given Write")
-                     #(gh! "api" (str "orgs/" org "/teams/" slug "/repos/" repo) "-X" "PUT" "-f" "permission=push")]))]
+                       (some #(when (= "required_status_checks" (:type %))
+                                (get-in % [:parameters :required_status_checks 0 :context]))
+                             (:rules have))
+                       "checks")
+        _ (when-not (re-matches #"[A-Za-z0-9 ._/()-]+" check-name)
+            (fail! "--check" (pr-str check-name) "is not a check name"))
+        me         (read! "your GitHub account" "api" "user")
+        want       (expected-ruleset check-name
+                                     (for [t teams]
+                                       (:id (read! (str "the team " t " of :owners")
+                                                   "api"
+                                                   (str "orgs/" (str/replace t "/" "/teams/")))))
+                                     (:id me))
+        diffs      (when have (seq (ruleset-differences want have)))
+        perm       #(try (str/trim (gh! "api"  (str "repos/" repo "/collaborators/" % "/permission")
+                                        "--jq" ".permission"))
+                         (catch clojure.lang.ExceptionInfo _ "none"))
+        agent      (get-in cfg [:agent :login])
+        _ (when-let [p (some-> agent perm #{"admin" "maintain"})]
+            (fail!
+             "the agent" agent
+             "has"       p
+             "on"        repo
+             ", more than Write: with it the agent could change the rules"
+             "it works under. Lower it to Write in Settings → Collaborators and teams, then run kit github again"))
+        pending    (set (keep #(get-in % [:invitee :login])
+                              (read! "the invitations" "api" (str "repos/" repo "/invitations"))))
+        access     (into {} (map (juxt :slug :permission)) (read! "the teams" "api" (str "repos/" repo "/teams")))
+        plan       (concat
+                    (cond (nil? have) [["ruleset main: created"
+                                        #(gh-send! (str "repos/" repo "/rulesets") "POST" want)]]
+                          diffs       [[(str "ruleset main: updated\n" (str/join "\n" (map #(str "        " %) diffs)))
+                                        #(gh-send! (str "repos/" repo "/rulesets/" (:id main)) "PUT" want)]])
+                    (for [u     (distinct (remove nil? (cons agent users)))
+                          :let  [p (perm u)]
+                          :when (and (not (#{"write" "maintain" "admin"} p)) (not (pending u)))]
+                      [(str u ": invited with Write (now " p ")")
+                       #(gh! "api" (str "repos/" repo "/collaborators/" u) "-X" "PUT" "-f" "permission=push")])
+                    (for [t     teams
+                          :let  [slug (second (str/split t #"/"))]
+                          :when (not (#{"push" "maintain" "admin"} (access slug)))]
+                      [(str "team " t ": given Write")
+                       #(gh! "api" (str "orgs/" org "/teams/" slug "/repos/" repo)
+                             "-X"  "PUT"
+                             "-f"  "permission=push")]))]
     (println (str "dev-kit github (" repo ")"))
     (if (empty? plan)
       (println "  nothing to change")
@@ -1496,66 +1737,80 @@
           (doseq [[what act] plan]
             (try (act)
                  (catch clojure.lang.ExceptionInfo e
-                   (fail! (str "\"" (first-line what) "\" failed (" (first-line (ex-message e)) "); the steps above it"
+                   (fail! (str "\"" (first-line what)
+                               "\" failed (" (first-line (ex-message e))
+                               "); the steps above it"
                                " are done. Run kit github again: it is safe to repeat")))))))
     (when agent
-      (let [dir   (expand-home (get-in cfg [:agent :gh-config-dir]))
+      (let [dir      (expand-home (get-in cfg [:agent :gh-config-dir]))
             ;; As the agent: its own config, never a token the shell may hold.
-            as-agent #(apply p/sh {:continue true
-                                   :env (-> (into {} (System/getenv)) (dissoc "GH_TOKEN" "GITHUB_TOKEN")
+            as-agent #(apply p/sh
+                             {:continue true
+                              :env      (-> (into {} (System/getenv))
+                                            (dissoc "GH_TOKEN" "GITHUB_TOKEN")
                                             (assoc "GH_CONFIG_DIR" dir))}
-                             "gh" "api" %&)
-            by-hand (str "accept it at https://github.com/" repo "/invitations signed in as " agent
-                         ", or run kit github again")]
+                             "gh"
+                             "api"
+                             %&)
+            by-hand  (str "accept it at https://github.com/"
+                          repo
+                          "/invitations signed in as "
+                          agent
+                          ", or run kit github again")]
         (if (= agent (gh-login dir))
           (let [why #(or (not-empty (first-line (:err %))) (str "gh exit " (:exit %)))
                 {:keys [exit out] :as r} (as-agent "user/repository_invitations")]
             (when-not (zero? exit)
               (fail! (str "the agent's invitations could not be read (" (why r) "):") by-hand))
-            (doseq [inv (json/parse-string (or (not-empty out) "[]") true)
+            (doseq [inv   (json/parse-string (or (not-empty out) "[]") true)
                     :when (= repo (get-in inv [:repository :full_name]))]
               (let [r (as-agent (str "user/repository_invitations/" (:id inv)) "-X" "PATCH")]
                 (when-not (zero? (:exit r))
                   (fail! "accepting the invitation as" agent (str "failed (" (why r) "):") by-hand))
                 (println (str "  " agent ": accepted the invitation, as the agent")))))
           (when (or (pending agent) (some #(str/starts-with? (first %) (str agent ":")) plan))
-            (println (str "  " agent " has an invitation to accept: in this terminal, " mount
+            (println (str "  "
+                          agent
+                          " has an invitation to accept: in this terminal, "
+                          mount
                           "/bin/kit init logs the agent in; then run kit github again"))))))))
 
 
 (defn parse-args
   [args]
-  (loop [[a & more] args opts {}]
+  (loop [[a & more] args
+         opts       {}]
     (case a
-      nil opts
-      "--repo" (recur (rest more) (assoc opts :repo (first more)))
-      "--showcase" (recur (rest more) (assoc opts :showcase (first more)))
-      "--modules" (recur (rest more) (assoc opts :modules (first more)))
-      "--scaffold" (recur more (assoc opts :scaffold true))
-      "--ci" (recur more (assoc opts :ci true))
-      "--quiet" (recur more (assoc opts :quiet true))
-      "--dir" (recur (rest more) (assoc opts :dir (first more)))
-      "--local" (recur more (assoc opts :local true))
-      "--branch" (recur (rest more) (assoc opts :branch (first more)))
-      "--pr" (recur (rest more) (assoc opts :pr (first more)))
-      "--g1" (recur (rest more) (assoc opts :g1 (first more)))
-      "--hook" (recur more (assoc opts :hook true))
-      "--shape" (recur more (assoc opts :shape true))
-      "--title" (recur (rest more) (assoc opts :title (first more)))
+      nil           opts
+      "--repo"      (recur (rest more) (assoc opts :repo (first more)))
+      "--showcase"  (recur (rest more) (assoc opts :showcase (first more)))
+      "--modules"   (recur (rest more) (assoc opts :modules (first more)))
+      "--scaffold"  (recur more (assoc opts :scaffold true))
+      "--ci"        (recur more (assoc opts :ci true))
+      "--quiet"     (recur more (assoc opts :quiet true))
+      "--dir"       (recur (rest more) (assoc opts :dir (first more)))
+      "--local"     (recur more (assoc opts :local true))
+      "--branch"    (recur (rest more) (assoc opts :branch (first more)))
+      "--pr"        (recur (rest more) (assoc opts :pr (first more)))
+      "--g1"        (recur (rest more) (assoc opts :g1 (first more)))
+      "--hook"      (recur more (assoc opts :hook true))
+      "--shape"     (recur more (assoc opts :shape true))
+      "--title"     (recur (rest more) (assoc opts :title (first more)))
       "--body-file" (recur (rest more) (assoc opts :body-file (first more)))
-      "--now" (recur (rest more) (assoc opts :now (first more)))
-      "--messages" (recur more (assoc opts :messages true))
-      "--check" (recur (rest more) (assoc opts :check (first more)))
-      "--yes" (recur more (assoc opts :yes true))
+      "--now"       (recur (rest more) (assoc opts :now (first more)))
+      "--messages"  (recur more (assoc opts :messages true))
+      "--check"     (recur (rest more) (assoc opts :check (first more)))
+      "--yes"       (recur more (assoc opts :yes true))
       (die "unknown option" a))))
 
 
 (defn usage
   []
-  (println (str/join "\n" (->> (str/split-lines (slurp *file*))
-                               (drop 1)
-                               (take-while #(str/starts-with? % ";;"))
-                               (map #(str/replace % #"^;; ?" ""))))))
+  (println (str/join "\n"
+                     (->> (str/split-lines (slurp *file*))
+                          (drop 1)
+                          (take-while #(str/starts-with? % ";;"))
+                          (map #(str/replace % #"^;; ?" ""))))))
 
 
 (defn hook!
@@ -1568,8 +1823,10 @@
     (when-not (fs/exists? entry)
       (die "hook:" entry "is missing; run" (str mount "/bin/kit init") "to write it"))
     (let [state (str (fs/create-temp-dir))
-          input (json/generate-string {:tool_name "Bash" :tool_input {:command command}
-                                       :hook_event_name "PreToolUse" :cwd (System/getProperty "user.dir")})
+          input (json/generate-string {:tool_name  "Bash"
+                                       :tool_input {:command command}
+                                       :hook_event_name "PreToolUse"
+                                       :cwd        (System/getProperty "user.dir")})
           env   (assoc (into {} (System/getenv)) "CLAUDE_PROJECT_DIR" (str root) "XDG_STATE_HOME" state)
           {:keys [exit out err]} (try (p/sh {:in input :env env :continue true} "bash" entry)
                                       (finally (fs/delete-tree state)))
@@ -1611,20 +1868,23 @@
     (die "dev-kit must be mounted at <project>/" mount "; " (str root) "is not a git repository root"))
   (try
     (case cmd
-      "init" (let [opts (parse-args args)] (if (:local opts) (init-local) (init opts)))
-      "doctor" (doctor (parse-args args))
-      "modules" (let [cfg (read-config)]
-                  (println (str "clojure=" (boolean (some-> cfg clojure?))))
-                  (println (str "user_test=" (boolean (get-in cfg [:user-test :run]))))
-                  (println (str "user_test_artifacts=" (or (get-in cfg [:user-test :artifacts]) ""))))
+      "init"      (let [opts (parse-args args)]
+                    (if (:local opts)
+                      (init-local)
+                      (init opts)))
+      "doctor"    (doctor (parse-args args))
+      "modules"   (let [cfg (read-config)]
+                    (println (str "clojure=" (boolean (some-> cfg clojure?))))
+                    (println (str "user_test=" (boolean (get-in cfg [:user-test :run]))))
+                    (println (str "user_test_artifacts=" (or (get-in cfg [:user-test :artifacts]) ""))))
       "user-test" (user-test!)
-      "identity" (identity! (parse-args args))
-      "github" (github! (parse-args args))
-      "gate" (gate! (parse-args args))
-      "retro" (retro! args)
-      "hook" (hook! args)
+      "identity"  (identity! (parse-args args))
+      "github"    (github! (parse-args args))
+      "gate"      (gate! (parse-args args))
+      "retro"     (retro! args)
+      "hook"      (hook! args)
       ("start" "finish" "release" "merge" "checks" "board") (flow! cmd args)
-      nil (usage)
+      nil         (usage)
       (do (usage) (die "unknown command" cmd)))
     (catch clojure.lang.ExceptionInfo e
       (if (:kit/problem (ex-data e))
