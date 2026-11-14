@@ -151,13 +151,11 @@ component is an M: stop, resize it and ask for G1.
   fails. A step that checks a hook says "ask the agent, without `!`": a `!` command bypasses the
   hooks (site#18). The report gives the link.
 - A PR that changes the same lines as one already waiting is opened with `kit finish --hold`: the
-  workflow leaves it a draft. When the earlier PR has merged, run `kit release`: it removes the
-  label, marks the PR ready and turns on auto-merge, and refuses, naming the check, while a
-  required check is not green (#81, #27).
-- When the checks have passed and the PR is still a draft without `hold` (a required check comes
-  from outside the CI workflow, or CI was renamed or disabled), run `kit release`: it refuses
-  unless the required checks are green. If the workflow is not on `main` yet the PR opened ready,
-  and `kit merge` follows the Approve.
+  workflow leaves it a draft. `kit release` frees it when the earlier PR has merged, and frees a
+  draft that is still a draft without `hold` after the checks passed (a required check from outside
+  the CI workflow, or CI renamed or disabled): it removes the label, marks the PR ready, turns on
+  auto-merge, and refuses, naming the check, while a required check is not green (#81, #27). If the
+  workflow is not on `main` yet the PR opened ready, and `kit merge` follows the Approve.
 
 ## 10. Review round and merge on the owner's Approve
 

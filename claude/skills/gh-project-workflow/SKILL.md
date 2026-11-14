@@ -75,10 +75,6 @@ From the issue branch:
 - `--hold` opens the PR with the label `hold` (made when missing), or adds it to the open PR: the
   workflow leaves such a draft alone. It needs the workflow on `main`; where it is missing, it
   stops before the commit and says to run without `--hold`.
-- Then watch the checks in the background, as the failure alarm (`run_in_background`):
-  `gh pr checks <pr> --watch --fail-fast --required`. Ask the owner for the Approve once the PR
-  is ready (a held PR is not ready until `kit release`). A watch started right after a push can
-  end before the head's checks exist: `kit checks` (#109) closes that gap.
 
 ## Release a held PR
 
@@ -86,11 +82,9 @@ From the issue branch:
 .shared/bin/kit release            # from the held PR's branch; or --pr <number>
 ```
 
-When the PR it waited for has merged: removes `hold`, marks the PR ready, turns on auto-merge. It
-also frees a draft that was never held but that nothing marked ready (a required check from
-outside the CI workflow, CI renamed or disabled), once its checks have passed.
-While a required check on the head is not green it changes nothing and names the check; run it
-again when that check has passed.
+Removes `hold`, marks the PR ready, turns on auto-merge; for a draft that was never held but that
+nothing marked ready, the same. While a required check on the head is not green it changes nothing
+and names the check; run it again when that check has passed.
 
 ## Merge after approval
 
