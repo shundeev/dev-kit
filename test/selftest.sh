@@ -1396,13 +1396,15 @@ contains "  names the section" "Review" "$LAST"
 pr "feat(GH-26): add x" "${GOOD_BODY/\#\# User-level test/\#\# Testing}"; expect_exit 1 "pr gate: a missing User-level test section fails" gate --branch 26-x --pr 7
 contains "  names the section" "User-level test" "$LAST"
 # #117: an M PR (or one whose issue has no size label) says how much the simplify pass removed
-for t in '["design-approved","size:M"]||1' '["design-approved","size:M"]|Size: 400 -> 300|1' '["design-approved","size:M"]|same|0' \
-         '["design-approved"]||1' '["size:S"]||0'; do
+for t in '["design-approved","size:M"]||1' '["design-approved","size:M"]|Size: M → M after simplify|1' \
+         '["design-approved","size:M"]|Size: 164 → 164 lines after simplify|0' '["design-approved","size:M"]|Size: 164 -> 150|0' \
+         '["design-approved","size:M"]|same|0' '["design-approved"]||1' '["size:S"]||0'; do
   IFS='|' read -r labels line want <<<"$t"; issue "$labels" the-owner $T1 null $T0 null
   case "$line" in same) body="$GOOD_BODY";; *) body="${GOOD_BODY/$SIZE_LINE/$line}";; esac
   pr "feat(GH-26): add x" "$body"; expect_exit "$want" "pr gate: $labels, Size line '${line:-none}': exit $want" gate --branch 26-x --pr 7
 done
-contains "  a missing line is named with its fix" "Size: <before> → <after> after simplify" "$(pr "feat(GH-26): add x" "${GOOD_BODY/$SIZE_LINE/}"; issue '["size:M"]' the-owner $T1 null $T0 null; gate --branch 26-x --pr 7 2>&1)"
+contains "  a line without numbers is named with its fix" "Size: 164 → 150 lines after simplify" "$(pr "feat(GH-26): add x" "${GOOD_BODY/$SIZE_LINE/Size: M → M after simplify}"; issue '["size:M"]' the-owner $T1 null $T0 null; gate --branch 26-x --pr 7 2>&1)"
+contains "  a missing line is named with its fix" "Size: 164 → 150 lines after simplify" "$(pr "feat(GH-26): add x" "${GOOD_BODY/$SIZE_LINE/}"; issue '["size:M"]' the-owner $T1 null $T0 null; gate --branch 26-x --pr 7 2>&1)"
 issue '["size:S"]' the-owner $T1 null $T0 null; pr "feat(GH-26): add x"
 pr "add x" "no sections"; expect_exit 1 "pr gate: every problem is listed, not only the first" gate --branch 26-x --pr 7
 [ "$(grep -c '  FAIL  ' <<<"$LAST")" -ge 4 ] && ok "  four problems, four lines" || bad "  lines" "$LAST"

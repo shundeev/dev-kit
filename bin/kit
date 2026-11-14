@@ -1384,10 +1384,10 @@
 
 
 (defn size-problems
-  "An M pull request (an issue that is not XS or S) states its size before and after the simplify pass (#117)."
+  "An M pull request (an issue that is not XS or S) states its size in numbers before and after the simplify pass (#117, #132)."
   [issue body]
-  (when (and (not (#{"XS" "S"} (issue-size issue))) (not (re-find #"(?m)^Size: +\S.* → \S.* after simplify\b" body)))
-    ["an M pull request has no 'Size: <before> → <after> after simplify' line: add it, e.g. 'Size: 420 → 310 lines after simplify'"]))
+  (when (and (not (#{"XS" "S"} (issue-size issue))) (not (re-find #"(?m)^Size: +\d+ +(?:→|->) +\d+\b" body)))
+    ["an M pull request has no 'Size: <lines before> → <lines after>' line with numbers: add it, e.g. 'Size: 164 → 150 lines after simplify'"]))
 
 
 (defn rule-problems
