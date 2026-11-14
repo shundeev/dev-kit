@@ -28,14 +28,39 @@ fi
 config=$(sed -n '/^{/,$p' .zprint.edn)
 mode=${1:-}
 
+# Babashka scripts have no extension (`bin/kit`): a tracked file with no extension whose first line is a
+# `#!…bb` shebang is Clojure too (sed, not head: head would close the pipe on cat under pipefail). The shebang is read from the index when checking the index.
+babashka_scripts() {
+    local ref=$1 file
+    shift
+    for file in "$@"; do
+        case "${file##*/}" in *.*) continue ;; esac
+        if [ -n "${ref}" ]; then
+            git show ":${file}" 2> /dev/null
+        else
+            cat "${file}" 2> /dev/null
+        fi | sed -n 1p | grep -q '^#!.*[ /]bb$' && echo "${file}"
+    done
+    return 0
+}
+
 case "${mode}" in
-    --staged) mapfile -t files < <(git diff --cached --name-only --diff-filter=ACMR -- '*.clj' '*.cljs' '*.cljc') ;;
-    '' | --write) mapfile -t files < <(git ls-files -- '*.clj' '*.cljs' '*.cljc') ;;
+    --staged)
+        mapfile -t files < <(git diff --cached --name-only --diff-filter=ACMR -- '*.clj' '*.cljs' '*.cljc')
+        mapfile -t extensionless < <(git diff --cached --name-only --diff-filter=ACMR)
+        mapfile -t scripts < <(babashka_scripts index "${extensionless[@]}")
+        ;;
+    '' | --write)
+        mapfile -t files < <(git ls-files -- '*.clj' '*.cljs' '*.cljc')
+        mapfile -t extensionless < <(git ls-files)
+        mapfile -t scripts < <(babashka_scripts '' "${extensionless[@]}")
+        ;;
     *)
         echo "usage: $0 [--staged | --write]" >&2
         exit 2
         ;;
 esac
+files+=("${scripts[@]}")
 
 [ "${#files[@]}" -eq 0 ] && exit 0
 
