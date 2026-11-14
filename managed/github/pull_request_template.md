@@ -14,7 +14,8 @@
 
 ## Review
 <!-- Self-review and simplification: what was looked at, what changed because of it.
-     For M: the lines of code before and after the simplify pass. -->
+     For M: the lines of code before and after the simplify pass, as the line
+     `Size: <before> → <after> after simplify` (CI checks it). -->
 
 ## User-level test
 <!-- The check as a person would run it: the steps and what they showed. -->

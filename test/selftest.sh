@@ -582,6 +582,39 @@ for c in "git push --force-with-lease origin main" "git push --force-with-lease 
   contains "a forced push to a non-issue branch is refused: $c" '"permissionDecision":"deny"' "$(guard "$c")"
 done
 contains "  the refusal says which branches may be rewritten" "<number>-<slug>" "$(guard 'git push --force-with-lease origin main')"
+# #117: a forced push to a branch whose open PR holds an approval is refused: the rewrite dismisses it.
+AG="$WORK/approved"; mkdir -p "$AG"; : > "$AG/log"
+aguard() { jq -nc --arg c "$1" '{tool_input:{command:$c}}' \
+  | PATH="$KIT/test/fake-gh:$PATH" FAKE_GH_DIR="$AG" FAKE_GH_LOG="$AG/log" bb .shared/claude/hooks/guard.clj; }
+echo APPROVED > "$AG/pr-list"
+for c in "git push --force origin 42-some-task" "git push -f origin 42-some-task" "git push -fu origin 42-some-task" \
+         "git push --force-with-lease origin 42-some-task" "git push origin +42-some-task" "git push origin +HEAD:42-some-task" \
+         "cd $FB && git push --force-with-lease"; do
+  contains "an approved PR's branch is not force-pushed: $c" '"permissionDecision":"deny"' "$(aguard "$c")"
+done
+contains "  the refusal names the way out" "gh pr update-branch" "$(aguard 'git push -f origin 42-some-task')"
+# gh runs in the push's directory, not the session's: the repository acted on is judged (#99), whatever GHWF_REPO says
+CG="$WORK/cwdgh"; mkdir -p "$CG"
+printf '#!/bin/sh\n[ "$(pwd -P)" = "%s" ] && echo APPROVED || exit 1\n' "$(cd "$FB" && pwd -P)" > "$CG/gh"; chmod +x "$CG/gh"
+cguard() { jq -nc --arg c "$1" '{tool_input:{command:$c}}' | PATH="$CG:$PATH" GHWF_REPO=u473t8/session-repo bb .shared/claude/hooks/guard.clj; }
+for c in "cd $FB && git push -f origin 42-some-task" "git -C $FB push -f origin 42-some-task"; do
+  contains "gh asks the pushed repository: $c" '"permissionDecision":"deny"' "$(cguard "$c")"
+done
+out="$(cguard 'git push -f origin 42-some-task')"
+if [ -z "$out" ]; then ok "a push from the session's own folder does not borrow another repository's answer"; else bad "judged" "$out"; fi
+for state in REVIEW_REQUIRED CHANGES_REQUESTED ""; do
+  echo "$state" > "$AG/pr-list"
+  out="$(aguard 'git push --force-with-lease origin 42-some-task')"
+  if [ -z "$out" ]; then ok "a PR with review '${state:-none}': the forced push passes"; else bad "judged with review '$state'" "$out"; fi
+done
+echo APPROVED > "$AG/pr-list"; touch "$AG/silent-fail"
+out="$(aguard 'git push -f origin 42-some-task')"
+if [ -z "$out" ]; then ok "GitHub cannot be read: the forced push passes"; else bad "refused offline" "$out"; fi
+rm "$AG/silent-fail"; : > "$AG/log"
+for c in "git push origin 42-some-task" "git push -u origin 42-some-task" "git status"; do
+  out="$(aguard "$c")"; if [ -z "$out" ]; then ok "an unforced command passes: $c"; else bad "judged: $c" "$out"; fi
+done
+if [ -s "$AG/log" ]; then bad "an unforced command read GitHub" "$(cat "$AG/log")"; else ok "  and reads nothing from GitHub"; fi
 # #64: in zsh an unquoted $v stays one word, so a command that needs it split is refused.
 zguard() { jq -nc --arg c "$1" '{tool_input:{command:$c}}' | SHELL=/bin/zsh bb .shared/claude/hooks/guard.clj; }
 for c in 'set -- $t' 'env $E bash x.sh' 'for n in $list; do echo $n; done' '$cmd --flag' 'for n in ${list}; do :; done'; do
@@ -722,6 +755,23 @@ jq -e '.workflow.worktree_mode == true and .secret_protection.deny_paths == ["x.
 jq '.workflow.worktree_mode = false' .cc-safety-net/policy.json > "$WORK/p.json" && cp "$WORK/p.json" .cc-safety-net/policy.json
 bb $kit init >/dev/null 2>&1
 jq -e '.workflow.worktree_mode == false' .cc-safety-net/policy.json >/dev/null && ok "init leaves a project's own choice of worktree_mode" || bad "init overrode worktree_mode"
+cp "$WORK/policy.json" .cc-safety-net/policy.json; bb $kit init >/dev/null 2>&1
+# #117: an agent removes its own scratch folders under ~/.claude/jobs, and nothing else (~ is expanded, $HOME is not)
+mkdir -p "$HOME/.claude/jobs/x" "$HOME/Projects/y"
+jq -e '.destructive_command_protection.allow_paths == ["~/.claude/jobs"]' .cc-safety-net/policy.json >/dev/null \
+  && ok "init allows rm -rf under ~/.claude/jobs in the policy" || bad "no allow_paths in the policy" "$(cat .cc-safety-net/policy.json)"
+passes "rm -rf inside ~/.claude/jobs/<x> is allowed" "$(call Bash '{"command":"rm -rf ~/.claude/jobs/x"}')"
+refused "rm -rf outside that folder stays refused" "$(call Bash '{"command":"rm -rf ~/Projects/y"}')"
+jq 'del(.destructive_command_protection)' .cc-safety-net/policy.json > "$WORK/p.json" && cp "$WORK/p.json" .cc-safety-net/policy.json
+expect_exit 1 "doctor names a policy without allow_paths" bb $kit doctor --local
+contains "  naming the key" "allow_paths" "$LAST"
+bb $kit init >/dev/null 2>&1
+jq -e '.destructive_command_protection.allow_paths == ["~/.claude/jobs"] and .workflow.worktree_mode == true' .cc-safety-net/policy.json >/dev/null \
+  && ok "init adds allow_paths to an existing policy" || bad "init missed allow_paths" "$(cat .cc-safety-net/policy.json)"
+jq '.destructive_command_protection.allow_paths = ["~/mine"]' .cc-safety-net/policy.json > "$WORK/p.json" && cp "$WORK/p.json" .cc-safety-net/policy.json
+bb $kit init >/dev/null 2>&1
+jq -e '.destructive_command_protection.allow_paths == ["~/mine"]' .cc-safety-net/policy.json >/dev/null \
+  && ok "init keeps a project's own allow_paths" || bad "init overrode allow_paths" "$(cat .cc-safety-net/policy.json)"
 cp "$WORK/policy.json" .cc-safety-net/policy.json; bb $kit init >/dev/null 2>&1
 oldnode="$WORK/oldnode"; mkdir -p "$oldnode"; printf '#!/bin/sh\necho v18.19.0\n' > "$oldnode/node"; chmod +x "$oldnode/node"
 out="$(PATH="$oldnode:$PATH" call Bash '{"command":"git status"}')"; code=$?
@@ -914,6 +964,13 @@ expect_exit 0 "finish --no-commit without --type" flow finish --no-commit --summ
 contains "  the PR type comes from the branch's first commit" "Subject: fix(GH-13): correct a typo" "$LAST"
 expect_exit 0 "finish --no-commit with --type" flow finish --no-commit --type docs --summary "correct a typo" --pr-body-file "$WORK/body.md"
 contains "  an explicit --type wins" "Subject: docs(GH-13): correct a typo" "$LAST"
+# #117: a leading docs commit does not set the type of a branch that also changes something else
+for t in "14-mixed|docs(GH-14): explain it,refactor(GH-14): reshape it|refactor(GH-14)" "15-docs|docs(GH-15): explain it,docs(GH-15): more|docs(GH-15)"; do
+  IFS='|' read -r b msgs want <<<"$t"; git switch -q -c "$b" main
+  IFS=, read -ra ms <<<"$msgs"; for m in "${ms[@]}"; do echo "$m" >> f; git commit -qam "$m"; done
+  expect_exit 0 "finish: type of $b" flow finish --no-commit --summary "x" --pr-body-file "$WORK/body.md"
+  contains "  the first commit that is not docs, else the first: $want" "Subject: $want: x" "$LAST"
+done
 : > "$FAKE_GH_LOG"
 expect_exit 0 "finish: --owner \"\" leaves the board alone" flow finish --no-commit --summary "x" --owner "" --pr-body-file "$WORK/body.md"
 grep -q '^project' "$FAKE_GH_LOG" && bad "  the board was touched" "$(grep '^project' "$FAKE_GH_LOG")" || ok "  no board call"
@@ -975,6 +1032,7 @@ script_views "OPEN APPROVED BEHIND" "OPEN APPROVED BEHIND" "MERGED APPROVED CLEA
 expect_exit 0 "merge: works while main is checked out in another worktree" flow merge
 calls="$(grep -E '^pr (update-branch|merge)' "$FAKE_GH_LOG" | cut -d' ' -f1,2 | tr '\n' ',')"
 [ "$calls" = "pr update-branch,pr merge," ] && ok "  a branch behind main is updated, then merged" || bad "  update and merge order" "$calls"
+contains "  points to the retrospective" "Next: post the retrospective: kit retro 12" "$LAST"
 git rev-parse -q --verify refs/heads/12-landing >/dev/null && bad "  local branch left" || ok "  local branch deleted"
 git ls-remote --exit-code --heads origin 12-landing >/dev/null 2>&1 && bad "  remote branch left" || ok "  remote branch deleted"
 [ "$(git rev-parse --abbrev-ref HEAD)" = HEAD ] && ok "  this worktree detached on the base" || bad "  not detached"
@@ -1218,7 +1276,8 @@ issue() {
 # pr-files.json holds what `gh api --paginate …/files --jq '.[]'` prints: one file per line.
 files() { jq -nc --argjson n "$1" '{filename: "src/a.clj", status: "modified", additions: $n, deletions: 0},
                                    {filename: "package-lock.json", status: "modified", additions: 900, deletions: 0}' > "$G/pr-files.json"; }
-GOOD_BODY=$'## What changed\n- x\n\n## Review\n<!-- hint -->\nSelf-review: fine.\n\n## User-level test\nRan it.\n\nADR: none'
+SIZE_LINE='Size: 400 → 300 lines after simplify'
+GOOD_BODY=$'## What changed\n- x\nSize: 400 → 300 lines after simplify\n\n## Review\n<!-- hint -->\nSelf-review: fine.\n\n## User-level test\nRan it.\n\nADR: none'
 # pr <title> [body]: what `gh api …/pulls/<n>` prints after the gate's filter
 pr() { jq -nc --arg t "$1" --arg b "${2-$GOOD_BODY}" '{title: $t, body: $b}' > "$G/pr.json"; }
 echo admin > "$G/perm-the-owner"; echo write > "$G/perm-$default_login"; files 50; pr "feat(GH-26): add x"
@@ -1270,6 +1329,15 @@ pr "feat(GH-26): add x" "${GOOD_BODY/Self-review: fine./}"; expect_exit 1 "pr ga
 contains "  names the section" "Review" "$LAST"
 pr "feat(GH-26): add x" "${GOOD_BODY/\#\# User-level test/\#\# Testing}"; expect_exit 1 "pr gate: a missing User-level test section fails" gate --branch 26-x --pr 7
 contains "  names the section" "User-level test" "$LAST"
+# #117: an M PR (or one whose issue has no size label) says how much the simplify pass removed
+for t in '["design-approved","size:M"]||1' '["design-approved","size:M"]|Size: 400 -> 300|1' '["design-approved","size:M"]|same|0' \
+         '["design-approved"]||1' '["size:S"]||0'; do
+  IFS='|' read -r labels line want <<<"$t"; issue "$labels" the-owner $T1 null $T0 null
+  case "$line" in same) body="$GOOD_BODY";; *) body="${GOOD_BODY/$SIZE_LINE/$line}";; esac
+  pr "feat(GH-26): add x" "$body"; expect_exit "$want" "pr gate: $labels, Size line '${line:-none}': exit $want" gate --branch 26-x --pr 7
+done
+contains "  a missing line is named with its fix" "Size: <before> → <after> after simplify" "$(pr "feat(GH-26): add x" "${GOOD_BODY/$SIZE_LINE/}"; issue '["size:M"]' the-owner $T1 null $T0 null; gate --branch 26-x --pr 7 2>&1)"
+issue '["size:S"]' the-owner $T1 null $T0 null; pr "feat(GH-26): add x"
 pr "add x" "no sections"; expect_exit 1 "pr gate: every problem is listed, not only the first" gate --branch 26-x --pr 7
 [ "$(grep -c '  FAIL  ' <<<"$LAST")" -ge 4 ] && ok "  four problems, four lines" || bad "  lines" "$LAST"
 pr "feat(GH-26): add x"

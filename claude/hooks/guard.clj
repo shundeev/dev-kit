@@ -46,7 +46,8 @@
                   (str/includes? bare "DELIVERY_GUARD")
                   (str/includes? bare "sleep")
                   (str/includes? bare "kit")
-                  (and (str/includes? bare "git") (str/includes? bare "force"))
+                  ;; a forced push: --force…, -f (alone or among short flags), +refspec (#117)
+                  (and (str/includes? bare "git") (re-find #"force| -[A-Za-z]*f| \+\S" bare))
                   (and zsh? (str/includes? bare "$")))
       (System/exit 0))))
 
@@ -286,16 +287,23 @@
   (System/exit 0))
 
 
-(defn- sh-out [& args]
-  (let [{:keys [exit out]} (apply p/sh {:continue true} args)]
+(defn- sh-in
+  "A command's stdout in directory dir (nil: this one), or nil when it fails."
+  [dir & args]
+  (let [{:keys [exit out]} (apply p/sh (cond-> {:continue true} dir (assoc :dir dir)) args)]
     (when (zero? exit) (str/trim out))))
+
+
+(defn- sh-out [& args] (apply sh-in nil args))
 
 
 (def issue-branch? #(boolean (re-matches #"[0-9].*-.*" (or % ""))))
 
 
 (defn push-refused
-  "The branch a forced push would rewrite when that is not a <number>-<slug> branch (#38), else nil."
+  "[branch why] for a forced push the rules refuse, else nil: :branch when it is not an issue branch (#38), :approved
+  when its open PR holds an approval, which a rewrite dismisses (#117). Only a forced push to an issue branch reads
+  GitHub, in the push's repository (#99); when it cannot be read the push passes."
   [dir args]
   (let [[dir args] (loop [dir dir [a & more] args]
                      (cond (= a "-C") (recur (first more) (rest more))
@@ -306,14 +314,17 @@
                            (and a (str/starts-with? a "-")) (recur dir more)
                            :else [dir nil]))]
     (when args
-      (let [force (some #(or (#{"--force-with-lease" "--force-if-includes"} %)
-                             (str/starts-with? % "--force-with-lease=")) args)
-            refs  (rest (remove #(str/starts-with? % "-") args))]
+      (let [refs  (rest (remove #(str/starts-with? % "-") args))
+            force (or (some #(re-matches #"--force(-with-lease(=.*)?|-if-includes)?|-[A-Za-z]*f[A-Za-z]*" %) args)
+                      (some #(str/starts-with? % "+") refs))]
         (when force
           (some (fn [r]
                   (let [dst (-> r (str/replace #"^\+" "") (str/replace #"^.*:" "") (str/replace #"^refs/heads/" ""))
                         dst (if (= dst "HEAD") (or (sh-out "git" "-C" dir "symbolic-ref" "--short" "-q" "HEAD") "HEAD") dst)]
-                    (when-not (issue-branch? dst) (if (str/blank? dst) "the branches matching on both sides" dst))))
+                    (cond (not (issue-branch? dst)) [(if (str/blank? dst) "the branches matching on both sides" dst) :branch]
+                          (= "APPROVED" (sh-in dir "gh" "pr" "list" "--head" dst "--state" "open" "--json" "reviewDecision"
+                                               "--jq" ".[0].reviewDecision // empty"))
+                          [dst :approved])))
                 (if (seq refs) refs ["HEAD"])))))))
 
 
@@ -398,11 +409,16 @@
             (recur more wd)
             (do
               (when (= head "git")
-                (when-let [target (push-refused wd (rest ts))]
-                  (decide "deny" (str "Refused: a forced push to '" target "', which is not an issue branch. The agent rewrites
+                (when-let [[target why] (push-refused wd (rest ts))]
+                  (decide "deny" (if (= why :approved)
+                                   (str "Refused: a forced push to '" target "', whose pull request holds an approval. A rewrite dismisses it, and the owner must approve again (#117).
+
+Bring the branch up to date without rewriting it: gh pr update-branch (a merge keeps the approval).
+If the branch must be rewritten, say so to the owner first.")
+                                   (str "Refused: a forced push to '" target "', which is not an issue branch. The agent rewrites
 only its own issue branches, named <number>-<slug> (#38); main is also protected on the server.
 
-Push without rewriting, or rewrite the issue branch the work is on."))))
+Push without rewriting, or rewrite the issue branch the work is on.")))))
               (when (and (not background?) (waits? ts))
                 (decide "deny" "Refused: this command waits. Run it as a background command (run_in_background); you are woken when it exits (#109)."))
               (when (and zsh? (zsh-split? ws))
