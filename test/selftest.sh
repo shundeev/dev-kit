@@ -1341,6 +1341,16 @@ issue '["size:S"]' the-owner $T1 null $T0 null; pr "feat(GH-26): add x"
 pr "add x" "no sections"; expect_exit 1 "pr gate: every problem is listed, not only the first" gate --branch 26-x --pr 7
 [ "$(grep -c '  FAIL  ' <<<"$LAST")" -ge 4 ] && ok "  four problems, four lines" || bad "  lines" "$LAST"
 pr "feat(GH-26): add x"
+# #117: a rule line removed from rules/shared.md is quoted in the PR body, next to its replacement
+rule() { jq -nc --arg p "$1" '{filename: "rules/shared.md", status: "modified", additions: 1, deletions: 1, patch: $p}' > "$G/pr-files.json"; }
+OLD='old rule that wraps'
+rule $'@@ -1,3 +1,3 @@\n keep\n-old rule\n-  that wraps\n+new rule\n'
+pr "feat(GH-26): add x"; expect_exit 1 "pr gate: a removed rule line that the body does not quote fails" gate --branch 26-x --pr 7
+contains "  names the line and the fix" "'old rule'. Quote the old line in the PR body, next to the new one" "$LAST"
+pr "feat(GH-26): add x" "${GOOD_BODY/- x/- was: $OLD, now: new rule}"
+expect_exit 0 "pr gate: the removed line quoted on one line passes (a wrapped line)" gate --branch 26-x --pr 7
+rule $'@@ -1,2 +1,3 @@\n keep\n+new rule\n'
+pr "feat(GH-26): add x"; expect_exit 0 "pr gate: a rule line only added passes" gate --branch 26-x --pr 7
 adr() { jq -nc --arg s "$1" --arg f "${2:-adr/0001-a.md}" --arg p "${3:-}" \
   '{filename: $f, status: $s, additions: 1, deletions: 1} + (if $p == "" then {} else {previous_filename: $p} end)' > "$G/pr-files.json"; }
 adr added adr/0005-new.md; expect_exit 0 "pr gate: a new ADR passes" gate --branch 26-x --pr 7

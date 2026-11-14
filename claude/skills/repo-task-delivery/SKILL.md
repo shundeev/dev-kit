@@ -102,6 +102,8 @@ component is an M: stop, resize it and ask for G1.
   failure back and see the check fail (#40).
 - A rewrite of working code is checked by running the old and the new on the same inputs before
   the PR (#95).
+- A brief for a change to a hook or a gate names ADR-0006: it judges the repository of what is acted on,
+  never the session's folder (#117).
 - A loop that splits words runs through `bash -c`, not in the session's zsh (#55, #33).
 - Stay inside the issue's scope. A finding outside it is a comment on the issue, or a new issue
   when a PR could close it.
@@ -127,6 +129,8 @@ component is an M: stop, resize it and ask for G1.
 - When `kit.edn` declares `:user-test`, run `.shared/bin/kit user-test`: CI runs the same command
   on every pull request. A test that checks the change and is not there yet is added to it.
 - A dev-kit change to CI is tested through a project PR pinned to the dev-kit branch (#27).
+- A change to a hook is tested live in a project: its user-level test includes that project's dev-kit
+  update and a check in a live session (#109).
 - The evidence goes under **User-level test**. A check that can only run after the merge
   (GitHub reads templates and rulesets from `main`) is named as such, and its result goes on
   the issue.

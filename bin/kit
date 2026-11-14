@@ -1318,7 +1318,7 @@
             (str "repos/" repo "/pulls/" pr "/files?per_page=100")
             "--paginate"
             "--jq"
-            ".[] | {filename, status, previous_filename, additions, deletions}")
+            ".[] | {filename, status, previous_filename, additions, deletions, patch}")
        str/split-lines
        (remove str/blank?)
        (map json/parse-string)))
@@ -1390,6 +1390,24 @@
     ["an M pull request has no 'Size: <before> → <after> after simplify' line: add it, e.g. 'Size: 420 → 310 lines after simplify'"]))
 
 
+(defn rule-problems
+  "Each non-blank line the pull request removes from `rules/shared.md` that its body does not quote (#117).
+  Whitespace is normalised, since a rule line may wrap."
+  [files body]
+  (let [norm    #(str/join " " (str/split (str/trim (str %)) #"\\s+"))
+        quoted  (norm body)
+        removed (for [f     files
+                      :when (= "rules/shared.md" (get f "filename"))
+                      l     (str/split-lines (str (get f "patch")))
+                      :when (re-matches #"-.*\S.*" l)]
+                  (norm (subs l 1)))]
+    (for [l     removed
+          :when (not (str/includes? quoted l))]
+      (str "the pull request removes this rule line from rules/shared.md and its body does not quote it: '"
+           l
+           "'. Quote the old line in the PR body, next to the new one"))))
+
+
 (defn gate-ci!
   [{:keys [branch pr] :as opts}]
   (let [cfg    (gate-config)
@@ -1413,7 +1431,8 @@
         issue  (when n (try (fetch-issue repo n) (catch Exception e {"error" (ex-message e)})))]
     (report! (concat (for [p (concat (shape-problems branch title (str body) pr)
                                      (size-problems issue (str body))
-                                     (adr-problems files))]
+                                     (adr-problems files)
+                                     (rule-problems files (str body)))]
                        [:fail p])
                      (when n [(issue-verdict repo n issue files cfg)])))))
 
