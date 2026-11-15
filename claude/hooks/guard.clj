@@ -44,12 +44,12 @@
 
 ;; Claude Code sets run_in_background on a Bash call (https://code.claude.com/docs/en/hooks, the tool_input of a
 ;; PreToolUse call); only `true` counts, a missing or false field is a foreground call (#109).
-;; The Monitor tool runs its command in the background and feeds each output line back to the agent
-;; (https://code.claude.com/docs/en/tools-reference#monitor-tool); its input has no run_in_background, so its
-;; tool_name says it (#109). Every other rule still judges its command as it judges Bash's.
+;; A Monitor call reaches the Bash-matched hooks, the guard among them, as a Bash call: tool_name "Bash", tool_input
+;; {command, description}, no run_in_background (seen live in the friction log, #109). Nothing in the guard's input tells
+;; it from a Bash call, so there is no Monitor clause here; the waiting rule below tells them apart by the command.
 (def background?
   (when (map? input)
-    (or (= "Monitor" (get input "tool_name")) (true? (get-in input ["tool_input" "run_in_background"])))))
+    (true? (get-in input ["tool_input" "run_in_background"]))))
 
 
 (when (and run? (map? input))
@@ -491,16 +491,36 @@
         (and (= (get ts 0) "for") (= (get ts 2) "in") (v? (get ws 3))))))
 
 
+(defn loop-marked
+  "The statements, each marked (metadata :in-loop) when it sits in a loop body: from a statement that starts with
+  `do` to the matching `done`."
+  [statements]
+  (loop [[st & more] statements
+         depth       0
+         out         []]
+    (if-not st
+      out
+      (let [w     (:t (first st))
+            depth (cond (= w "done") (max 0 (dec depth))
+                        (= w "do")   (inc depth)
+                        :else        depth)]
+        (recur more depth (conj out (with-meta st {:in-loop (pos? depth)})))))))
+
+
 (defn waits?
-  "A statement that waits: sleep, gh pr checks --watch, gh run watch, kit merge, kit checks (#109)."
-  [ts]
+  "A statement that waits for one event while the call is not in the background (#109): gh pr checks --watch,
+  gh run watch, kit merge, kit checks (also inside a loop), and a sleep that is not in a loop body. A sleep in a loop
+  is a poll loop, Monitor's normal use. The guard cannot tell a foreground `until …; do sleep 1; done` from a Monitor
+  poll loop (a Monitor call arrives as a Bash call), so that one passes; the skill's rule in words covers it: a wait
+  for one event runs as a background Bash command."
+  [ts in-loop?]
   (let [[head sub verb] ts
         base #(some-> % (str/replace #".*/" ""))
         kit  (if (= (base head) "bb")
                (rest ts)
                ts)]
     (boolean
-     (or (= (base head) "sleep")
+     (or (and (= (base head) "sleep") (not in-loop?))
          (and (= (base head) "gh") (= sub "run") (= verb "watch"))
          (and (= (base head) "gh") (= sub "pr") (= verb "checks") (some #{"--watch" "-w"} ts))
          (and (= (base (first kit)) "kit") (#{"merge" "checks"} (second kit)))))))
@@ -556,7 +576,7 @@ If the branch must be rewritten, say so to the owner first.")
 only its own issue branches, named <number>-<slug> (#38); main is also protected on the server.
 
 Push without rewriting, or rewrite the issue branch the work is on.")))))
-              (when (and (not background?) (waits? ts))
+              (when (and (not background?) (waits? ts (:in-loop (meta st))))
                 (decide
                  "deny"
                  "Refused: this command waits. Run it as a background command (run_in_background); you are woken when it exits (#109)."))
@@ -650,7 +670,7 @@ If the owner asked for the raw command, re-run it prefixed with DELIVERY_GUARD=o
   (try
     (when (instance? Exception input) (throw input)) ; the hook's input was no JSON
     (when (and (string? command) (not (str/blank? command)))
-      (judge (expand (tokenize command))))
+      (judge (loop-marked (expand (tokenize command)))))
     (catch Exception e
       (binding [*out* *err*]
         (println "Refused: the delivery guard failed, so the command is held back (ADR-0001, rule 3):"
