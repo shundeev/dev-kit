@@ -131,6 +131,9 @@ component is an M: stop, resize it and ask for G1.
 - A dev-kit change to CI is tested through a project PR pinned to the dev-kit branch (#27).
 - A change to a hook is tested live in a project: its user-level test includes that project's dev-kit
   update and a check in a live session (#109).
+- A change to a hook is tested before its PR goes to the owner with inputs captured from the real hook: the
+  friction log's HookDenied lines hold what the project's entry hook received, and the catch-all recorder's own
+  PreToolUse lines may show another tool name (Claude Code hands a Monitor call to the Bash hooks as a Bash call, #109).
 - The evidence goes under **User-level test**. A check that can only run after the merge
   (GitHub reads templates and rulesets from `main`) is named as such, and its result goes on
   the issue.
