@@ -146,8 +146,8 @@ component is an M: stop, resize it and ask for G1.
   for a review only when the workflow marks it ready, once every required check passed, and it
   turns auto-merge on then (ADR-0007, #104). A failed check leaves the draft and tells the owners
   nothing. Elsewhere the PR opens ready, with auto-merge on, as before.
-- Never sleep or use `--watch` in the foreground; the guard refuses it (#109). A long wait runs as a background command, and
-  the agent is woken when it exits. After `kit finish`, the failure alarm is
+- Never sleep or use `--watch` in the foreground; the guard refuses it (#109). A wait for one event runs as a background Bash command, and
+  the agent is woken when it exits; a stream of events may use Monitor with a poll loop. After `kit finish`, the failure alarm is
   `kit checks` in the background (exit codes and reasons: `gh-project-workflow`). A failure wakes
   you: fix it and push. A pass means the PR became ready, unless the PR is held.
 - Ask the owner for the Approve once the PR is ready, not before: a draft is not yet asked for.

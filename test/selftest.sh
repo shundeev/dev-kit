@@ -759,13 +759,21 @@ for c in "${waitcalls[@]}"; do
   passes "  and runs in the background: $c" "$(call Bash "$(jq -nc --arg c "$c" '{command:$c, run_in_background:true}')")"
 done
 contains "  the refusal says what to do" "run_in_background" "$(call Bash '{"command":"sleep 5"}')"
-# #109, third PR: Monitor runs its command in the background by nature (tool_input: command, description, timeout_ms; no
-# run_in_background). Its command is still judged by every other rule.
-for c in 'sleep 5' 'gh pr checks 1 --watch'; do
-  passes "Monitor waiting is background, not refused: $c" "$(call Monitor "$(jq -nc --arg c "$c" '{command:$c, description:"wait", timeout_ms:600000}')")"
+# #109, fourth PR: a Monitor call reaches the guard as a Bash call (tool_name Bash, {command, description}, no
+# run_in_background), so the rule judges the command: a wait for one event is refused, a poll loop is not.
+single=('sleep 5' 'sleep 2; echo done' 'gh pr checks 1 --watch' 'while true; do gh pr checks 1 --watch; done' 'kit merge'
+        'while true; do kit checks; sleep 5; done')
+for c in "${single[@]}"; do
+  refused "a wait for one event, as Monitor sends it, is refused: $c" "$(call Bash "$(jq -nc --arg c "$c" '{command:$c, description:"wait"}')")"
+  passes "  with run_in_background it is allowed: $c" "$(call Bash "$(jq -nc --arg c "$c" '{command:$c, description:"wait", run_in_background:true}')")"
 done
-refused "Bash without run_in_background and with sleep 5 is still refused" "$(call Bash '{"command":"sleep 5","description":"x"}')"
-refused "Monitor running a command another rule refuses is still refused" "$(call Monitor '{"command":"gh issue create --title x","description":"x","timeout_ms":1000}')"
+polls=('while true; do gh api x || true; sleep 30; done' 'until grep -q X f; do sleep 1; done' 'for i in 1 2 3; do echo $i; sleep 1; done')
+for c in "${polls[@]}"; do
+  passes "a poll loop, as Monitor sends it, is allowed: $c" "$(call Bash "$(jq -nc --arg c "$c" '{command:$c, description:"poll"}')")"
+  passes "  and in the background: $c" "$(call Bash "$(jq -nc --arg c "$c" '{command:$c, description:"poll", run_in_background:true}')")"
+done
+refused "a sleep after a loop is outside it and refused" "$(call Bash '{"command":"for i in 1 2; do echo $i; done; sleep 3"}')"
+refused "Bash running a command another rule refuses is still refused" "$(call Bash '{"command":"gh issue create --title x","description":"x"}')"
 for c in 'echo "kit merge later"' 'echo kit checks' 'git merge main' 'gh pr checks 12' 'echo sleep'; do
   passes "a word like merge or sleep in text or another command is not refused: $c" "$(call Bash "$(jq -nc --arg c "$c" '{command:$c}')")"
 done
