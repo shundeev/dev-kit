@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# After a `git pull` or merge:
+# a project's own checkout brings .shared to the commit the project pins, and says so in one line (#135). Installed
+# by `kit init` through core.hooksPath .shared/githooks. It acts only where .shared/bin/kit exists and the checkout
+# is not itself a submodule: dev-kit itself and the submodule do nothing. It never fails the git command; `kit sync
+# --after-git` holds the logic (ADR-0005).
+root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+[ -e "$root/.shared/bin/kit" ] && [ -z "$(git rev-parse --show-superproject-working-tree 2>/dev/null)" ] || exit 0
+command -v bb >/dev/null 2>&1 || exit 0
+cd "$root" && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE bb .shared/bin/kit sync --after-git || true
+exit 0

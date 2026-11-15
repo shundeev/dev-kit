@@ -2120,6 +2120,70 @@ contains "  says nothing was changed" "nothing was changed" "$LAST"
 [ "$(git -C "$SY/co" rev-parse HEAD)" = "$LOCAL" ] && ok "  the local commit is untouched" || bad "  local base moved"
 unset GIT_ALLOW_PROTOCOL
 
+# #135: a plain git pull, a rebase or a branch switch brings .shared to the commit the project pins, through the
+# post-merge, post-rewrite and post-checkout hooks. Scratch project and dev-kit, local bare remotes.
+echo "- git hooks bring .shared up to date"
+HK="$WORK/hk"
+mkdir -p "$HK/kitsrc" && (cd "$KIT" && tar --exclude=.git -cf - .) | (cd "$HK/kitsrc" && tar -xf -)
+git -C "$HK/kitsrc" init -q -b main && git -C "$HK/kitsrc" add -A && git -C "$HK/kitsrc" commit -qm "dev-kit v1"
+git clone -q --bare "$HK/kitsrc" "$HK/kit.git"
+git init -q --bare -b main "$HK/origin.git"
+git init -q -b main "$HK/co"
+git -C "$HK/co" remote add origin "$HK/origin.git"
+export GIT_ALLOW_PROTOCOL=file
+git -C "$HK/co" -c protocol.file.allow=always submodule add -q "$HK/kit.git" .shared
+(cd "$HK/co" && bb .shared/bin/kit init --repo u473t8/kit-hk --showcase Site >/dev/null 2>&1 && git add -A && git commit -qm "chore: project" && git push -q -u origin main)
+git clone -q "$HK/kit.git" "$HK/kitw"
+git clone -q "$HK/origin.git" "$HK/pw" && git -C "$HK/pw" -c protocol.file.allow=always submodule update -q --init
+hk_bump() { # a new dev-kit commit, and a project commit pinning it, on the branch the writer clone is on
+  echo "$1" > "$HK/kitw/F$1" && git -C "$HK/kitw" add -A && git -C "$HK/kitw" commit -qm "dev-kit $1" && git -C "$HK/kitw" push -q origin main
+  git -C "$HK/pw/.shared" fetch -q origin && git -C "$HK/pw/.shared" checkout -q origin/main
+  git -C "$HK/pw" add .shared && git -C "$HK/pw" commit -qm "chore: update dev-kit $1" && git -C "$HK/pw" push -q origin HEAD
+}
+hk_short() { git -C "$HK/$1" rev-parse --short HEAD; }
+hk_pull() { (cd "$HK/co" && git "$@" 2>&1); }
+OLD="$(hk_short co/.shared)"
+hk_bump a; NEW="$(hk_short kitw)"
+expect_exit 0 "git pull: a pull that moves the pin" hk_pull pull -q
+[ "$(hk_short co/.shared)" = "$NEW" ] && ok "  .shared is at the new pin" || bad "  .shared not moved" "$LAST"
+contains "  prints the one line" "dev-kit $OLD → $NEW; doctor: " "$LAST"
+git -C "$HK/co" commit -q --allow-empty -m "local work"
+OLD="$NEW"; hk_bump b; NEW="$(hk_short kitw)"
+expect_exit 0 "git pull --rebase: a rebase that moves the pin" hk_pull pull -q --rebase
+[ "$(hk_short co/.shared)" = "$NEW" ] && ok "  .shared is at the new pin" || bad "  .shared not moved" "$LAST"
+contains "  prints the one line" "dev-kit $OLD → $NEW; doctor: " "$LAST"
+OLD="$NEW"; git -C "$HK/pw" switch -q -c other; hk_bump c; NEW="$(hk_short kitw)"; git -C "$HK/pw" switch -q main
+git -C "$HK/co" fetch -q origin
+expect_exit 0 "git switch: a branch with another pin" hk_pull switch -q other
+[ "$(hk_short co/.shared)" = "$NEW" ] && ok "  .shared is at the new pin" || bad "  .shared not moved" "$LAST"
+contains "  prints the one line" "dev-kit $OLD → $NEW; doctor: " "$LAST"
+expect_exit 0 "git switch back: the pin moves back" hk_pull switch -q main
+[ "$(hk_short co/.shared)" = "$OLD" ] && ok "  .shared is at the old pin" || bad "  .shared not moved back" "$LAST"
+git -C "$HK/pw" commit -q --allow-empty -m "remote only" && git -C "$HK/pw" push -q origin main
+expect_exit 0 "git pull: a pull that moves no pin" hk_pull pull -q --rebase
+[ -z "$LAST" ] && ok "  stays silent" || bad "  printed" "$LAST"
+OLD="$(hk_short co/.shared)"; hk_bump d; NEW="$(hk_short kitw)"
+echo local >> "$HK/co/.shared/README.md"
+expect_exit 0 "git pull: a local change in .shared does not fail the pull" hk_pull pull -q --rebase
+contains "  names the file in the way" "README.md" "$LAST"
+contains "  names the fix" "git -C .shared status" "$LAST"
+[ "$(hk_short co/.shared)" = "$OLD" ] && grep -q '^local$' "$HK/co/.shared/README.md" \
+  && ok "  .shared and the change are untouched" || bad "  .shared was moved or the change lost"
+git -C "$HK/co/.shared" checkout -q README.md
+for h in post-merge post-rewrite post-checkout; do
+  expect_exit 0 "$h: in dev-kit itself it does nothing" bash -c "cd '$DK' && githooks/$h x 1 1"
+  [ -z "$LAST" ] && ok "  and prints nothing" || bad "  printed" "$LAST"
+  expect_exit 0 "$h: inside the submodule it does nothing" bash -c "cd '$HK/co/.shared' && githooks/$h x 1 1"
+  [ -z "$LAST" ] && ok "  and prints nothing" || bad "  printed" "$LAST"
+done
+git -C "$HK/co" config --local --unset pull.ff
+(cd "$HK/co" && bb .shared/bin/kit init >/dev/null 2>&1)
+[ "$(git -C "$HK/co" config --local pull.ff)" = only ] && ok "kit init sets pull.ff=only" || bad "pull.ff not set"
+git -C "$HK/co" config --local --unset pull.ff
+expect_exit 1 "doctor catches a missing pull.ff" bash -c "cd '$HK/co' && bb .shared/bin/kit doctor"
+contains "  names it" "pull.ff" "$LAST"
+unset GIT_ALLOW_PROTOCOL
+
 echo
 echo "passed $pass, failed $fail"
 [ "$fail" -eq 0 ]
