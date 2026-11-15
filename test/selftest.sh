@@ -1135,6 +1135,28 @@ script_views "OPEN APPROVED BLOCKED" "OPEN - UNKNOWN" "OPEN APPROVED BLOCKED" "M
 expect_exit 0 "merge: the same while waiting after auto-merge is on" flow merge
 unscript; : > "$FAKE/pr-list"; git switch -q --detach origin/main
 
+# #137: in dev-kit itself, a branch whose bin/flow.clj is older than the base's runs the base's kit merge, and says so;
+# a project (the kit at .shared, no kit-defaults.edn at its root) runs its own. The marker is printed by the base's version.
+K137="$WORK/k137"; git init -q --bare -b main "$WORK/k137-remote.git"; mkdir -p "$K137"
+git -C "$K137" init -q -b main; git -C "$K137" remote add origin "$WORK/k137-remote.git"
+mkdir -p "$K137/bin"; cp "$KIT/bin/kit" "$KIT/bin/flow.clj" "$K137/bin/"; cp "$KIT/kit-defaults.edn" "$K137/"
+git -C "$K137" add -A; git -C "$K137" commit -qm "chore: old kit"; git -C "$K137" push -q -u origin main
+git -C "$K137" switch -q -c 137-old
+git -C "$K137" switch -q main; echo '(println "BASE-MARKER 137")' >> "$K137/bin/flow.clj"
+git -C "$K137" commit -qam "feat: newer flow"; git -C "$K137" push -q origin main; git -C "$K137" switch -q 137-old
+cd "$K137" || exit 1; expect_exit 0 "merge in dev-kit: a branch older than the base runs the base's version" bb bin/kit merge --help; cd "$T" || exit 1
+contains "  the base's code ran" "BASE-MARKER 137" "$LAST"
+contains "  and one line says so" "kit merge: running main's version" "$LAST"
+contains "  the base's help follows" "Usage: kit merge" "$LAST"
+git -C "$K137" switch -q main; git -C "$K137" pull -q --ff-only; git -C "$K137" switch -q 137-old; git -C "$K137" merge -q main
+cd "$K137" || exit 1; expect_exit 0 "merge in dev-kit: a branch with the base's version runs its own" bb bin/kit merge --help; cd "$T" || exit 1
+case "$LAST" in *"running main's version"*) bad "  said it ran the base's" ;; *) ok "  says nothing" ;; esac
+git -C "$K137" switch -q main; git -C "$K137" reset -q --hard HEAD~1; git -C "$K137" push -q -f origin main; git -C "$K137" switch -q 137-old
+rm "$K137/kit-defaults.edn"; git -C "$K137" commit -qam "x" 2>/dev/null
+cd "$K137" || exit 1; expect_exit 0 "merge in a project (no kit-defaults.edn at its root): runs its own" bb bin/kit merge --help; cd "$T" || exit 1
+case "$LAST" in *"running main's version"*) bad "  ran another version" ;; *) ok "  nothing changes" ;; esac
+cd "$T" || exit 1
+
 git switch -q -c 14-auto origin/main && git push -q -u origin 14-auto
 : > "$FAKE/pr-list"; echo "https://github.com/u473t8/fake/pull/98" > "$FAKE/pr-list-merged"; : > "$FAKE_GH_LOG"
 I14=https://github.com/u473t8/fake/issues/14; I15=https://github.com/u473t8/fake/issues/15
