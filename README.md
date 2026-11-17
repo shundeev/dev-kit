@@ -29,7 +29,7 @@ git add -A && git commit -m "chore: add dev-kit"
 
 - **A clone:** `git clone --recurse-submodules …`, then `.shared/bin/kit init`.
 - **A new machine:**
-  1. Install `git`, `gh`, `bb` (babashka), `jq`, Node 22 or later and Claude Code.
+  1. Install `git`, `gh`, `bb` (babashka) 1.13.229 or later, `jq`, Node 22 or later and Claude Code.
   2. Log yourself in with `gh auth login`.
   3. Run `.shared/bin/kit init` in your own terminal. It also logs the agent's GitHub account in; see [the agent's identity](docs/agent-identity.md).
 
