@@ -2068,8 +2068,9 @@ fi
 # #18: dev-kit's own Clojure passes its strict lint, :shadowed-var on. Its config leaves agent, pr, new and force
 # as local names, which holds only while none of them is called as the clojure.core function.
 if command -v clj-kondo >/dev/null; then
-  files="bin/kit bin/flow.clj bin/retro.clj claude/hooks/guard.clj"
-  expect_exit 0 "clj-kondo: dev-kit's Clojure passes with :shadowed-var on" bash -c "cd '$KIT' && clj-kondo --fail-level error --lint $files"
+  # The paths bb lint covers (bb.edn, ADR-0008): all of dev-kit's Clojure, clojure/ and the tests included.
+  files="bin/kit bin claude/hooks clojure test"; [ -d "$KIT/src" ] && files="$files src"
+  expect_exit 0 "clj-kondo: all of dev-kit's Clojure passes bb lint, :shadowed-var on" bash -c "cd '$KIT' && bb lint"
   called="$(cd "$KIT" && clj-kondo --config '{:output {:format :json :analysis true}}' --lint $files \
     | jq -r '.analysis["var-usages"][] | select(.to == "clojure.core" and (.name | IN("agent", "pr", "new", "force"))) | "\(.filename):\(.row)"')"
   [ -z "$called" ] && ok "  no call of clojure.core's agent, pr, new or force, so those names may be locals" \

@@ -1,0 +1,35 @@
+;; dev-kit's own tasks, the same locally and in CI (ADR-0008). Projects never read this file: bb takes
+;; bb.edn from the invoked script's folder or the current one, and a project's current folder is its own
+;; root. kit and the guard find src/ through bin/bb.edn and claude/hooks/bb.edn.
+{:min-bb-version "1.13.229"
+ :tasks
+ {:requires ([babashka.fs :as fs]
+             [clojure.string :as str])
+
+  lint
+  {:doc  "clj-kondo over all of dev-kit's Clojure; errors fail it"
+   :task (apply shell "clj-kondo" "--fail-level" "error" "--lint"
+                (filter fs/exists? ["bin/kit" "bin" "claude/hooks" "clojure" "src" "test"]))}
+
+  test
+  {:doc         "clojure.test over test/**/*_test.clj, in seconds"
+   :extra-paths ["test" "claude/hooks"] ; guard.clj is the namespace guard until it moves to src/ (#141)
+   :requires    ([clojure.test :as t])
+   :task        (let [nss (for [f (sort (map str (fs/glob "test" "**_test.clj")))]
+                            (-> (fs/strip-ext (str (fs/relativize "test" f)))
+                                (str/replace "/" ".")
+                                (str/replace "_" "-")
+                                symbol))]
+                  (apply require nss)
+                  ;; a failure ends bb with 1; a pass returns, so `ci` goes on to the selftest
+                  (let [{:keys [fail error]} (apply t/run-tests nss)]
+                    (when (pos? (+ fail error))
+                      (throw (ex-info "bb test failed" {:babashka/exit 1})))))}
+
+  selftest
+  {:doc  "the end-to-end check on a throwaway project, about 3 minutes"
+   :task (shell "test/selftest.sh")}
+
+  ci
+  {:doc     "lint, test and selftest, as CI runs them"
+   :depends [lint test selftest]}}}

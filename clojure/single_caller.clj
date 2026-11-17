@@ -33,15 +33,15 @@
                                       cljs.core/def cljs.core/defn cljs.core/defn-}
                                     (:defined-by %)))
                          (filter #(some (fn [root] (str/starts-with? (:filename %) root)) roots))
-                         (keep (fn [{:keys [ns name filename row]}]
-                                 (let [sites (calls [ns name])]
+                         (keep (fn [{var-ns :ns var-name :name :keys [filename row]}]
+                                 (let [sites (calls [var-ns var-name])]
                                    (when (= 1 (count sites))
                                      (let [[_ _ file line] (first sites)]
                                        (format "%s:%d: %s/%s — one call, %s:%d"
                                                filename
                                                row
-                                               ns
-                                               name
+                                               var-ns
+                                               var-name
                                                file
                                                line))))))
                          distinct

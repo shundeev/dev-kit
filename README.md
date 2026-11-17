@@ -105,6 +105,8 @@ Defaults come from `kit-defaults.edn`: the board, the base branch, the code owne
 ## Developing dev-kit
 
 ```sh
+bb ci                # lint, test and selftest, as CI runs them (bb tasks lists them)
+bb test              # unit stories over pure functions, in seconds
 test/selftest.sh     # a throwaway project: init/doctor/repairs, hooks, kit start/finish/merge, kit retro
 test/e2e.sh --clean  # removes what an interrupted end-to-end run left in the sandbox; runs younger than 30 minutes stay
 ```

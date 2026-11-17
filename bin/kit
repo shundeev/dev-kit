@@ -1311,7 +1311,7 @@
   "Files kit generates in this project: not counted towards a PR's size."
   [cfg]
   (if (read-config)
-    (into #{(str mount)} (keep #(when (#{:file :symlink} (:kind %)) (:path %)) (managed-items cfg)))
+    (into #{mount} (keep #(when (#{:file :symlink} (:kind %)) (:path %)) (managed-items cfg)))
     #{}))
 
 
