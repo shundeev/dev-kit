@@ -1,0 +1,111 @@
+(ns dev-kit.flow.board
+  "The project board (#22, #41): fields read and set by name, and kit board set."
+  (:require
+   [cheshire.core :as json]
+   [clojure.string :as str]
+   [dev-kit.flow.shell :as shell]))
+
+
+;; ------------------------------------------------------------------ board (#22, #41)
+
+
+(defn board-hint
+  "The likely cause of a board error and its fix, or nil."
+  [msg]
+  (cond
+    (re-find #"INSUFFICIENT_SCOPES|required scopes|missing required scope" msg)
+    (str "the gh login in use lacks the project scope: in your own terminal, GH_CONFIG_DIR="
+         (shell/env "GH_CONFIG_DIR" "~/.config/gh")
+         " gh auth refresh -h github.com -s project")
+
+    (re-find #"Could not resolve to a ProjectV2|Could not resolve to a User|NOT_FOUND" msg)
+    "no access to the board: check that it exists and that this gh account can write to it (the board's Settings > Manage access)"
+
+    (re-find #"HTTP 5|Bad Gateway|Service Unavailable|timed out|timeout|connection reset|Something went wrong" msg)
+    "GitHub had an error: run the command again"))
+
+
+(defn board-reason [msg] (str msg (some->> (board-hint msg) (str "; "))))
+
+
+(defn board-gh!
+  "gh, run once more after a passing GitHub error (#41). Its trimmed stdout, or an exception with its message."
+  [& args]
+  (let [once #(apply shell/run "gh" args)
+        r    (once)
+        r    (if (and (not (zero? (:exit r))) (some-> (board-hint (:err r)) (str/starts-with? "GitHub had an error")))
+               (once)
+               r)]
+    (if (zero? (:exit r))
+      (str/trim (:out r))
+      (throw (ex-info (str/trim (:err r)) {:board true})))))
+
+
+(def ^:private board-cache (atom {}))
+
+
+(defn board-set-field
+  "Sets a single-select field of an issue's card. The card is found through the project: `item-add` returns the card
+  an issue already has and adds a missing one. gh's by-URL mode found it through the issue, and an organization's
+  issue does not list a user's board (#22). nil, or why it failed."
+  [number owner url field option]
+  (try
+    (let [number (str number)
+          item   (board-gh! "project" "item-add" number "--owner" owner "--url" url "--format" "json" "--jq" ".id")
+          pid    (or (:pid @board-cache)
+                     (:pid (swap! board-cache assoc
+                             :pid
+                             (board-gh! "project" "view" number "--owner" owner "--format" "json" "--jq" ".id"))))
+          fields (or (:fields @board-cache)
+                     (:fields (swap! board-cache assoc
+                                :fields
+                                (json/parse-string (board-gh! "project"
+                                                              "field-list" number
+                                                              "--owner"    owner
+                                                              "--format"   "json"
+                                                              "--limit"    "100")
+                                                   true))))
+          f      (some #(when (= field (:name %)) %) (:fields fields))
+          o      (some #(when (= option (:name %)) %) (:options f))]
+      (cond
+        (nil? f) (str "board "
+                      number
+                      " has no field '"
+                      field
+                      "'; its fields: "
+                      (str/join ", " (map :name (:fields fields)))
+                      ". Use one of them, or add the field on the board")
+        (nil? o) (str "the field '"
+                      field
+                      "' of board "
+                      number
+                      " has no option '"
+                      option
+                      "'; its options: "
+                      (str/join ", " (map :name (:options f)))
+                      ". Use one of them, or add the option on the board")
+        :else    (do (board-gh! "project"      "item-edit"
+                                "--id"         item
+                                "--project-id" pid
+                                "--field-id"   (:id f)
+                                "--single-select-option-id" (:id o))
+                     nil)))
+    (catch clojure.lang.ExceptionInfo e (ex-message e))))
+
+
+(defn board-set-command
+  "The command that sets one field alone, as an error prints it."
+  [kit number owner url field option]
+  (str/join " " (map shell/shell-quote ["bb" kit "board" "set" (str number) owner url field option])))
+
+
+(defn board!
+  [_kit args]
+  (when-not (and (= "set" (first args)) (= 6 (count args)))
+    (binding [*out* *err*] (println "Usage: kit board set <project-number> <owner> <issue-url> <field> <option>"))
+    (System/exit 2))
+  (let [[_ number owner url field option] args]
+    (when-let [e (board-set-field number owner url field option)]
+      (binding [*out* *err*] (println e))
+      (System/exit 1))
+    (println (str field ": " option))))

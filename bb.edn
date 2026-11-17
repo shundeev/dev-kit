@@ -2,6 +2,7 @@
 ;; bb.edn from the invoked script's folder or the current one, and a project's current folder is its own
 ;; root. kit and the guard find src/ through bin/bb.edn and claude/hooks/bb.edn.
 {:min-bb-version "1.13.229"
+ :paths ["src"]
  :tasks
  {:requires ([babashka.fs :as fs]
              [clojure.string :as str])
@@ -13,7 +14,7 @@
 
   test
   {:doc         "clojure.test over test/**/*_test.clj, in seconds"
-   :extra-paths ["test" "claude/hooks"] ; guard.clj is the namespace guard until it moves to src/ (#141)
+   :extra-paths ["test"]
    :requires    ([clojure.test :as t])
    :task        (let [nss (for [f (sort (map str (fs/glob "test" "**_test.clj")))]
                             (-> (fs/strip-ext (str (fs/relativize "test" f)))
@@ -25,6 +26,12 @@
                   (let [{:keys [fail error]} (apply t/run-tests nss)]
                     (when (pos? (+ fail error))
                       (throw (ex-info "bb test failed" {:babashka/exit 1})))))}
+
+  bench
+  {:doc         "guard and kit gate --hook timed against origin/main's, interleaved (ADR-0005; --runs N, --base REF)"
+   :extra-paths ["test"]
+   :requires    ([bench])
+   :task        (apply bench/-main *command-line-args*)}
 
   selftest
   {:doc  "the end-to-end check on a throwaway project, about 3 minutes"

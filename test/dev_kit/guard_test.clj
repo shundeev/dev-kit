@@ -4,14 +4,15 @@
   here too (#139, step 6)."
   (:require
    [clojure.test :refer [deftest is testing]]
-   [guard]))
+   [dev-kit.guard.statements :as statements]
+   [dev-kit.guard.tokenizer :as tokenizer]))
 
 
 (defn- commands-read
   "The commands the guard will judge in a command line: each statement from its command word on,
   nested ones included."
   [line]
-  (mapv #(mapv :t (guard/strip-head %)) (guard/expand (guard/tokenize line))))
+  (mapv #(mapv :t (statements/strip-head %)) (statements/expand (tokenizer/tokenize line))))
 
 
 (deftest quoted-text-is-text-not-a-command

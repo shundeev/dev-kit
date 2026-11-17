@@ -26,3 +26,5 @@ Smells to name when you see them:
   `bb .shared/clojure/single_caller.clj [path ...]` lists them.
 - **An object handed its own field** — `(f m (:k m))`: pass `m`, read `:k` inside `f`.
   `bb .shared/clojure/field_of_same_map.clj [path ...]` lists them.
+- **Structured text matched by a pattern** — YAML, EDN or JSON read with a regex. Parse it (clj-yaml,
+  `clojure.edn`, cheshire) and take the value by its path: a quoted or reformatted value slips past a pattern (#144).

@@ -71,7 +71,7 @@ These rules apply to every agent working in this repository (Claude Code, Codex,
   what a password is not) into issues, PRs, commits or docs.
 - An issue exists only for work a pull request can close, a bug, or a decision worth recording.
   Findings, measurements and notes are comments on the existing issue.
-- Search open issues before filing. One issue may host several PRs.
+- What can be done in one task is done in one: an open issue takes another PR, an L included.
 - Dependencies use the native blocked-by relation. A chain deeper than A needs B needs C is
   planning disguised as tracking — merge the nodes.
 

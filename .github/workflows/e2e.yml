@@ -8,6 +8,8 @@ on:
     paths:
       - bin/flow.clj       # kit start, finish and merge (#95)
       - bin/kit            # their entry, and the shape gate
+      - bin/bb.edn         # kit's classpath (ADR-0008)
+      - src/**             # the modules behind bin/ (#141)
       - kit-defaults.edn   # the real board, which the run must never touch
       - test/e2e.sh
       - .github/workflows/e2e.yml

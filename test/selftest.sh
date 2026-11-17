@@ -405,7 +405,8 @@ done
 [ "$(wc -l < "$KIT/rules/shared.md")" -le 100 ] && ok "the rules block stays within 100 lines" || bad "rules/shared.md is $(wc -l < "$KIT/rules/shared.md") lines"
 missing=""
 for phrase in "what changed for them and what is needed from them" "ends with the pull request's link" \
-              "as numbered steps" "says what to do" "not only into an agent's memory"; do
+              "as numbered steps" "says what to do" "not only into an agent's memory" \
+              "What can be done in one task is done in one"; do
   grep -qF -- "$phrase" "$KIT/rules/shared.md" || missing="$missing; $phrase"
 done
 [ -z "$missing" ] && ok "the owner's standing rules are in the rules block" || bad "rules block lacks:${missing#;}"
@@ -1159,7 +1160,9 @@ unscript; : > "$FAKE/pr-list"; git switch -q --detach origin/main
 # a project (the kit at .shared, no kit-defaults.edn at its root) runs its own. The marker is printed by the base's version.
 K137="$WORK/k137"; git init -q --bare -b main "$WORK/k137-remote.git"; mkdir -p "$K137"
 git -C "$K137" init -q -b main; git -C "$K137" remote add origin "$WORK/k137-remote.git"
-mkdir -p "$K137/bin"; cp "$KIT/bin/kit" "$KIT/bin/flow.clj" "$K137/bin/"; cp "$KIT/kit-defaults.edn" "$K137/"
+# The whole code tree, as the base holds it: bin/, src/ (once there) and kit-defaults.edn (#141).
+code137=(bin kit-defaults.edn); [ -d "$KIT/src" ] && code137+=(src)
+(cd "$KIT" && tar -cf - "${code137[@]}") | (cd "$K137" && tar -xf -)
 git -C "$K137" add -A; git -C "$K137" commit -qm "chore: old kit"; git -C "$K137" push -q -u origin main
 git -C "$K137" switch -q -c 137-old
 git -C "$K137" switch -q main; echo '(println "BASE-MARKER 137")' >> "$K137/bin/flow.clj"
@@ -1171,7 +1174,12 @@ contains "  the base's help follows" "Usage: kit merge" "$LAST"
 git -C "$K137" switch -q main; git -C "$K137" pull -q --ff-only; git -C "$K137" switch -q 137-old; git -C "$K137" merge -q main
 cd "$K137" || exit 1; expect_exit 0 "merge in dev-kit: a branch with the base's version runs its own" bb bin/kit merge --help; cd "$T" || exit 1
 case "$LAST" in *"running main's version"*) bad "  said it ran the base's" ;; *) ok "  says nothing" ;; esac
-git -C "$K137" switch -q main; git -C "$K137" reset -q --hard HEAD~1; git -C "$K137" push -q -f origin main; git -C "$K137" switch -q 137-old
+# #141: the base differs only under src/: the code is compared as a tree, so the base's version still runs.
+git -C "$K137" switch -q main; mkdir -p "$K137/src/dev_kit"; echo '(ns dev-kit.only-on-main)' > "$K137/src/dev_kit/only_on_main.clj"
+git -C "$K137" add -A; git -C "$K137" commit -qm "feat: a module only on main"; git -C "$K137" push -q origin main; git -C "$K137" switch -q 137-old
+cd "$K137" || exit 1; expect_exit 0 "merge in dev-kit: a base that differs only under src/ runs the base's version" bb bin/kit merge --help; cd "$T" || exit 1
+contains "  and one line says so" "kit merge: running main's version" "$LAST"
+git -C "$K137" switch -q main; git -C "$K137" reset -q --hard HEAD~2; git -C "$K137" push -q -f origin main; git -C "$K137" switch -q 137-old
 rm "$K137/kit-defaults.edn"; git -C "$K137" commit -qam "x" 2>/dev/null
 cd "$K137" || exit 1; expect_exit 0 "merge in a project (no kit-defaults.edn at its root): runs its own" bb bin/kit merge --help; cd "$T" || exit 1
 case "$LAST" in *"running main's version"*) bad "  ran another version" ;; *) ok "  nothing changes" ;; esac
