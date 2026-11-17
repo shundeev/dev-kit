@@ -25,7 +25,7 @@ body:
     id: design
     attributes:
       label: Design
-      description: The chosen approach and the alternatives that lost, in a few lines. For M the owner approves it with the `design-approved` label.
+      description: The chosen approach and the alternatives that lost, in a few lines. For M the owner approves it with the `design-approved` label. With the Claude Docs connector it is drafted and reviewed in a doc, then posted here as a `## Design` comment.
   - type: textarea
     id: plan
     attributes:
