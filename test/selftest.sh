@@ -405,7 +405,8 @@ done
 [ "$(wc -l < "$KIT/rules/shared.md")" -le 100 ] && ok "the rules block stays within 100 lines" || bad "rules/shared.md is $(wc -l < "$KIT/rules/shared.md") lines"
 missing=""
 for phrase in "what changed for them and what is needed from them" "ends with the pull request's link" \
-              "as numbered steps" "says what to do" "not only into an agent's memory"; do
+              "as numbered steps" "says what to do" "not only into an agent's memory" \
+              "What can be done in one task is done in one"; do
   grep -qF -- "$phrase" "$KIT/rules/shared.md" || missing="$missing; $phrase"
 done
 [ -z "$missing" ] && ok "the owner's standing rules are in the rules block" || bad "rules block lacks:${missing#;}"

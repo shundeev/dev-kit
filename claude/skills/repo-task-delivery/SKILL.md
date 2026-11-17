@@ -24,7 +24,8 @@ are Requirements, Invariants, Design, Plan and Done when. The pull request body 
 
 ## 1. Size sets the ceremony
 
-Find the issue or file it first. Search the open issues, since one issue may host several PRs.
+Find the issue or file it first. What can be done in one task is done in one (#139): search the
+open issues, since one issue hosts several PRs, and file a new one only when none fits.
 File through `gh-project-workflow` (`kit start`), never `gh issue create`, with Priority
 and Size (Priority: **Urgent**, broken for the owner now or blocking all work; **High**, the owner
 waits on it or it removes recurring friction; **Medium**, a planned improvement; **Low**, nice to
@@ -35,7 +36,7 @@ branch exist, XS included.
 |---|---|---|
 | XS / S | Requirements and Done when in a line or two, Design "obvious", no Plan, no G1. Stages 7–11 in full. | The PR type taken from the branch's commits (#44). |
 | M | Every section, and no code before G1. | The agent's own GitHub identity (#18). |
-| L | Not one task: split it into S and M sub-issues (native sub-issues), each on its own path. | Moving the repositories into an organization (#22). |
+| L | One issue with several PRs, no sub-issues: each PR opens with its own `## Design` comment on the issue and the owner's `design-approved` after it. | Restructuring dev-kit's code (#139). |
 
 Name the Size in the first reply, with a reason, before anything else: "Size M: a new flag with
 a choice of what the version is." An S that grows past a screenful of logic or into a second
@@ -215,7 +216,8 @@ component is an M: stop, resize it and ask for G1.
 - A cause the table lists as recurring (3 or more in 14 days) is a finding, whatever this task's
   own count. The owner's other messages are classified locally (`--messages`: corrections,
   requests to explain, repeated asks); only counts and paraphrases are published.
-- Every finding ends with a proposal, and the owner decides which become issues. A lesson that
+- Every finding ends with a proposal, and the owner decides which are done. A proposal names the
+  open task it rides in; a new issue only when none fits (#139). A lesson that
   holds for every project goes to dev-kit, not to the agent's memory. A fact learned about GitHub
   or a tool goes where a decision depends on it (code, test, rule, ADR), or nowhere. A detail that
   can become a mechanism becomes one instead of a note.
