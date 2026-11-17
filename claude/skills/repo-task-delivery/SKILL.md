@@ -74,6 +74,18 @@ component is an M: stop, resize it and ask for G1.
     code (#55, #60). What it shows goes into the design; the probe itself goes away.
 - For M, post the design on the issue as a comment starting with `## Design`, and name what the
   owner decides. It answers the issue's open questions by number first (#33).
+- With the Claude Docs connector in the session, an M design is drafted in a doc first, and the
+  owner gets its link before anything is posted on the issue: they review it there, with its
+  diagram, comments and suggestions. Without the connector (another machine, a second person)
+  the design goes straight into the `## Design` comment (#142).
+- When the owner says the doc is ready, post the design from it as a `## Design` comment: the
+  doc's link and revision at the top, then the whole design text. The public issue keeps what was
+  approved even if the private doc changes or goes. A later change in the doc reaches the gate
+  only through a new `## Design` comment (#142).
+- When the owner says they left notes in a doc, read all of them: the comment threads, the open
+  suggestions (Suggesting-mode inserts are notes too) and their direct edits since your last
+  revision. Answer each note in its own thread. Never accept or reject the owner's suggestion
+  cards for them (#142).
 
 ## 5. G1 — the owner approves the design (M)
 
@@ -82,7 +94,8 @@ component is an M: stop, resize it and ask for G1.
 - Enforced: CI's `kit gate` fails the PR, and the edit hook refuses changes on the issue branch,
   while the approval is missing. The approval counts only when set by someone with write access
   who is not the agent, after the issue body and every `## Design` comment last changed. So a
-  design and its addenda are comments starting with `## Design`.
+  design and its addenda are comments starting with `## Design`. A doc review does not change
+  this: the approval counts only after the `## Design` comment posted from the doc (#142).
 - The edit hook judges the repository and branch of the file being edited, not the folder the session
   was opened in (ADR-0006): an edit in any dev-kit worktree is held to that worktree's issue.
 - The gate reads the Size from the issue's `size:*` label (`kit start` sets it with the board
