@@ -133,6 +133,26 @@ contains "second init changes nothing" "nothing to change" "$LAST"
 git check-ignore -q .claude/worktrees/x/y && ok "init: .claude/worktrees/ is git-ignored (site#14)" || bad "init: worktrees not ignored"
 [ "$(grep -c 'claude/worktrees' "$(git rev-parse --git-path info/exclude)")" = 1 ] && ok "  once, after two inits" || bad "  not once"
 expect_exit 0 "doctor passes" bb $kit doctor
+# ADR-0008: a bb older than the one dev-kit is tested on (the bb: of its ci/action.yml) fails doctor, and so every
+# session start, with the way to update. Raising the pin stands in for an old bb.
+cp .shared/ci/action.yml "$WORK/action.yml"
+sed 's/^\([[:space:]]*bb:[[:space:]]*\).*/\199.0.0/' "$WORK/action.yml" > .shared/ci/action.yml
+expect_exit 1 "doctor: a bb older than dev-kit's pin fails" bb $kit doctor
+contains "  it names both versions" "is older than 99.0.0" "$LAST"
+contains "  and how to update" "--version 99.0.0" "$LAST"
+cp "$WORK/action.yml" .shared/ci/action.yml
+# The bb version is written in four places; one left behind on a bump, or one doctor cannot read, would go unseen.
+# Read as data, the YAML and EDN parsed: a quoted or reformatted value is the same pin.
+pins="$(cd "$KIT" && bb -e '(require (quote [clj-yaml.core :as yaml]) (quote [clojure.edn :as edn]))
+  (let [yml   #(yaml/parse-string (slurp %))
+        bb-of (fn [steps] (some #(some-> (get-in % [:with :bb]) str) steps))
+        edn   #(:min-bb-version (edn/read-string (slurp %)))]
+    (run! println [(bb-of (get-in (yml "ci/action.yml") [:runs :steps]))
+                   (bb-of (mapcat :steps (vals (:jobs (yml ".github/workflows/selftest.yml")))))
+                   (edn "bb.edn")
+                   (edn "bin/bb.edn")]))')"
+if [ "$(wc -l <<<"$pins")" = 4 ] && [ "$(sort -u <<<"$pins" | wc -l)" = 1 ]; then ok "bb is pinned to one version in four places: $(head -1 <<<"$pins")"
+else bad "bb pins disagree or one cannot be read: set the same version as bb: in ci/action.yml and .github/workflows/selftest.yml and as :min-bb-version in bb.edn and bin/bb.edn" "$pins"; fi
 touch .shared/stray-file
 expect_exit 0 "local edits in dev-kit only warn" bb $kit doctor
 contains "doctor warns about local edits in .shared" "WARN  .shared has local changes" "$LAST"
@@ -2068,8 +2088,9 @@ fi
 # #18: dev-kit's own Clojure passes its strict lint, :shadowed-var on. Its config leaves agent, pr, new and force
 # as local names, which holds only while none of them is called as the clojure.core function.
 if command -v clj-kondo >/dev/null; then
-  files="bin/kit bin/flow.clj bin/retro.clj claude/hooks/guard.clj"
-  expect_exit 0 "clj-kondo: dev-kit's Clojure passes with :shadowed-var on" bash -c "cd '$KIT' && clj-kondo --fail-level error --lint $files"
+  # The paths bb lint covers (bb.edn, ADR-0008): all of dev-kit's Clojure, clojure/ and the tests included.
+  files="bin/kit bin claude/hooks clojure test"; [ -d "$KIT/src" ] && files="$files src"
+  expect_exit 0 "clj-kondo: all of dev-kit's Clojure passes bb lint, :shadowed-var on" bash -c "cd '$KIT' && bb lint"
   called="$(cd "$KIT" && clj-kondo --config '{:output {:format :json :analysis true}}' --lint $files \
     | jq -r '.analysis["var-usages"][] | select(.to == "clojure.core" and (.name | IN("agent", "pr", "new", "force"))) | "\(.filename):\(.row)"')"
   [ -z "$called" ] && ok "  no call of clojure.core's agent, pr, new or force, so those names may be locals" \

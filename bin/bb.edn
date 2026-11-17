@@ -1,0 +1,4 @@
+;; kit runs with this file, not the project's bb.edn: bb takes the one next to the invoked script first.
+;; :min-bb-version only warns; kit doctor is the check that fails (ADR-0008).
+{:paths          ["../src"]
+ :min-bb-version "1.13.229"}

@@ -1,0 +1,3 @@
+;; The guard runs with this file, not the project's bb.edn: bb takes the one next to the invoked script first.
+;; No :min-bb-version: its warning would print on every guarded call; kit doctor names an old bb (ADR-0008).
+{:paths ["../../src"]}

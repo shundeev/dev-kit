@@ -29,7 +29,7 @@ git add -A && git commit -m "chore: add dev-kit"
 
 - **A clone:** `git clone --recurse-submodules …`, then `.shared/bin/kit init`.
 - **A new machine:**
-  1. Install `git`, `gh`, `bb` (babashka), `jq`, Node 22 or later and Claude Code.
+  1. Install `git`, `gh`, `bb` (babashka) 1.13.229 or later, `jq`, Node 22 or later and Claude Code.
   2. Log yourself in with `gh auth login`.
   3. Run `.shared/bin/kit init` in your own terminal. It also logs the agent's GitHub account in; see [the agent's identity](docs/agent-identity.md).
 
@@ -105,6 +105,8 @@ Defaults come from `kit-defaults.edn`: the board, the base branch, the code owne
 ## Developing dev-kit
 
 ```sh
+bb ci                # lint, test and selftest, as CI runs them (bb tasks lists them)
+bb test              # unit stories over pure functions, in seconds
 test/selftest.sh     # a throwaway project: init/doctor/repairs, hooks, kit start/finish/merge, kit retro
 test/e2e.sh --clean  # removes what an interrupted end-to-end run left in the sandbox; runs younger than 30 minutes stay
 ```

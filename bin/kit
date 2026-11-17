@@ -710,6 +710,32 @@
           (str "update Claude Code to " (str/join "." min-claude-version) " or later")]]))))
 
 
+(defn pinned-bb-version
+  "The bb version dev-kit is tested on: the bb its ci/action.yml has setup-clojure install, read from the parsed
+  YAML. nil when the file is missing or unreadable, or names no bb."
+  []
+  (let [action (try (some-> (slurp-if (fs/file kit-dir "ci" "action.yml")) yaml/parse-string)
+                    (catch Exception _ nil))]
+    (some->> (get-in action [:runs :steps])
+             (some #(get-in % [:with :bb]))
+             str)))
+
+
+(defn bb-version-problems
+  "An older bb than the one dev-kit is tested on: kit's bb.edn and its command tree need it (ADR-0008).
+  :min-bb-version in bin/bb.edn only warns, so this is the check that fails."
+  [running pinned]
+  (let [parts #(some->> % (re-find #"^(\d+)\.(\d+)\.(\d+)") rest (mapv parse-long))]
+    (when (and (parts running) (parts pinned) (neg? (compare (parts running) (parts pinned))))
+      [[:fail
+        (str "bb " running " is older than " pinned ", the version dev-kit is tested on (its ci/action.yml)")
+        (str "update bb to "
+             pinned
+             " or later: brew upgrade babashka, or the installer of"
+             " https://github.com/babashka/babashka#installation with --version "
+             pinned)]])))
+
+
 (defn node-problems
   "The safety guard (#20) runs on Node 22 or later; without it every guarded call is refused."
   []
@@ -867,7 +893,11 @@
      (for [p (stale-paths (managed-items cfg))]
        [:fail (str p ": left over from dev-kit, no longer managed") (str mount "/bin/kit init")])
      (when-not ci
-       (concat (tool-problems cfg) (claude-version-problems) (identity-problems cfg) (github-problems cfg))))))
+       (concat (tool-problems cfg)
+               (claude-version-problems)
+               (bb-version-problems (System/getProperty "babashka.version") (pinned-bb-version))
+               (identity-problems cfg)
+               (github-problems cfg))))))
 
 
 ;; ------------------------------------------------------------------ init
@@ -1311,7 +1341,7 @@
   "Files kit generates in this project: not counted towards a PR's size."
   [cfg]
   (if (read-config)
-    (into #{(str mount)} (keep #(when (#{:file :symlink} (:kind %)) (:path %)) (managed-items cfg)))
+    (into #{mount} (keep #(when (#{:file :symlink} (:kind %)) (:path %)) (managed-items cfg)))
     #{}))
 
 
