@@ -2005,31 +2005,35 @@
 
 
 (defn newer-merge!
-  "In dev-kit's own repository (its root holds kit-defaults.edn), a branch's older bin/flow.clj or bin/kit must not run
-  the closeout (#137, #132): when origin's base holds other versions, `kit merge` runs those, extracted to a temporary
-  folder, and says so. Projects mount the kit at .shared, pinned on main: nothing changes there. Returns the exit code
-  of the base's run, or nil when this version is the one to run."
+  "In dev-kit's own repository (its root holds kit-defaults.edn), a branch's older kit code must not run the closeout
+  (#137, #132): when origin's base holds other code (bin/, src/ and kit-defaults.edn, compared as a tree, so a change
+  in any module counts, #141), `kit merge` runs the base's, extracted whole to a temporary folder, and says so.
+  Projects mount the kit at .shared, pinned on main: nothing changes there. Only a kit run from the repository's own
+  checkout compares: the extracted copy runs from its temporary folder, so it runs itself instead of extracting again.
+  Returns the exit code of the base's run, or nil when this version is the one to run."
   [args]
   (let [top      (sh-in (fs/cwd) "git" "rev-parse" "--show-toplevel")
         base     (or (second (drop-while #(not= "--base" %) args)) (System/getenv "GHWF_DEFAULT_BASE") "main")
         base-ref (str "origin/" base)
-        files    ["bin/flow.clj" "bin/kit" "kit-defaults.edn"]]
-    (when (and top (fs/exists? (fs/path top "kit-defaults.edn")) (sh-in top "git" "fetch" "-q" "origin" base))
-      (let [theirs (mapv #(sh-in top "git" "show" (str base-ref ":" %)) files)]
-        (when (and (every? some? theirs)
-                   (not= (take 2 theirs) (map #(str/trim (slurp (str (fs/path kit-dir %)))) (take 2 files))))
-          (let [tmp (str (fs/create-temp-dir {:prefix "kit-merge-"}))]
-            (try
-              (doseq [[f s] (map vector files theirs)]
-                (fs/create-dirs (fs/parent (fs/path tmp f)))
-                (spit (str (fs/path tmp f)) (str s "\n")))
-              (println (str "kit merge: running "
-                            base
-                            "'s version ("
-                            (sh-in top "git" "rev-parse" "--short" base-ref)
-                            "), newer than this branch's"))
-              (:exit @(apply p/process {:inherit true} "bb" (str (fs/path tmp "bin" "kit")) "merge" args))
-              (finally (fs/delete-tree tmp)))))))))
+        code     ["bin" "src" "kit-defaults.edn"]]
+    (when (and top
+               (= (str (fs/canonicalize kit-dir)) (str (fs/canonicalize top)))
+               (fs/exists? (fs/path top "kit-defaults.edn"))
+               (sh-in top "git" "fetch" "-q" "origin" base)
+               (= 1 (:exit (apply p/sh {:dir top :continue true} "git" "diff" "--quiet" base-ref "--" code))))
+      (let [tmp     (str (fs/create-temp-dir {:prefix "kit-merge-"}))
+            archive (str (fs/path tmp "code.tar"))
+            present (some-> (apply sh-in top "git" "ls-tree" "--name-only" base-ref "--" code) str/split-lines)]
+        (try
+          (apply sh-in top "git" "archive" "--format=tar" "-o" archive base-ref "--" present)
+          (sh-in tmp "tar" "-xf" archive)
+          (println (str "kit merge: running "
+                        base
+                        "'s version ("
+                        (sh-in top "git" "rev-parse" "--short" base-ref)
+                        "), newer than this branch's"))
+          (:exit @(apply p/process {:inherit true} "bb" (str (fs/path tmp "bin" "kit")) "merge" args))
+          (finally (fs/delete-tree tmp)))))))
 
 
 (defn flow!
