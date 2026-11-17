@@ -1,5 +1,5 @@
 ;; The gate: merged tasks still lacking their retrospective (see bin/retro.clj).
-(ns dev-kit.retro.gate
+(ns dev-kit.retro.missing
   (:require
    [cheshire.core :as json]
    [clojure.string :as str]
