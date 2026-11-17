@@ -27,6 +27,12 @@
                     (when (pos? (+ fail error))
                       (throw (ex-info "bb test failed" {:babashka/exit 1})))))}
 
+  bench
+  {:doc         "guard and kit gate --hook timed against origin/main's, interleaved (ADR-0005; --runs N, --base REF)"
+   :extra-paths ["test"]
+   :requires    ([bench])
+   :task        (apply bench/-main *command-line-args*)}
+
   selftest
   {:doc  "the end-to-end check on a throwaway project, about 3 minutes"
    :task (shell "test/selftest.sh")}
