@@ -4,19 +4,22 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Board } from '../types'
 
 // The project's board link on the prompt footer, next to the permission mode and the PR (dev-kit#30).
-// A project wired by dev-kit names its board in .claude/settings.json (GHWF_OWNER, GHWF_PROJECT_NUMBER);
-// without them there is no link.
+// The board comes from kit (dev-kit#139): `kit board show` prints it as JSON, from the folder's kit.edn,
+// then the environment. Without kit or a board there is no link.
 
 const board = atom({ plugin: 'project-link', key: 'board' } as const, null)
 
 async function boardRef($: EngineInterface): Promise<{ owner: string; number: string } | null> {
   try {
-    const env = JSON.parse(await $.fs.read('.claude/settings.json'))?.env ?? {}
-    if (env.GHWF_OWNER && env.GHWF_PROJECT_NUMBER) {
-      return { owner: String(env.GHWF_OWNER), number: String(env.GHWF_PROJECT_NUMBER) }
+    const { exitCode, stdout } = await $.process.run(['.shared/bin/kit', 'board', 'show'], { timeoutMs: 15000 })
+    if (exitCode === 0) {
+      const ref = JSON.parse(stdout)
+      if (ref?.owner && ref?.number) {
+        return { owner: String(ref.owner), number: String(ref.number) }
+      }
     }
   } catch {
-    // no settings, or not JSON: no board
+    // kit missing, not JSON, or slow: no board
   }
   return null
 }

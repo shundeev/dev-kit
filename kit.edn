@@ -1,0 +1,4 @@
+;; dev-kit's own settings for the flow (kit start, finish, merge), read from the folder it runs in (#139):
+;; the board, the base branch and the reviewers come from kit-defaults.edn.
+{:repo     "shundeev/dev-kit"
+ :showcase "Process"}

@@ -250,7 +250,7 @@ Options:
                                base-draft? (conj "--draft")
                                (:hold o)   (conj "--label" "hold")
                                :always     (conj "--title" subject "--body" body))))))
-          reviewers (not-empty (System/getenv "GHWF_REVIEWERS"))
+          reviewers (shell/env "GHWF_REVIEWERS" nil)
           human     (not-empty (System/getenv "GHWF_HUMAN"))
           ;; A draft asks nobody: the owners are requested when the ready workflow marks it ready (ADR-0007), and
           ;; asking now would send the notification this change moves to the passed checks.

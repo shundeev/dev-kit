@@ -7,6 +7,7 @@
 ;;   kit merge    after the owner's Approve: waits for the merge, sets the card Done, removes the branch
 ;;   kit checks   waits until the pull request's required checks exist and have finished, and says how they ended (#109)
 ;;   kit board set <project-number> <owner> <issue-url> <field> <option>   one field of one card (#41)
+;;   kit board show   the board of the folder's kit.edn as JSON
 ;;
 ;; They were start_issue_flow.sh, finish_issue_flow.sh, merge_issue_flow.sh and board.sh: the same options, the
 ;; same output lines and exit codes. gh's JSON is read as data, so the flow needs no jq.

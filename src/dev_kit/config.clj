@@ -30,24 +30,63 @@
     (and (map? (:board defaults)) (map? (:board m))) (assoc :board (merge (:board defaults) (:board m)))))
 
 
+(defn parse-kit-edn
+  "The map in a kit.edn's text; label names the file in what fails: its line, and the fix."
+  [label s]
+  (let [m (try (edn/read-string s)
+               (catch Exception e
+                 (let [why (or (try (rewrite-parser/parse-string-all s) nil (catch Exception e2 (ex-message e2)))
+                               (ex-message e))
+                       [_ msg line] (re-find #"(.*) \[at line (\d+), column \d+\]" why)]
+                   (fail! (str label
+                               (when line
+                                 (str " line " line))
+                               " cannot be read ("
+                               (or msg why)
+                               "): fix it by hand")))))]
+    (when-not (map? m)
+      (fail! (str label " is not a map: make it {:repo \"owner/name\" :showcase \"…\" :modules #{}}")))
+    m))
+
+
 (defn read-config
   "kit.edn over the defaults, or nil when there is none."
   []
   (when-let [s (base/slurp-if config-file)]
-    (let [m (try (edn/read-string s)
-                 (catch Exception e
-                   (let [why (or (try (rewrite-parser/parse-string-all s) nil (catch Exception e2 (ex-message e2)))
-                                 (ex-message e))
-                         [_ msg line] (re-find #"(.*) \[at line (\d+), column \d+\]" why)]
-                     (fail! (str "kit.edn"
-                                 (when line
-                                   (str " line " line))
-                                 " cannot be read ("
-                                 (or msg why)
-                                 "): fix it by hand")))))]
-      (when-not (map? m)
-        (fail! "kit.edn is not a map: make it {:repo \"owner/name\" :showcase \"…\" :modules #{}}"))
-      (merge-config (read-defaults) m))))
+    (merge-config (read-defaults) (parse-kit-edn "kit.edn" s))))
+
+
+(defn read-config-at
+  "The kit.edn at the git toplevel of folder, over the defaults, or nil when the folder has none (or is no git
+  folder). The flow reads it from the folder it runs in, never from where kit is mounted."
+  [folder]
+  (when-let [top (base/sh-in folder "git" "rev-parse" "--show-toplevel")]
+    (let [file (str (fs/path top "kit.edn"))]
+      (when-let [s (base/slurp-if file)]
+        (merge-config (read-defaults) (parse-kit-edn file s))))))
+
+
+(def setting-paths
+  "The GHWF_ names of the project's settings and where kit.edn keeps each."
+  {"GHWF_OWNER"          [:board :owner]
+   "GHWF_PROJECT_NUMBER" [:board :number]
+   "GHWF_REPO"           [:repo]
+   "GHWF_DEFAULT_BASE"   [:base]
+   "GHWF_SHOWCASE"       [:showcase]
+   "GHWF_REVIEWERS"      [:owners]})
+
+
+(defn setting
+  "One setting of the flow, as text: the folder's kit.edn (cfg), then the environment (getenv is (fn [variable])),
+  then the default. The flag, which beats all three, is the caller's."
+  [cfg getenv variable default]
+  (let [v (some->> (setting-paths variable)
+                   (get-in cfg))]
+    (or (not-empty (if (sequential? v)
+                     (str/join "," v)
+                     (some-> v str)))
+        (not-empty (getenv variable))
+        default)))
 
 
 (def known-modules #{:clojure})
@@ -170,14 +209,6 @@
                {"permissions" {"allow" ["Bash(clj-kondo *)" "Bash(zprint *)"
                                         (str "Bash(" base/mount "/clojure/zprint_check.sh *)")
                                         (str "Bash(bb " base/mount "/clojure/single_caller.clj *)")
-                                        (str "Bash(bb " base/mount "/clojure/field_of_same_map.clj *)")]}})
-        env  {"env" (into (sorted-map)
-                          (remove (comp nil? val))
-                          {"GHWF_OWNER"          (get-in cfg [:board :owner])
-                           "GHWF_PROJECT_NUMBER" (some-> (get-in cfg [:board :number]) str)
-                           "GHWF_REPO"           (:repo cfg)
-                           "GHWF_DEFAULT_BASE"   (:base cfg)
-                           "GHWF_SHOWCASE"       (:showcase cfg)
-                           "GHWF_REVIEWERS"      (some->> (seq (:owners cfg)) (str/join ","))})}]
-    (json-text (deep-merge (deep-merge (deep-merge base clj) env)
+                                        (str "Bash(bb " base/mount "/clojure/field_of_same_map.clj *)")]}})]
+    (json-text (deep-merge (deep-merge base clj)
                            (json/parse-string (json/generate-string (:claude-settings cfg {})))))))

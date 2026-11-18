@@ -70,9 +70,11 @@ echo "- init"
 expect_exit 0 "init succeeds" bb $kit init --showcase Site
 contains "init reports what it wrote" "wrote .claude/settings.json" "$LAST"
 grep -q ':repo     "u473t8/kit-selftest"' kit.edn && ok "kit.edn infers repo from origin" || bad "kit.edn repo" "$(cat kit.edn)"
-[ "$(jq -r .env.GHWF_REPO .claude/settings.json)" = "u473t8/kit-selftest" ] && ok "settings env carries the repo" || bad "settings env"
-[ "$(jq -r .env.GHWF_PROJECT_NUMBER .claude/settings.json)" = "3" ] && ok "settings env carries the board from defaults" || bad "board number"
-[ "$(jq -r .env.GHWF_REVIEWERS .claude/settings.json)" = "shundeev/owners" ] && ok "settings env names the reviewers from :owners" || bad "GHWF_REVIEWERS"
+[ "$(jq '[.env // {} | keys[] | select(startswith("GHWF_"))] | length' .claude/settings.json)" = 0 ] \
+  && ok "settings.json carries no GHWF_* (the flow reads kit.edn, dev-kit#139)" || bad "GHWF_* in settings.json" "$(jq -c .env .claude/settings.json)"
+kit_edn_board() { bb -cp "$KIT/src" -e '(require (quote [dev-kit.config :as config])) (prn (select-keys (config/read-config-at ".") [:repo :board :owners]))'; }
+[ "$(kit_edn_board)" = '{:repo "u473t8/kit-selftest", :board {:owner "u473t8", :number 3}, :owners ["shundeev/owners"]}' ] \
+  && ok "the folder's kit.edn gives the repo, the board from defaults and the reviewers" || bad "read-config-at" "$(kit_edn_board)"
 [ "$(jq -r .env.GHWF_HUMAN .claude/settings.local.json)" = "the-human" ] && ok "the per-machine settings name the person behind the agent" || bad "GHWF_HUMAN" "$(cat .claude/settings.local.json)"
 [ -f .claude/skills/repo-task-delivery/SKILL.md ] && ok "skill readable through its link" || bad "skill link"
 grep -q "Managed by dev-kit" .claude/agents/ops.md && ok "agent copied with the managed marker" || bad "agent copy"
@@ -159,6 +161,15 @@ contains "doctor warns about local edits in .shared" "WARN  .shared has local ch
 rm .shared/stray-file
 
 echo "- repairs"
+# Before dev-kit#139 kit init copied the project's settings into settings.json as GHWF_* env; doctor says so, init removes them.
+jq '.env = ((.env // {}) + {GHWF_REPO: "old/repo", GHWF_SHOWCASE: "Old"})' .claude/settings.json > "$WORK/old-settings.json" \
+  && cp .claude/settings.json "$WORK/new-settings.json" && cp "$WORK/old-settings.json" .claude/settings.json
+expect_exit 1 "doctor: an old settings.json with GHWF_* env differs" bb $kit doctor
+contains "  it names the file" ".claude/settings.json: differs" "$LAST"
+expect_exit 0 "init removes the old GHWF_* env" bb $kit init
+[ "$(jq '[.env // {} | keys[] | select(startswith("GHWF_"))] | length' .claude/settings.json)" = 0 ] && ok "  none is left" || bad "  GHWF_* left"
+cmp -s .claude/settings.json "$WORK/new-settings.json" && ok "  and the file is the one init writes" || bad "  settings.json differs from a fresh init"
+expect_exit 0 "  doctor is clean again" bb $kit doctor
 echo '{}' > .claude/settings.json
 expect_exit 1 "doctor catches an edited settings.json" bb $kit doctor
 contains "doctor names the file" ".claude/settings.json: differs" "$LAST"
@@ -229,8 +240,8 @@ expect_exit 1 "doctor: a partial :agent fails instead of mixing two accounts" bb
 contains "  names what is missing" ":email" "$LAST"
 sed -i 's/^{:agent {:login "other"}/{:board {:number 7}/' kit.edn
 bb $kit init >/dev/null 2>&1
-[ "$(jq -r '.env.GHWF_OWNER + " " + .env.GHWF_PROJECT_NUMBER' .claude/settings.json)" = "u473t8 7" ] \
-  && ok "init: a partial :board keeps the default owner" || bad "partial :board" "$(jq -c .env .claude/settings.json)"
+[ "$(kit_edn_board | grep -o ':board {[^}]*}')" = ':board {:owner "u473t8", :number 7}' ] \
+  && ok "a partial :board keeps the default owner" || bad "partial :board" "$(kit_edn_board)"
 printf '{:repo "a/b"\n :x ]\n}\n' > kit.edn
 expect_exit 1 "doctor: an unreadable kit.edn fails with where" bb $kit doctor --ci
 contains "  names the file and the line" "kit.edn line 2" "$LAST"
