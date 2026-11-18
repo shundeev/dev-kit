@@ -212,24 +212,32 @@
 (def ready-workflow-path ".github/workflows/ready-when-green.yml")
 
 
+(defn ready-workflow-failure
+  "What it says when GitHub cannot say whether `base` of `repo` holds the ready workflow: gh's message, or its exit code
+  when it printed none."
+  [repo base exit message]
+  (let [reason (if (str/blank? message)
+                 (format "gh exit code %s" exit)
+                 message)]
+    (format
+     "Could not look for %s on '%s' of %s (%s). Nothing was committed or pushed: run it again when GitHub answers, or check 'gh auth status'."
+     ready-workflow-path
+     base
+     repo
+     reason)))
+
+
 (defn ready-workflow?
-  "Whether `base` of `repo` holds the ready workflow (ADR-0007). Not-found is a plain no; any other failure ends the
-  run: guessing would open a ready PR in a repository that has the workflow, or a draft that nothing marks ready."
-  [repo base]
-  (let [{:keys [exit out err]}
-        (shell/run "gh" "api" (str "repos/" repo "/contents/" ready-workflow-path "?ref=" base) "--silent")]
-    (cond
-      (zero? exit) true
-      (re-find #"404|Not Found" (str out err)) false
-      :else
-      (let [said (or (not-empty (str/trim (str out err))) (str "gh exit code " exit))]
-        (shell/die
-         (format
-          "Could not look for %s on '%s' of %s (%s). Nothing was committed or pushed: run it again when GitHub answers, or check 'gh auth status'."
-          ready-workflow-path
-          base
-          repo
-          said))))))
+  "Whether `base` of `repo` holds the ready workflow (ADR-0007). Not-found is a plain no; any other failure goes to
+  `fail` with the text: guessing would open a ready PR in a repository that has the workflow, or a draft that nothing
+  marks ready. Without `fail` it ends the run."
+  ([repo base] (ready-workflow? repo base shell/die))
+  ([repo base fail]
+   (let [{:keys [exit out err]}
+         (shell/run "gh" "api" (format "repos/%s/contents/%s?ref=%s" repo ready-workflow-path base) "--silent")]
+     (cond (zero? exit) true
+           (re-find #"404|Not Found" (str out err)) false
+           :else (fail (ready-workflow-failure repo base exit (str/trim (str out err))))))))
 
 
 (def shared-operations
@@ -253,12 +261,77 @@
    (fn [pr repo fail] (wait/required-checks pr repo fail))
 
    :ready-workflow?
-   (fn [repo base] (ready-workflow? repo base))})
+   (fn
+     ([repo base] (ready-workflow? repo base))
+     ([repo base fail] (ready-workflow? repo base fail)))})
 
 
 (def finish-operations
-  "kit finish's operations."
-  {})
+  "kit finish's operations. A failing git or gh call that is not the step's to judge ends the run inside the
+  operation, with its own exit code and its output on the terminal."
+  {:branch-commit-types
+   (fn [base]
+     (str/split-lines (shell/git-out "log" "--reverse" "--format=%s" (str "origin/" base "..HEAD"))))
+
+   :issue-title
+   (fn [repo number]
+     (shell/gh! "issue" "view" number
+       "-R"     repo
+       "--json" "title"
+       "--jq"   ".title"))
+
+   :check-shape
+   (fn [kit branch title body-file]
+     (apply shell/run "bb" kit "gate"
+       "--shape"
+       "--branch" branch
+       "--title"  title
+       (when body-file
+         ["--body-file" body-file])))
+
+   :pr-draft?
+   (fn [pr-url]
+     (= "true"
+        (shell/gh! "pr" "view" pr-url
+          "--json" "isDraft"
+          "--jq"   ".isDraft")))
+
+   :create-hold-label!
+   (fn [repo]
+     (shell/run "gh" "label" "create" "hold"
+       "-R"            repo
+       "--color"       "FBCA04"
+       "--description" "Stays a draft until kit release (ADR-0007)"))
+
+   :stage!
+   (fn [paths] (shell/ok! (apply shell/shell "git" "add" "--" paths)))
+
+   :staged?
+   (fn [] (not (zero? (:exit (shell/run "git" "diff" "--cached" "--quiet")))))
+
+   :commit!
+   (fn [message-file subject]
+     (shell/ok! (if message-file
+                  (shell/shell "git" "commit" "-F" message-file)
+                  (shell/shell "git" "commit" "-m" subject))))
+
+   :push!
+   (fn [branch] (shell/ok! (shell/shell "git" "push" "-u" "origin" branch)))
+
+   :create-pr!
+   (fn [repo base branch flags title body]
+     (shell/last-line
+      (apply shell/gh! "pr" "create"
+        "-R"     repo
+        "--base" base
+        "--head" branch
+        (concat flags ["--title" title "--body" body]))))
+
+   :edit-pr!
+   (fn [pr-url args] (apply shell/run "gh" "pr" "edit" pr-url args))
+
+   :auto-merge!
+   (fn [pr-url] (shell/run "gh" "pr" "merge" pr-url "--auto" "--squash"))})
 
 
 (def merge-operations

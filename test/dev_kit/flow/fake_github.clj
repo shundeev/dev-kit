@@ -5,6 +5,7 @@
   and what happens while a command waits. A story reads the world afterwards instead of listing calls."
   (:require
    [clojure.string :as str]
+   [dev-kit.flow.github :as github]
    [dev-kit.flow.wait :as wait]))
 
 
@@ -303,13 +304,136 @@
          (vec (:checks found)))))
 
    :ready-workflow?
-   (fn [_repo _base] (:ready-workflow @world))})
+   (fn
+     ([_repo _base] (:ready-workflow @world))
+     ([repo base fail]
+      (if-let [message (:workflow-unreadable @world)]
+        (fail (github/ready-workflow-failure repo base 1 message))
+        (:ready-workflow @world))))})
+
+
+(defn commits
+  "The commit subjects on the branch, oldest first: what kit finish has made, after those the story started with."
+  [world]
+  (vec (:commits @world)))
+
+
+(defn staged
+  "The paths staged and not yet committed."
+  [world]
+  (vec (:staged @world)))
+
+
+(defn remote-branches
+  "The branches pushed to GitHub, in order."
+  [world]
+  (vec (:remote-branches @world)))
+
+
+(defn shape-checks
+  "What kit finish asked CI's shape rules about, in order: {:branch :title :body-file}."
+  [world]
+  (vec (:shape-checks @world)))
 
 
 (defn- finish-operations
-  "kit finish's operations."
-  [_world]
-  {})
+  "kit finish's operations. Options of the world they read, besides the ones new-world knows:
+  :commits           subjects of the commits on the branch, oldest first (what git log origin/main..HEAD shows)
+  :staged            paths staged already
+  :shape-refusal     the text CI's shape rules print when they refuse the title or the body
+  :workflow-unreadable  gh's message when GitHub cannot say whether the base holds the ready workflow
+  :refuse-pr-edit    gh's message when it refuses to edit a pull request
+  :no-auto-merge     true when the repository does not allow auto-merge
+  The branch checked out is :current-branch; a push or a commit that git would refuse ends the real run inside the
+  operation, so the in-memory one has no such case."
+  [world]
+  {:branch-commit-types
+   (fn [_base] (:commits @world []))
+
+   :issue-title
+   (fn [_repo number]
+     (or (get-in @world [:issues (number-of number) :title])
+         (throw (ex-info (format "the fake GitHub has no issue %s: gh would end the run" number) {:number number}))))
+
+   :check-shape
+   (fn [_kit branch title body-file]
+     (swap! world update :shape-checks (fnil conj []) {:branch branch :title title :body-file body-file})
+     (if-let [refusal (:shape-refusal @world)]
+       {:exit 1 :out refusal :err ""}
+       {:exit 0 :out "" :err ""}))
+
+   :pr-draft?
+   (fn [pr-url] (boolean (:draft (pr-of @world pr-url))))
+
+   :create-hold-label!
+   (fn [_repo]
+     (let [current @world]
+       (cond (contains? (:labels current) "hold")
+             {:exit 1 :out "" :err "label with name \"hold\" already exists"}
+             (contains? (:uncreatable current) "hold")
+             {:exit 1 :out "" :err "HTTP 403: the fake GitHub does not let this token create labels"}
+             :else (do (swap! world #(-> % (update :labels conj "hold") (update :created-labels conj "hold")))
+                       {:exit 0 :out "" :err ""}))))
+
+   :stage!
+   (fn [paths] (swap! world update :staged #(vec (distinct (concat % paths)))) nil)
+
+   :staged?
+   (fn [] (boolean (seq (:staged @world))))
+
+   :commit!
+   (fn [_message-file subject]
+     (swap! world #(-> % (update :commits (fnil conj []) subject) (assoc :staged [])))
+     nil)
+
+   :push!
+   (fn [branch] (swap! world update :remote-branches (fnil conj []) branch) nil)
+
+   :create-pr!
+   (fn [repo base branch flags title body]
+     (let [current @world]
+       (when-not (some #{branch} (:remote-branches current))
+         (throw (ex-info (format "the branch %s is not on GitHub: gh pr create would refuse" branch) {:branch branch})))
+       (let [number (:next-number current)
+             url    (format "https://github.com/%s/pull/%s" repo number)]
+         (swap! world #(-> %
+                           (assoc-in [:prs number]
+                            {:number number
+                             :url    url
+                             :branch branch
+                             :base   base
+                             :state  "OPEN"
+                             :draft  (boolean (some #{"--draft"} flags))
+                             :labels (flag-values "--label" flags)
+                             :owners []
+                             :checks []
+                             :title  title
+                             :body   body})
+                           (update :next-number inc)))
+         url)))
+
+   :edit-pr!
+   (fn [pr-url args]
+     (if-let [refusal (:refuse-pr-edit @world)]
+       {:exit 1 :out "" :err refusal}
+       (let [{:keys [number]} (pr-of @world pr-url)]
+         (swap! world update-in
+           [:prs number]
+           (fn [pr]
+             (-> pr
+                 (update :owners #(vec (distinct (concat % (flag-values "--add-reviewer" args)))))
+                 (update :assignees #(vec (distinct (concat % (flag-values "--add-assignee" args)))))
+                 (update :labels #(vec (distinct (concat % (flag-values "--add-label" args))))))))
+         {:exit 0 :out "" :err ""})))
+
+   :auto-merge!
+   (fn [pr-url]
+     (let [{:keys [number draft]} (pr-of @world pr-url)]
+       (if (or (:no-auto-merge @world) draft)
+         {:exit 1
+          :out  ""
+          :err  "GraphQL: Pull request Auto merge is not allowed for this repository (enablePullRequestAutoMerge)"}
+         (do (swap! world assoc-in [:prs number :auto-merge] true) {:exit 0 :out "" :err ""}))))})
 
 
 (defn- merge-operations

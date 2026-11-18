@@ -1,11 +1,13 @@
 (ns dev-kit.flow.finish
-  "kit finish: commits, pushes, opens the pull request and moves the card to In review."
+  "kit finish: commits, pushes, opens the pull request and moves the card to In review. `finish` is the recipe, finish! its
+  edge."
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
    [dev-kit.flow.board :as board]
    [dev-kit.flow.github :as github]
-   [dev-kit.flow.shell :as shell]))
+   [dev-kit.flow.shell :as shell]
+   [dev-kit.flow.steps :as steps]))
 
 
 ;; ------------------------------------------------------------------ kit finish
@@ -66,213 +68,323 @@ Options:
    "-h" [:help :flag]})
 
 
-(defn- ensure-hold-label!
-  "The label hold exists in the repository; made when it does not."
-  [repo]
-  (let [{:keys [exit out err]} (shell/run "gh" "label" "create" "hold"
-                                 "-R"            repo
-                                 "--color"       "FBCA04"
-                                 "--description" "Stays a draft until kit release (ADR-0007)")]
-    (when-not (or (zero? exit) (re-find #"already exists" (str out err)))
-      (shell/die (str "Label 'hold' does not exist in "
-                      repo
-                      " and could not be created: create it on GitHub (Issues > Labels), then run again")))))
-
-
-(defn turn-on-auto-merge!
+(defn- request-auto-merge
   "Auto-merge (squash) on a ready PR; a repository that does not allow it gets a warning with the fix."
-  [pr-url]
-  (let [r (shell/run "gh" "pr" "merge" pr-url "--auto" "--squash")]
-    (when-not (zero? (:exit r))
-      (shell/warn "Warning: auto-merge could not be turned on:" (str/trim (str (:out r) (:err r))))
-      (shell/warn
+  [github warn pr-url]
+  (let [result (github :auto-merge! pr-url)]
+    (when-not (zero? (:exit result))
+      (warn "Warning: auto-merge could not be turned on:" (str/trim (str (:out result) (:err result))))
+      (warn
        "  Fix: the owner turns on Settings > General > 'Allow auto-merge' (dev-kit#37); until then kit merge merges after the Approve."))))
 
 
+(defn turn-on-auto-merge!
+  "request-auto-merge on the real GitHub, for release until it is a recipe too."
+  [pr-url]
+  (request-auto-merge github/real shell/warn pr-url))
+
+
+;; ------------------------------------------------------------------ the steps
+
+
+(defn- pick-type
+  "Without --type the PR follows the branch: its first `type(GH-n): …` commit that is not docs, else the first, else feat."
+  [{:keys [github]} {:keys [base] given-type :type}]
+  {:commit-type (or given-type
+                    (let [types (keep #(second (re-find #"^([a-z]+)\(GH-[0-9]+\): " %))
+                                      (github :branch-commit-types base))]
+                      (or (first (remove #{"docs"} types)) (first types)))
+                    "feat")})
+
+
+(defn- resolve-repo
+  "The repository: --repo, else the folder's, else the session's."
+  [ctx {:keys [repo]}]
+  {:repo ((:resolve-repo ctx) repo)})
+
+
+(defn- check-branch
+  "The branch the work is on: not detached, not the base, named <number>-<slug>. The issue is the branch's number: CI's
+  pull request gate accepts no other (#21)."
+  [{:keys [github]} {:keys [base]}]
+  (let [branch (github :head-branch)]
+    (when (= branch "HEAD")
+      (steps/fail! :finish/detached-head "Detached HEAD is not supported"))
+    (when (= branch base)
+      (steps/fail! :finish/on-base (format "On the base branch '%s': run from the issue branch" base)))
+    {:branch branch
+     :number (or
+              (shell/issue-branch-number branch)
+              (steps/fail!
+               :finish/branch-without-number
+               (format
+                "The branch '%s' is not <number>-<slug>: open the issue with kit start and move the work to its branch"
+                branch)))}))
+
+
+(defn- check-files
+  "Everything that can be wrong with the inputs is checked before the commit and the push: a run that dies after the
+  push leaves a branch with no pull request and a confusing rerun."
+  [_ctx {:keys [body-file message-file]}]
+  (when (and body-file (not (fs/readable? body-file)))
+    (steps/fail! :finish/no-body-file (format "PR body file '%s' not found" body-file)))
+  (when (and message-file (not (fs/readable? message-file)))
+    (steps/fail! :finish/no-message-file (format "Commit message file '%s' not found" message-file)))
+  {})
+
+
+(defn- find-open-pr
+  "Only an open pull request counts: `gh pr view <branch>` also returns closed and merged ones."
+  [{:keys [github]} {:keys [repo branch]}]
+  {:pr-url (github :open-pr-url repo branch "open")})
+
+
+(defn- check-body-file
+  "A PR to open needs its description."
+  [_ctx {:keys [pr-url body-file]}]
+  (when-not (or pr-url body-file)
+    (steps/fail! :finish/body-file-required "--pr-body-file is required to open the pull request"))
+  {})
+
+
+(defn- make-subject
+  "The subject: --summary, else the message file's first line, else the issue's title, after \"type(GH-n): \"."
+  [{:keys [github]} {:keys [commit-type number summary message-file repo]}]
+  {:subject (cond summary      (format "%s(GH-%s): %s" commit-type number summary)
+                  message-file (first (str/split-lines (slurp message-file)))
+                  :else        (let [title        (github :issue-title repo number)
+                                     first-letter (min 1 (count title))]
+                                 (format "%s(GH-%s): %s%s"
+                                         commit-type
+                                         number
+                                         (str/lower-case (subs title 0 first-letter))
+                                         (subs title first-letter))))})
+
+
+(defn- check-shape
+  "The title and the body pass the rules CI checks on the pull request (#21): one implementation, in kit. The body is
+  checked only when it becomes a new PR's body; an open PR keeps its own."
+  [{:keys [github kit]} {:keys [branch subject pr-url body-file]}]
+  (let [shape (github :check-shape kit branch subject (when-not pr-url body-file))]
+    (when-not (zero? (:exit shape))
+      (steps/fail! :finish/shape
+                   (format "The pull request would fail CI's shape check; nothing was committed or pushed:\n%s"
+                           (str/trimr (str (:out shape) (:err shape))))))
+    {}))
+
+
+(defn- decide-draft
+  "ADR-0007: with the ready workflow on the base the PR opens as a draft and the workflow marks it ready. An open PR is
+  judged by its own state, not the base's: a ready PR gets what a ready PR gets, and a draft is left to the workflow."
+  [{:keys [github]} {:keys [repo base pr-url]}]
+  (let [base-draft? (github :ready-workflow? repo base #(steps/fail! :finish/workflow-unreadable %))]
+    {:base-draft? base-draft?
+     :draft?      (if pr-url
+                    (github :pr-draft? pr-url)
+                    base-draft?)}))
+
+
+(defn- check-hold
+  "--hold works through the ready workflow, which reads drafts only."
+  [_ctx {:keys [repo base pr-url hold draft? base-draft?]}]
+  (when (and hold pr-url (not draft?))
+    (steps/fail!
+     :finish/hold-on-ready-pr
+     (format
+      "%s is ready already: the workflow only reads drafts, so --hold would hold nothing. Nothing was committed or pushed: make it a draft first (gh pr ready %s --undo; that turns auto-merge off and keeps the owners' request) and run kit finish --hold again, or run kit finish without --hold."
+      pr-url
+      pr-url)))
+  (when (and hold (not base-draft?))
+    (steps/fail!
+     :finish/hold-without-workflow
+     (format
+      "--hold works through %s, which '%s' of %s does not hold yet. Nothing was committed or pushed: run kit finish without --hold (the PR opens ready, the owners are asked at once), or after the dev-kit update PR with the file has merged."
+      github/ready-workflow-path
+      base
+      repo)))
+  {})
+
+
+(defn- make-hold-label
+  "The label the workflow reads must exist before the PR is opened with it; a run that cannot make it stops before the
+  first commit."
+  [{:keys [github]} {:keys [repo hold]}]
+  (when hold
+    (let [{:keys [exit out err]} (github :create-hold-label! repo)]
+      (when-not (or (zero? exit) (re-find #"already exists" (str out err)))
+        (steps/fail!
+         :finish/hold-label
+         (format
+          "Label 'hold' does not exist in %s and could not be created: create it on GitHub (Issues > Labels), then run again"
+          repo)))))
+  {})
+
+
+(defn- commit
+  [{:keys [github]} {:keys [no-commit add message-file subject]}]
+  (when-not no-commit
+    (when (seq add)
+      (github :stage! add))
+    (when-not (github :staged?)
+      (steps/fail! :finish/nothing-staged "Nothing staged to commit (use --add <path>, or --no-commit)"))
+    (github :commit! message-file subject))
+  {})
+
+
+(defn- push
+  [{:keys [github]} {:keys [branch]}]
+  (github :push! branch)
+  {})
+
+
+(defn- open-pr
+  "The body is the file's, with \"Closes #<issue>\" in front unless it has a closing keyword for that issue."
+  [{:keys [github]} {:keys [repo base branch number subject body-file pr-url base-draft? hold]}]
+  (if pr-url
+    {}
+    (let [text  (shell/file-text body-file)
+          body  (if (re-find (re-pattern (format "(?i)(close[sd]?|fix(e[sd])?|resolve[sd]?) #%s\\b" number)) text)
+                  text
+                  (format "Closes #%s\n\n%s" number text))
+          flags (cond-> []
+                  base-draft? (conj "--draft")
+                  hold        (conj "--label" "hold"))]
+      {:pr-url  (github :create-pr! repo base branch flags subject body)
+       :opened? true})))
+
+
+(defn- ask-the-owners
+  "On the reviewers' desk, assigned to the person behind the agent (#52); repeating it is harmless. A draft asks nobody:
+  the owners are requested when the ready workflow marks it ready (ADR-0007), and asking now would send the
+  notification this change moves to the passed checks."
+  [{:keys [github warn]} {:keys [pr-url draft? reviewers human]}]
+  (let [edit (concat (when (and reviewers (not draft?))
+                       ["--add-reviewer" reviewers])
+                     (when human
+                       ["--add-assignee" human]))]
+    (when-not human
+      (warn
+       "Warning: no GHWF_HUMAN, so the PR has no assignee. Fix: run 'kit init' (or 'kit identity') on this machine; it reads your own gh login."))
+    (when (seq edit)
+      (let [result (github :edit-pr! pr-url edit)]
+        (when-not (zero? (:exit result))
+          (warn "Warning: could not request the review or set the assignee:"
+                (str/trim (str (:out result) (:err result)))))))
+    {}))
+
+
+(defn- hold-open-pr
+  "An open PR is held by its own label: the workflow reads it when CI completes."
+  [{:keys [github]} {:keys [pr-url hold opened?]}]
+  (when (and hold (not opened?))
+    (let [result (github :edit-pr! pr-url ["--add-label" "hold"])]
+      (when-not (zero? (:exit result))
+        (steps/fail!
+         :finish/hold-label-refused
+         (format "%s could not get the label hold: %s. Fix: add the label on GitHub, or run kit finish --hold again."
+                 pr-url
+                 (str/trim (str (:out result) (:err result))))))))
+  {})
+
+
+(defn- turn-on-auto-merge
+  "The owner's Approve is the word to merge: with auto-merge on, GitHub merges once the owner approved the latest commit,
+  the checks passed and the branch contains the latest base. A draft cannot have it: the ready workflow turns it on
+  after it marks the PR ready (ADR-0007)."
+  [{:keys [github warn]} {:keys [draft? pr-url]}]
+  (when-not draft?
+    (request-auto-merge github warn pr-url))
+  {})
+
+
+(defn- set-review-status
+  "A failed board update ends the run (#41). The PR is open by now, so only the status is left to set."
+  [{:keys [github warn kit]} {:keys [repo number owner project-number status-field review-status pr-url]}]
+  (when (not-any? str/blank? [owner project-number review-status])
+    (let [{:keys [exit out]} (github :issue-url repo number)
+          url (when (zero? exit)
+                (str/trim out))]
+      (if (str/blank? url)
+        (warn (format "Warning: issue #%s not found, Status not set" number))
+        (when-let [failure (github :set-field! project-number owner url status-field review-status)]
+          (steps/fail!
+           :finish/status-refused
+           (format "The pull request is open: %s. But the board %s of #%s is not '%s': %s. Set it alone: %s"
+                   pr-url
+                   status-field
+                   number
+                   review-status
+                   (board/board-reason failure)
+                   (board/board-set-command kit project-number owner url status-field review-status)))))))
+  {})
+
+
+(defn finish
+  "The recipe. Every step before :commit only reads, so a refusal there leaves nothing committed, pushed or opened."
+  [ctx input]
+  (steps/run ctx input
+    :pick-type          pick-type
+    :resolve-repo       resolve-repo
+    :check-branch       check-branch
+    :check-files        check-files
+    :find-open-pr       find-open-pr
+    :check-body-file    check-body-file
+    :make-subject       make-subject
+    :check-shape        check-shape
+    :decide-draft       decide-draft
+    :check-hold         check-hold
+    :make-hold-label    make-hold-label
+    :commit             commit
+    :push               push
+    :open-pr            open-pr
+    :ask-the-owners     ask-the-owners
+    :hold-open-pr       hold-open-pr
+    :turn-on-auto-merge turn-on-auto-merge
+    :set-review-status  set-review-status))
+
+
+;; ------------------------------------------------------------------ the edges
+
+
+(defn read-input
+  "The command line and the GHWF_* defaults as one map; env is (fn [name default]), shell/env in a run."
+  [args env]
+  (let [opts (shell/parse-opts finish-spec args)]
+    (if (:help opts)
+      opts
+      (assoc opts
+             :owner         (or (:owner opts) (env "GHWF_OWNER" nil))
+             :project-number (or (:project-number opts) (env "GHWF_PROJECT_NUMBER" nil))
+             :base          (or (:base opts) (env "GHWF_DEFAULT_BASE" "main"))
+             :status-field  (or (:status-field opts) (env "GHWF_STATUS_FIELD" "Status"))
+             :review-status (or (:review-status opts) (env "GHWF_REVIEW_STATUS" "In review"))
+             :reviewers     (env "GHWF_REVIEWERS" nil)
+             :human         (env "GHWF_HUMAN" nil)))))
+
+
+(defn print-result
+  "What the run made, in the lines the flow's readers expect."
+  [{:keys [subject pr-url draft? hold review-status]}]
+  (println (format "Subject: %s" subject))
+  (println (format "PR URL: %s" pr-url))
+  (when draft?
+    (let [held-note (if hold " Held: when the earlier PR has merged, run kit release." "")]
+      (println
+       (format
+        "Draft: the owners are asked once its required checks pass; the ready workflow marks it ready and turns on auto-merge.%s"
+        held-note))))
+  (println (format "Status: %s" review-status)))
+
+
 (defn finish!
+  "kit finish: read the command line, run the recipe on the real GitHub, print what it made — or the refusal."
   [kit args]
-  (let [o              (shell/parse-opts finish-spec args)
-        _ (when (:help o)
-            (println finish-usage)
-            (System/exit 0))
-        owner          (or (:owner o) (shell/env "GHWF_OWNER" nil))
-        project-number (or (:project-number o) (shell/env "GHWF_PROJECT_NUMBER" nil))
-        base           (or (:base o) (shell/env "GHWF_DEFAULT_BASE" "main"))
-        status-field   (or (:status-field o) (shell/env "GHWF_STATUS_FIELD" "Status"))
-        review-status  (or (:review-status o) (shell/env "GHWF_REVIEW_STATUS" "In review"))
-        ;; Without --type the PR follows the branch: its first `type(GH-n): …` commit that is not docs, else the first, else feat.
-        ctype          (or (:type o)
-                           (let [types (keep #(second (re-find #"^([a-z]+)\(GH-[0-9]+\): " %))
-                                             (str/split-lines (shell/git-out "log" "--reverse"
-                                                                             "--format=%s"
-                                                                             (str "origin/" base "..HEAD"))))]
-                             (or (first (remove #{"docs"} types)) (first types)))
-                           "feat")
-        repo           (shell/resolve-repo (:repo o))
-        branch         (shell/git-out "rev-parse" "--abbrev-ref" "HEAD")
-        _ (when (= branch "HEAD")
-            (shell/die "Detached HEAD is not supported"))
-        _ (when (= branch base)
-            (shell/die (str "On the base branch '" base "': run from the issue branch")))
-        ;; The issue is the branch's number: CI's pull request gate accepts no other (#21).
-        number         (or
-                        (shell/issue-branch-number branch)
-                        (shell/die
-                         (str
-                          "The branch '"
-                          branch
-                          "' is not <number>-<slug>: open the issue with kit start and move the work to its branch")))
-        ;; Everything that can be wrong with the inputs is checked before the commit and the push: a run that dies
-        ;; after the push leaves a branch with no pull request and a confusing rerun.
-        _ (when (and (:body-file o) (not (fs/readable? (:body-file o))))
-            (shell/die (str "PR body file '" (:body-file o) "' not found")))
-        _ (when (and (:message-file o) (not (fs/readable? (:message-file o))))
-            (shell/die (str "Commit message file '" (:message-file o) "' not found")))
-        ;; Only an open pull request counts: `gh pr view <branch>` also returns closed and merged ones.
-        pr-url         (not-empty (shell/gh! "pr" "list"
-                                    "-R"      repo
-                                    "--head"  branch
-                                    "--state" "open"
-                                    "--json"  "url"
-                                    "--jq"    ".[0].url // empty"))
-        _ (when-not (or pr-url (:body-file o))
-            (shell/die "--pr-body-file is required to open the pull request"))
-        subject        (cond
-                         (:summary o)      (str ctype "(GH-" number "): " (:summary o))
-                         (:message-file o) (first (str/split-lines (slurp (:message-file o))))
-                         :else             (let [t
-                                                 (shell/gh! "issue" "view" number
-                                                   "-R"     repo
-                                                   "--json" "title"
-                                                   "--jq"   ".title")]
-                                             (str ctype
-                                                  "(GH-"
-                                                  number
-                                                  "): "
-                                                  (str/lower-case (subs t 0 (min 1 (count t))))
-                                                  (subs t (min 1 (count t))))))
-        ;; The title and the body pass the rules CI checks on the pull request (#21): one implementation, in kit.
-        ;; The body is checked only when it becomes a new PR's body; an open PR keeps its own.
-        shape          (apply shell/run "bb" kit "gate"
-                         "--shape"
-                         "--branch" branch
-                         "--title"  subject
-                         (when (and (not pr-url) (:body-file o))
-                           ["--body-file" (:body-file o)]))
-        _ (when-not (zero? (:exit shape))
-            (shell/die (str "The pull request would fail CI's shape check; nothing was committed or pushed:\n"
-                            (str/trimr (str (:out shape) (:err shape))))))
-        ;; ADR-0007: with the ready workflow on main the PR opens as a draft and the workflow marks it ready.
-        base-draft?    (github/ready-workflow? repo base)
-        ;; An open PR is judged by its own state, not by the base's: a ready PR gets what a ready PR gets, and a
-        ;; draft is left to the workflow.
-        draft?         (if pr-url
-                         (= "true"
-                            (shell/gh! "pr" "view" pr-url
-                              "--json" "isDraft"
-                              "--jq"   ".isDraft"))
-                         base-draft?)
-        _
-        (when (and (:hold o) pr-url (not draft?))
-          (shell/die
-           (str
-            pr-url
-            " is ready already: the workflow only reads drafts, so --hold would hold nothing. Nothing was committed or "
-            "pushed: make it a draft first (gh pr ready " pr-url
-            " --undo; that turns auto-merge off and keeps the owners' "
-            "request) and run kit finish --hold again, or run kit finish without --hold.")))
-        _ (when (and (:hold o) (not base-draft?))
-            (shell/die
-             (str
-              "--hold works through "
-              github/ready-workflow-path
-              ", which '"
-              base
-              "' of "
-              repo
-              " does not hold yet. Nothing was "
-              "committed or pushed: run kit finish without --hold (the PR opens ready, the owners are asked at once), "
-              "or after the dev-kit update PR with the file has merged.")))
-        _ (when (:hold o)
-            (ensure-hold-label! repo))]
-    (when-not (:no-commit o)
-      (when (seq (:add o))
-        (shell/ok! (apply shell/shell "git" "add" "--" (:add o))))
-      (when (zero? (:exit (shell/run "git" "diff" "--cached" "--quiet")))
-        (shell/die "Nothing staged to commit (use --add <path>, or --no-commit)"))
-      (shell/ok! (if (:message-file o)
-                   (shell/shell "git" "commit" "-F" (:message-file o))
-                   (shell/shell "git" "commit" "-m" subject))))
-    (shell/ok! (shell/shell "git" "push" "-u" "origin" branch))
-    (let [existing? (boolean pr-url)
-          pr-url    (or pr-url
-                        (let [body (shell/file-text (:body-file o))
-                              body (if (re-find (re-pattern
-                                                 (str "(?i)(close[sd]?|fix(e[sd])?|resolve[sd]?) #" number "\\b"))
-                                                body)
-                                     body
-                                     (str "Closes #" number "\n\n" body))]
-                          (shell/last-line
-                           (apply shell/gh! "pr" "create"
-                             "-R"     repo
-                             "--base" base
-                             "--head" branch
-                             (cond-> []
-                               base-draft? (conj "--draft")
-                               (:hold o)   (conj "--label" "hold")
-                               :always     (conj "--title" subject "--body" body))))))
-          reviewers (shell/env "GHWF_REVIEWERS" nil)
-          human     (not-empty (System/getenv "GHWF_HUMAN"))
-          ;; A draft asks nobody: the owners are requested when the ready workflow marks it ready (ADR-0007), and
-          ;; asking now would send the notification this change moves to the passed checks.
-          edit      (concat (when (and reviewers (not draft?))
-                              ["--add-reviewer" reviewers])
-                            (when human
-                              ["--add-assignee" human]))]
-      ;; On the reviewers' desk, assigned to the person behind the agent (#52). Repeating it is harmless.
-      (when-not human
-        (shell/warn
-         "Warning: no GHWF_HUMAN, so the PR has no assignee. Fix: run 'kit init' (or 'kit identity') on this machine; it reads your own gh login."))
-      (when (seq edit)
-        (let [r (apply shell/run "gh" "pr" "edit" pr-url edit)]
-          (when-not (zero? (:exit r))
-            (shell/warn "Warning: could not request the review or set the assignee:"
-                        (str/trim (str (:out r) (:err r)))))))
-      ;; An open PR is held by its own label: the workflow reads it when CI completes.
-      (when (and (:hold o) existing?)
-        (let [r (shell/run "gh" "pr" "edit" pr-url "--add-label" "hold")]
-          (when-not (zero? (:exit r))
-            (shell/die (str pr-url
-                            " could not get the label hold: "
-                            (str/trim (str (:out r) (:err r)))
-                            ". Fix: add the label on GitHub, or run kit finish --hold again.")))))
-      ;; The owner's Approve is the word to merge: with auto-merge on, GitHub merges once the owner approved the
-      ;; latest commit, the checks passed and the branch contains the latest base. A draft cannot have it: the
-      ;; ready workflow turns it on after it marks the PR ready (ADR-0007).
-      (when-not draft?
-        (turn-on-auto-merge! pr-url))
-      ;; A failed board update ends the run (#41). The PR is open by now, so only the status is left to set.
-      (when (not-any? str/blank? [owner project-number review-status])
-        (let [url (shell/gh-out "issue" "view" number
-                    "-R"     repo
-                    "--json" "url"
-                    "--jq"   ".url")]
-          (if (str/blank? url)
-            (shell/warn (str "Warning: issue #" number " not found, Status not set"))
-            (when-let [e (board/board-set-field project-number owner url status-field review-status)]
-              (shell/die (str "The pull request is open: " pr-url
-                              ". But the board " status-field
-                              " of #" number
-                              " is not '"
-                              review-status
-                              "': " (board/board-reason e)
-                              ". Set it alone: "
-                              (board/board-set-command kit project-number owner url status-field review-status)))))))
-      (println (str "Subject: " subject))
-      (println (str "PR URL: " pr-url))
-      (when draft?
-        (println
-         (str
-          "Draft: the owners are asked once its required checks pass; the ready workflow marks it ready and turns on auto-merge."
-          (when (:hold o) " Held: when the earlier PR has merged, run kit release."))))
-      (println (str "Status: " review-status)))))
+  (let [input (read-input args shell/env)]
+    (when (:help input)
+      (println finish-usage)
+      (System/exit 0))
+    (let [ctx    {:github github/real :warn shell/warn :kit kit :resolve-repo shell/resolve-repo}
+          result (finish ctx input)]
+      (when (= :fail (::steps/status result))
+        (shell/exit-with! (steps/refusal result)))
+      (print-result result))))
