@@ -2,7 +2,8 @@
   "Running git and gh for the flow commands, reading their output, and failing with a message."
   (:require
    [babashka.process :as p]
-   [clojure.string :as str]))
+   [clojure.string :as str]
+   [dev-kit.config :as config]))
 
 
 (defn die
@@ -96,12 +97,34 @@
           (die "Unknown argument:" a))))))
 
 
-(defn env [k default] (or (not-empty (System/getenv k)) default))
+(def ^:private folder-config
+  "The kit.edn of the folder the flow runs in over the defaults, read once; nil when the folder has none."
+  (delay (config/read-config-at (System/getProperty "user.dir"))))
+
+
+(def ^:private warned-no-kit-edn (atom false))
+
+
+(defn env
+  "A setting of the flow: the folder's kit.edn, then the environment, then the default. A flag, which comes first,
+  is the caller's. The session's own variables come after the folder, so a session opened in one project does not
+  decide for another's folder (dev-kit#139). Without a kit.edn and a board in the environment it warns, once."
+  [k default]
+  (let [v (config/setting @folder-config #(System/getenv %) k default)]
+    (when (and (nil? v)
+               (#{"GHWF_OWNER" "GHWF_PROJECT_NUMBER"} k)
+               (not @folder-config)
+               (compare-and-set! warned-no-kit-edn false true))
+      (warn
+       "Warning: this folder has no kit.edn, and"
+       k
+       "is not set: add a kit.edn (run kit init, or write {:repo \"owner/name\" :showcase \"...\"}), or pass the flags."))
+    v))
 
 
 (defn resolve-repo
-  "owner/name: --repo, then the folder's GitHub origin, then GHWF_REPO. The folder comes before the session (#81):
-  a session opened in one project may work in another repository's worktree."
+  "owner/name: --repo, then the folder's GitHub origin, then the folder's kit.edn :repo, then GHWF_REPO (one
+  lookup, `env`). The folder comes before the session (#81): a session opened in one project may work in another repository's worktree."
   [repo]
   (or
    (not-empty repo)
@@ -111,11 +134,11 @@
                      (str/replace #"/$" "")
                      (str/replace #"\.git$" ""))]
      (second (re-find #"github\.com[:/]([^/]+/[^/]+)$" (or url ""))))
-   (not-empty (System/getenv "GHWF_REPO"))
+   (env "GHWF_REPO" nil)
    (do
      (binding [*out* *err*]
        (println
-        "Error: no repository: this folder has no GitHub origin and GHWF_REPO is not set; run inside the clone, or pass --repo owner/name"))
+        "Error: no repository: this folder has no GitHub origin, its kit.edn has no :repo and GHWF_REPO is not set; run inside the clone, or pass --repo owner/name"))
      (System/exit 1))))
 
 

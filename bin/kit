@@ -9,6 +9,7 @@
 ;;   .shared/bin/kit sync     the main checkout after a merge: fast-forward the base, set .shared to its pin, run doctor (#129)
 ;;   .shared/bin/kit start | finish | release | merge | checks   the delivery flow's GitHub steps (#95); --help on each
 ;;   .shared/bin/kit board set <project-number> <owner> <issue-url> <field> <option>   one card's field (#41)
+;;   .shared/bin/kit board show   the folder's board from its kit.edn, as JSON (the project-link plugin asks it, #139)
 ;;   .shared/bin/kit user-test   the project's user-level test, :user-test in kit.edn (#27)
 ;;   .shared/bin/kit identity [--dir PATH]   the agent's GitHub identity alone, for any repository
 ;;   .shared/bin/kit github   [--check NAME] [--yes] [--repo R]   the repository's main ruleset and access, set up by

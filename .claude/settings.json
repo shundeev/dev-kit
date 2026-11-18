@@ -228,13 +228,5 @@
         ]
       }
     ]
-  },
-  "env": {
-    "GHWF_DEFAULT_BASE": "main",
-    "GHWF_OWNER": "u473t8",
-    "GHWF_PROJECT_NUMBER": "3",
-    "GHWF_REPO": "shundeev/dev-kit",
-    "GHWF_REVIEWERS": "shundeev/owners",
-    "GHWF_SHOWCASE": "Process"
   }
 }

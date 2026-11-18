@@ -107,8 +107,17 @@
 
 (defn board!
   [_kit args]
+  (when (= ["show"] args)
+    ;; the folder's board: its kit.edn, then the environment; exit 1 when neither names one
+    (let [owner  (shell/env "GHWF_OWNER" nil)
+          number (shell/env "GHWF_PROJECT_NUMBER" nil)]
+      (if (and owner number)
+        (do (println (json/generate-string {:owner owner :number number})) (System/exit 0))
+        (System/exit 1))))
   (when-not (and (= "set" (first args)) (= 6 (count args)))
-    (binding [*out* *err*] (println "Usage: kit board set <project-number> <owner> <issue-url> <field> <option>"))
+    (binding [*out* *err*]
+      (println "Usage: kit board set <project-number> <owner> <issue-url> <field> <option>")
+      (println "       kit board show   the folder's board as JSON, {\"owner\": ..., \"number\": ...}"))
     (System/exit 2))
   (let [[_ number owner url field option] args]
     (when-let [e (board-set-field number owner url field option)]

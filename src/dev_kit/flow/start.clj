@@ -114,10 +114,11 @@ Options:
   (when (str/blank? title)
     (steps/fail! :start/no-title "--title is required"))
   (when (str/blank? owner)
-    (steps/fail! :start/no-owner "--owner or GHWF_OWNER is required"))
+    (steps/fail! :start/no-owner "no board owner: pass --owner, or add a kit.edn to this project (run kit init)"))
   (let [repo (resolve-repo (:repo input))]
     (when (str/blank? project-number)
-      (steps/fail! :start/no-project "--project-number or GHWF_PROJECT_NUMBER is required"))
+      (steps/fail! :start/no-project
+                   "no board number: pass --project-number, or add a kit.edn to this project (run kit init)"))
     (when-not (#{"issue" "draft-convert"} mode)
       (steps/fail! :start/bad-mode "--mode must be 'issue' or 'draft-convert'"))
     (when (and skip-branch no-checkout)
