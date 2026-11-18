@@ -118,10 +118,10 @@
   [repo n]
   (let [[o r] (str/split repo #"/")]
     (get-in (json/parse-string (base/gh! "api" "graphql"
-                                         "-f"  (str "query=" issue-query)
-                                         "-f"  (str "o=" o)
-                                         "-f"  (str "n=" r)
-                                         "-F"  (str "i=" n)))
+                                 "-f" (str "query=" issue-query)
+                                 "-f" (str "o=" o)
+                                 "-f" (str "n=" r)
+                                 "-F" (str "i=" n)))
             ["data" "repository" "issue"])))
 
 

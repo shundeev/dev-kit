@@ -137,7 +137,10 @@
 
 (defn submodule-problems
   []
-  (let [paths  (some-> (base/sh "git" "config" "-f" ".gitmodules" "--get-regexp" "path") str/split-lines)
+  (let [paths  (some-> (base/sh "git" "config"
+                         "-f"           ".gitmodules"
+                         "--get-regexp" "path")
+                       str/split-lines)
         status (base/sh "git" "submodule" "status" base/mount)
         dirty  (base/sh "git" "-C" base/mount "status" "--porcelain")]
     (cond-> []

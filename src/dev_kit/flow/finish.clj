@@ -99,11 +99,10 @@ Options:
 (defn- ensure-hold-label!
   "The label hold exists in the repository; made when it does not."
   [repo]
-  (let [{:keys [exit out err]} (shell/run "gh"      "label"
-                                          "create"  "hold"
-                                          "-R"      repo
-                                          "--color" "FBCA04"
-                                          "--description" "Stays a draft until kit release (ADR-0007)")]
+  (let [{:keys [exit out err]} (shell/run "gh" "label" "create" "hold"
+                                 "-R"            repo
+                                 "--color"       "FBCA04"
+                                 "--description" "Stays a draft until kit release (ADR-0007)")]
     (when-not (or (zero? exit) (re-find #"already exists" (str out err)))
       (shell/die (str "Label 'hold' does not exist in "
                       repo
@@ -155,22 +154,21 @@ Options:
         _ (when (and (:message-file o) (not (fs/readable? (:message-file o))))
             (shell/die (str "Commit message file '" (:message-file o) "' not found")))
         ;; Only an open pull request counts: `gh pr view <branch>` also returns closed and merged ones.
-        pr-url         (not-empty (shell/gh! "pr"      "list"
-                                             "-R"      repo
-                                             "--head"  branch
-                                             "--state" "open"
-                                             "--json"  "url"
-                                             "--jq"    ".[0].url // empty"))
+        pr-url         (not-empty (shell/gh! "pr" "list"
+                                    "-R"      repo
+                                    "--head"  branch
+                                    "--state" "open"
+                                    "--json"  "url"
+                                    "--jq"    ".[0].url // empty"))
         _ (when-not (or pr-url (:body-file o)) (shell/die "--pr-body-file is required to open the pull request"))
         subject        (cond
                          (:summary o)      (str ctype "(GH-" number "): " (:summary o))
                          (:message-file o) (first (str/split-lines (slurp (:message-file o))))
                          :else             (let [t
-                                                 (shell/gh! "issue"
-                                                            "view"   number
-                                                            "-R"     repo
-                                                            "--json" "title"
-                                                            "--jq"   ".title")]
+                                                 (shell/gh! "issue" "view" number
+                                                   "-R"     repo
+                                                   "--json" "title"
+                                                   "--jq"   ".title")]
                                              (str ctype
                                                   "(GH-"
                                                   number
@@ -179,16 +177,11 @@ Options:
                                                   (subs t (min 1 (count t))))))
         ;; The title and the body pass the rules CI checks on the pull request (#21): one implementation, in kit.
         ;; The body is checked only when it becomes a new PR's body; an open PR keeps its own.
-        shape          (apply shell/run
-                              "bb"
-                              kit
-                              "gate"
-                              "--shape"
-                              "--branch"
-                              branch
-                              "--title"
-                              subject
-                              (when (and (not pr-url) (:body-file o)) ["--body-file" (:body-file o)]))
+        shape          (apply shell/run "bb" kit "gate"
+                         "--shape"
+                         "--branch" branch
+                         "--title"  subject
+                         (when (and (not pr-url) (:body-file o)) ["--body-file" (:body-file o)]))
         _ (when-not (zero? (:exit shape))
             (shell/die (str "The pull request would fail CI's shape check; nothing was committed or pushed:\n"
                             (str/trimr (str (:out shape) (:err shape))))))
@@ -197,7 +190,10 @@ Options:
         ;; An open PR is judged by its own state, not by the base's: a ready PR gets what a ready PR gets, and a
         ;; draft is left to the workflow.
         draft?         (if pr-url
-                         (= "true" (shell/gh! "pr" "view" pr-url "--json" "isDraft" "--jq" ".isDraft"))
+                         (= "true"
+                            (shell/gh! "pr" "view" pr-url
+                              "--json" "isDraft"
+                              "--jq"   ".isDraft"))
                          base-draft?)
         _
         (when (and (:hold o) pr-url (not draft?))
@@ -222,7 +218,8 @@ Options:
               "or after the dev-kit update PR with the file has merged.")))
         _ (when (:hold o) (ensure-hold-label! repo))]
     (when-not (:no-commit o)
-      (when (seq (:add o)) (shell/ok! (apply shell/shell "git" "add" "--" (:add o))))
+      (when (seq (:add o))
+        (shell/ok! (apply shell/shell "git" "add" "--" (:add o))))
       (when (zero? (:exit (shell/run "git" "diff" "--cached" "--quiet")))
         (shell/die "Nothing staged to commit (use --add <path>, or --no-commit)"))
       (shell/ok! (if (:message-file o)
@@ -237,18 +234,15 @@ Options:
                                                 body)
                                      body
                                      (str "Closes #" number "\n\n" body))]
-                          (shell/last-line (apply shell/gh!
-                                                  "pr"
-                                                  "create"
-                                                  "-R"
-                                                  repo
-                                                  "--base"
-                                                  base
-                                                  "--head"
-                                                  branch
-                                                  (concat (when base-draft? ["--draft"])
-                                                          (when (:hold o) ["--label" "hold"])
-                                                          ["--title" subject "--body" body])))))
+                          (shell/last-line
+                           (apply shell/gh! "pr" "create"
+                             "-R"     repo
+                             "--base" base
+                             "--head" branch
+                             (cond-> []
+                               base-draft? (conj "--draft")
+                               (:hold o)   (conj "--label" "hold")
+                               :always     (conj "--title" subject "--body" body))))))
           reviewers (not-empty (System/getenv "GHWF_REVIEWERS"))
           human     (not-empty (System/getenv "GHWF_HUMAN"))
           ;; A draft asks nobody: the owners are requested when the ready workflow marks it ready (ADR-0007), and
@@ -279,7 +273,10 @@ Options:
         (turn-on-auto-merge! pr-url))
       ;; A failed board update ends the run (#41). The PR is open by now, so only the status is left to set.
       (when (not-any? str/blank? [owner project-number review-status])
-        (let [url (shell/gh-out "issue" "view" number "-R" repo "--json" "url" "--jq" ".url")]
+        (let [url (shell/gh-out "issue" "view" number
+                    "-R"     repo
+                    "--json" "url"
+                    "--jq"   ".url")]
           (if (str/blank? url)
             (shell/warn (str "Warning: issue #" number " not found, Status not set"))
             (when-let [e (board/board-set-field project-number owner url status-field review-status)]

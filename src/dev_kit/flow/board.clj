@@ -51,19 +51,25 @@
   [number owner url field option]
   (try
     (let [number (str number)
-          item   (board-gh! "project" "item-add" number "--owner" owner "--url" url "--format" "json" "--jq" ".id")
+          item   (board-gh! "project" "item-add" number
+                   "--owner"  owner
+                   "--url"    url
+                   "--format" "json"
+                   "--jq"     ".id")
           pid    (or (:pid @board-cache)
                      (:pid (swap! board-cache assoc
                              :pid
-                             (board-gh! "project" "view" number "--owner" owner "--format" "json" "--jq" ".id"))))
+                             (board-gh! "project" "view" number
+                               "--owner"  owner
+                               "--format" "json"
+                               "--jq"     ".id"))))
           fields (or (:fields @board-cache)
                      (:fields (swap! board-cache assoc
                                 :fields
-                                (json/parse-string (board-gh! "project"
-                                                              "field-list" number
-                                                              "--owner"    owner
-                                                              "--format"   "json"
-                                                              "--limit"    "100")
+                                (json/parse-string (board-gh! "project" "field-list" number
+                                                     "--owner"  owner
+                                                     "--format" "json"
+                                                     "--limit"  "100")
                                                    true))))
           f      (some #(when (= field (:name %)) %) (:fields fields))
           o      (some #(when (= option (:name %)) %) (:options f))]
@@ -84,11 +90,11 @@
                       "'; its options: "
                       (str/join ", " (map :name (:options f)))
                       ". Use one of them, or add the option on the board")
-        :else    (do (board-gh! "project"      "item-edit"
-                                "--id"         item
-                                "--project-id" pid
-                                "--field-id"   (:id f)
-                                "--single-select-option-id" (:id o))
+        :else    (do (board-gh! "project" "item-edit"
+                       "--id" item
+                       "--project-id" pid
+                       "--field-id" (:id f)
+                       "--single-select-option-id" (:id o))
                      nil)))
     (catch clojure.lang.ExceptionInfo e (ex-message e))))
 

@@ -42,21 +42,13 @@
   [owner number status-field]
   (loop [after nil
          items []]
-    (let [page  (json/parse-string
-                 (apply shell/gh!
-                        "api"
-                        "graphql"
-                        "-f"
-                        (str "query=" items-query)
-                        "-F"
-                        (str "owner=" owner)
-                        "-F"
-                        (str "number=" number)
-                        "-f"
-                        (str "status=" status-field)
-                        (when after ["-F" (str "after=" after)]))
-                 true)
-          conn  (get-in page [:data :owner :projectV2 :items])
+    (let [out   (apply shell/gh! "api" "graphql"
+                  "-f" (str "query=" items-query)
+                  "-F" (str "owner=" owner)
+                  "-F" (str "number=" number)
+                  "-f" (str "status=" status-field)
+                  (when after ["-F" (str "after=" after)]))
+          conn  (get-in (json/parse-string out true) [:data :owner :projectV2 :items])
           items (into items
                       (for [{:keys [id isArchived status content]} (:nodes conn)
                             :when (not isArchived)]
@@ -85,106 +77,118 @@
      (str/split-lines (shell/gh! "api" (str "repos/" repo "/milestones?state=open") "--paginate" "--jq" ".[].title")))
 
    :retro-missing
-   (fn [kit repo] (shell/run "bb" kit "retro" "--missing" "--repo" repo))
+   (fn [kit repo]
+     (shell/run "bb" kit "retro" "--missing" "--repo" repo))
 
    :graphql-remaining
-   (fn [] (some-> (shell/gh-out "api" "rate_limit" "--jq" ".resources.graphql.remaining") not-empty parse-long))
+   (fn []
+     (some-> (shell/gh-out "api" "rate_limit" "--jq" ".resources.graphql.remaining")
+             not-empty
+             parse-long))
 
    :issue-url
-   (fn [repo number] (shell/run "gh" "issue" "view" number "-R" repo "--json" "url" "--jq" ".url"))
+   (fn [repo number]
+     (shell/run "gh" "issue" "view" number
+       "-R"     repo
+       "--json" "url"
+       "--jq"   ".url"))
 
    :project-items
    project-items
 
    :open-issues-titled
    (fn [repo title]
-     (json/parse-string (or (shell/gh-out "issue"    "list"
-                                          "-R"       repo
-                                          "--state"  "open"
-                                          "--search" (str title " in:title")
-                                          "--limit"  "20"
-                                          "--json"   "number,title,url")
-                            "[]")
-                        true))
+     (let [out (shell/gh-out "issue" "list"
+                 "-R"       repo
+                 "--state"  "open"
+                 "--search" (str title " in:title")
+                 "--limit"  "20"
+                 "--json"   "number,title,url")]
+       (json/parse-string (or out "[]") true)))
 
    :repo-id
-   (fn [repo] (shell/gh! "repo" "view" repo "--json" "id" "--jq" ".id"))
+   (fn [repo]
+     (shell/gh! "repo" "view" repo
+       "--json" "id"
+       "--jq"   ".id"))
 
    :convert-draft!
    (fn [item-id repo-id]
-     (get-in (json/parse-string (shell/gh! "api" "graphql"
-                                           "-f"  (str "query=" convert-mutation)
-                                           "-F"  (str "itemId=" item-id)
-                                           "-F"  (str "repositoryId=" repo-id))
-                                true)
-             [:data :convertProjectV2DraftIssueItemToIssue :item :content]))
+     (let [out (shell/gh! "api" "graphql"
+                 "-f" (str "query=" convert-mutation)
+                 "-F" (str "itemId=" item-id)
+                 "-F" (str "repositoryId=" repo-id))]
+       (get-in (json/parse-string out true) [:data :convertProjectV2DraftIssueItemToIssue :item :content])))
 
    :known-labels
    (fn [repo]
-     (try (set (map :name
-                    (json/parse-string (shell/gh-out "label" "list" "-R" repo "--limit" "200" "--json" "name") true)))
-          (catch Exception _ #{})))
+     (let [out (shell/gh-out "label" "list"
+                 "-R"      repo
+                 "--limit" "200"
+                 "--json"  "name")]
+       (try (set (map :name (json/parse-string out true)))
+            (catch Exception _ #{}))))
 
    :create-label!
-   (fn [repo label] (zero? (:exit (shell/run "gh" "label" "create" label "-R" repo))))
+   (fn [repo label]
+     (zero? (:exit (shell/run "gh" "label" "create" label "-R" repo))))
 
    :file-issue!
    (fn [repo title body-args label-args assignee-args]
-     (shell/last-line (apply shell/gh!
-                             (concat ["issue" "create" "-R" repo "--title" title]
-                                     body-args
-                                     label-args
-                                     assignee-args))))
+     (shell/last-line
+      (apply shell/gh! "issue" "create"
+        "-R"      repo
+        "--title" title
+        (concat body-args label-args assignee-args))))
 
    :create-draft!
    (fn [project-number owner title body]
-     (:id (json/parse-string (apply shell/gh!
-                                    (concat ["project" "item-create" project-number "--owner" owner "--title" title
-                                             "--format" "json"]
-                                            (when body ["--body" body])))
-                             true)))
+     (let [out (apply shell/gh! "project" "item-create" project-number
+                 "--owner"  owner
+                 "--title"  title
+                 "--format" "json"
+                 (when body ["--body" body]))]
+       (:id (json/parse-string out true))))
 
    :item-add!
    (fn [project-number owner url]
-     (try {:id (board/board-gh! "project"
-                                "item-add" project-number
-                                "--owner"  owner
-                                "--url"    url
-                                "--format" "json"
-                                "--jq"     ".id")}
+     (try {:id (board/board-gh! "project" "item-add" project-number
+                 "--owner"  owner
+                 "--url"    url
+                 "--format" "json"
+                 "--jq"     ".id")}
           (catch clojure.lang.ExceptionInfo e {:error (ex-message e)})))
 
    :edit-issue!
-   (fn [repo number args] (apply shell/gh! "issue" "edit" number "-R" repo args))
+   (fn [repo number args]
+     (apply shell/gh! "issue" "edit" number "-R" repo args))
 
    :set-field!
    (fn [project-number owner url field option] (board/board-set-field project-number owner url field option))
 
    :size-label!
    (fn [repo number size]
-     (shell/run "gh"
-                "label"
-                "create"
-                (str "size:" size)
-                "-R"
-                repo
-                "--color"
-                "BFD4F2"
-                "--description"
-                "Task size (ADR-0002), mirrors the board field" "--force")
-     (let [old  (some-> (shell/gh-out "issue"
-                                      "view" number
-                                      "-R" repo
-                                      "--json" "labels"
-                                      "--jq"
-                                      ".labels[].name | select(startswith(\"size:\"))")
+     (shell/run "gh" "label" "create" (str "size:" size)
+       "-R"            repo
+       "--color"       "BFD4F2"
+       "--description" "Task size (ADR-0002), mirrors the board field"
+       "--force")
+     (let [old  (some-> (shell/gh-out "issue" "view" number
+                          "-R"     repo
+                          "--json" "labels"
+                          "--jq"   ".labels[].name | select(startswith(\"size:\"))")
                         str/split-lines)
            gone (mapcat (fn [l] ["--remove-label" l]) (remove #(or (str/blank? %) (= % (str "size:" size))) old))]
-       (zero? (:exit (apply shell/run "gh" "issue" "edit" number "-R" repo "--add-label" (str "size:" size) gone)))))
+       (zero? (:exit (apply shell/run "gh" "issue" "edit" number
+                       "-R"          repo
+                       "--add-label" (str "size:" size)
+                       gone)))))
 
    :linked-branch
    (fn [repo number]
-     (some-> (shell/gh-out "issue" "develop" "--list" number "-R" repo)
+     (some-> (shell/gh-out "issue" "develop"
+               "--list" number
+               "-R"     repo)
              str/split-lines
              first
              (str/split #"\t")
@@ -192,7 +196,8 @@
              not-empty))
 
    :develop!
-   (fn [repo number develop-args] (shell/last-line (apply shell/gh! "issue" "develop" number "-R" repo develop-args)))
+   (fn [repo number develop-args]
+     (shell/last-line (apply shell/gh! "issue" "develop" number "-R" repo develop-args)))
 
    :current-branch
    (fn [] (some-> (shell/run "git" "branch" "--show-current") :out str/trim))})

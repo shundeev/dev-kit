@@ -91,7 +91,9 @@
   []
   (let [base-branch (or (:base (config/read-config)) (:base (config/read-defaults)))
         branch      (base/sh "git" "branch" "--show-current")
-        dirty       (remove str/blank? (str/split-lines (or (base/sh "git" "diff" "--name-only" "HEAD") "")))]
+        dirty       (remove str/blank?
+                            (str/split-lines (or (base/sh "git" "diff" "--name-only" "HEAD")
+                                                 "")))]
     (when-not (= base-branch branch)
       (config/fail! (str "sync: the checkout is on "
                          (if (str/blank? branch) "no branch (detached HEAD)" branch)

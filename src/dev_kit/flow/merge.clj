@@ -66,11 +66,13 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
   [pr-url]
   (doseq [{:keys [number url]} (:closingIssuesReferences
                                 (wait/gh-json shell/die "pr" "view" pr-url "--json" "closingIssuesReferences"))]
-    (if (= "OPEN" (shell/gh! "issue" "view" url "--json" "state" "--jq" ".state"))
-      (let [r (shell/run "gh"        "issue"
-                         "close"     url
-                         "--reason"  "completed"
-                         "--comment" (str "Closed by " pr-url ", which merged."))]
+    (if (= "OPEN"
+           (shell/gh! "issue" "view" url
+             "--json" "state"
+             "--jq"   ".state"))
+      (let [r (shell/run "gh" "issue" "close" url
+                "--reason"  "completed"
+                "--comment" (str "Closed by " pr-url ", which merged."))]
         (if (zero? (:exit r))
           (println (str "Closed #" number ": " url))
           (shell/warn (str "Warning: could not close #"
@@ -99,7 +101,12 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
         poll (wait/pause)
         pr-list
         #(not-empty
-          (shell/gh! "pr" "list" "-R" repo "--head" branch "--state" % "--json" "url" "--jq" ".[0].url // empty"))
+          (shell/gh! "pr" "list"
+            "-R"      repo
+            "--head"  branch
+            "--state" %
+            "--json"  "url"
+            "--jq"    ".[0].url // empty"))
         open-url (pr-list "open")
         shown (atom nil)
         ;; One look at the pull request. It ends the run when merging is impossible, and brings a branch that is behind
@@ -198,7 +205,10 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
         ;; A failed board update ends the run with an error (#41), after the closeout below: the merge is done.
         board-error
         (when (not-any? str/blank? [owner project-number])
-          (let [url (shell/gh! "issue" "view" number "-R" repo "--json" "url" "--jq" ".url")]
+          (let [url (shell/gh! "issue" "view" number
+                      "-R"     repo
+                      "--json" "url"
+                      "--jq"   ".url")]
             (when-let [e (board/board-set-field project-number owner url status-field done-status)]
               (str "The board " status-field
                    " of #"      number

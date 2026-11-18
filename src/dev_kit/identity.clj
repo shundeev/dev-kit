@@ -174,7 +174,9 @@
 (defn offer-login!
   "Starts the agent's login when it is missing or wrong and a person is at the terminal."
   [agent]
-  (when (and (agent-login-problem agent) (interactive?) (base/sh "bash" "-c" "command -v gh"))
+  (when (and (agent-login-problem agent)
+             (interactive?)
+             (base/sh "bash" "-c" "command -v gh"))
     (login-agent! agent)))
 
 

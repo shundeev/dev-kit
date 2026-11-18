@@ -46,19 +46,22 @@ Options:
         repo   (shell/resolve-repo (:repo o))
         branch (finish/git-out "rev-parse" "--abbrev-ref" "HEAD")
         pr     (or (:pr o)
-                   (not-empty (shell/gh! "pr"      "list"
-                                         "-R"      repo
-                                         "--head"  branch
-                                         "--state" "open"
-                                         "--json"  "url"
-                                         "--jq"    ".[0].url // empty"))
+                   (not-empty (shell/gh! "pr" "list"
+                                "-R"      repo
+                                "--head"  branch
+                                "--state" "open"
+                                "--json"  "url"
+                                "--jq"    ".[0].url // empty"))
                    (shell/die (str "No open pull request for branch '"
                                    branch
                                    "' in "
                                    repo
                                    ". Fix: run it from the held PR's branch, or name it with --pr <number>")))
         {:keys [state isDraft labels url]}
-        (json/parse-string (shell/gh! "pr" "view" pr "-R" repo "--json" "state,isDraft,labels,url") true)
+        (json/parse-string (shell/gh! "pr" "view" pr
+                             "-R"     repo
+                             "--json" "state,isDraft,labels,url")
+                           true)
         url    (or url pr)
         held?  (boolean (some #(= "hold" (:name %)) labels))
         _ (when-not (= state "OPEN") (shell/die (str url " is " state ", not open: nothing to release.")))
@@ -69,7 +72,9 @@ Options:
                       ". Nothing was changed: wait for it "
                       "(kit checks, in the background), then run kit release again; a failed check is fixed first.")))
     (when held?
-      (shell/ok! (shell/shell "gh" "pr" "edit" pr "-R" repo "--remove-label" "hold"))
+      (shell/ok! (shell/shell "gh" "pr" "edit" pr
+                   "-R"             repo
+                   "--remove-label" "hold"))
       (println "Hold removed."))
     (when isDraft
       (shell/ok! (shell/shell "gh" "pr" "ready" pr "-R" repo))
