@@ -67,7 +67,8 @@
           {:keys [exit out err]} (try (p/sh {:in input :env env :continue true} "bash" entry)
                                       (finally (fs/delete-tree state)))
           out   (str/trim (str out))
-          d     (when (str/starts-with? out "{") (:hookSpecificOutput (json/parse-string out true)))
+          d     (when (str/starts-with? out "{")
+                  (:hookSpecificOutput (json/parse-string out true)))
           why   (some-> (:permissionDecisionReason d) (str/replace #"\s+" " "))
           [code verdict] (cond (= "ask" (:permissionDecision d)) [3 (str "asks: " why)]
                                (= "deny" (:permissionDecision d)) [2 (str "refused: " why)]
@@ -91,7 +92,9 @@
   []
   (let [base-branch (or (:base (config/read-config)) (:base (config/read-defaults)))
         branch      (base/sh "git" "branch" "--show-current")
-        dirty       (remove str/blank? (str/split-lines (or (base/sh "git" "diff" "--name-only" "HEAD") "")))]
+        dirty       (remove str/blank?
+                            (str/split-lines (or (base/sh "git" "diff" "--name-only" "HEAD")
+                                                 "")))]
     (when-not (= base-branch branch)
       (config/fail! (str "sync: the checkout is on "
                          (if (str/blank? branch) "no branch (detached HEAD)" branch)

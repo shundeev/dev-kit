@@ -1,13 +1,12 @@
 (ns dev-kit.flow.start
-  "kit start: files the issue or reuses one, puts it on the board and creates its branch."
+  "kit start: files the issue or reuses one, puts it on the board with its fields and creates its branch; nothing is
+  filed until every check has passed. `start` is the recipe, start! its edge."
   (:require
-   [cheshire.core :as json]
    [clojure.string :as str]
    [dev-kit.flow.board :as board]
-   [dev-kit.flow.shell :as shell]))
-
-
-;; ------------------------------------------------------------------ kit start
+   [dev-kit.flow.github :as github]
+   [dev-kit.flow.shell :as shell]
+   [dev-kit.flow.steps :as steps]))
 
 
 (def start-usage
@@ -77,332 +76,352 @@ Options:
    "-h"               [:help :flag]})
 
 
-(def items-query
-  "query($owner: String!, $number: Int!, $status: String!, $after: String) {
-      owner: repositoryOwner(login: $owner) {
-        ... on ProjectV2Owner {
-          projectV2(number: $number) {
-            items(first: 100, after: $after) {
-              pageInfo { hasNextPage endCursor }
-              nodes {
-                id
-                isArchived
-                status: fieldValueByName(name: $status) { ... on ProjectV2ItemFieldSingleSelectValue { name } }
-                content {
-                  __typename
-                  ... on Issue { number url title state }
-                  ... on PullRequest { number url title }
-                  ... on DraftIssue { title }
-                }
-              }
-            }
-          }
-        }
-      }
-    }")
+(declare check-input
+         check-milestone
+         check-retro
+         note-graphql-budget
+         find-or-file-issue
+         put-on-board
+         label-and-assign
+         set-board-fields
+         create-branch)
 
 
-(defn project-items
-  "The board's cards, not archived ones: they are out of the CLI's listing too, and reusing one would resurrect work
-  the owner had put away. Only the four fields a match needs are asked for: `gh project item-list` asks for every
-  field of every card, 203 points of the 5000 hourly GraphQL budget on a board this size."
-  [owner number status-field]
-  (loop [after nil
-         items []]
-    (let [page  (json/parse-string
-                 (apply shell/gh!
-                        "api"
-                        "graphql"
-                        "-f"
-                        (str "query=" items-query)
-                        "-F"
-                        (str "owner=" owner)
-                        "-F"
-                        (str "number=" number)
-                        "-f"
-                        (str "status=" status-field)
-                        (when after ["-F" (str "after=" after)]))
-                 true)
-          conn  (get-in page [:data :owner :projectV2 :items])
-          items (into items
-                      (for [n     (:nodes conn)
-                            :when (not (:isArchived n))]
-                        {:id      (:id n)
-                         :title   (get-in n [:content :title] "")
-                         :status  (get-in n [:status :name] "")
-                         :content {:type   (get-in n [:content :__typename])
-                                   :number (get-in n [:content :number])
-                                   :url    (get-in n [:content :url])
-                                   :state  (get-in n [:content :state])}}))]
-      (if (get-in conn [:pageInfo :hasNextPage])
-        (recur (get-in conn [:pageInfo :endCursor]) items)
-        items))))
+(defn start
+  "kit start as a recipe. Nothing is filed before every check has passed; GitHub is (:github ctx), and the result is
+  data that start! prints."
+  [ctx input]
+  (steps/run ctx input
+    :check-input         check-input
+    :check-milestone     check-milestone
+    :check-retro         check-retro
+    :note-graphql-budget note-graphql-budget
+    :find-or-file-issue  find-or-file-issue
+    :put-on-board        put-on-board
+    :label-and-assign    label-and-assign
+    :set-board-fields    set-board-fields
+    :create-branch       create-branch))
 
 
-(defn find-item-by-title
-  "One board serves several repositories, so a title only matches an issue of this repo, or a draft, which belongs to
-  no repo yet. Only open work counts (#12): a closed issue or a Done card with a recurring title is history."
-  [items title repo]
-  (let [done (shell/env "GHWF_DONE_STATUS" "Done")]
-    (some #(when (and (= title (:title %))
-                      (or (= "DraftIssue" (get-in % [:content :type]))
-                          (and (= "Issue" (get-in % [:content :type]))
-                               (str/starts-with? (or (get-in % [:content :url]) "")
-                                                 (str "https://github.com/" repo "/"))))
-                      (not= "CLOSED" (get-in % [:content :state]))
-                      (not= done (:status %)))
-             %)
-          items)))
+;; ------------------------------------------------------------------ checks, before anything exists
+
+
+(defn- check-input
+  "What the flags alone can refuse: a run that files the issue and then stops on the priority leaves half-tracked
+  work behind. It also names the repository the run works in (:repo), between the owner and the project, as the
+  refusals have always come in that order."
+  [{:keys [resolve-repo]} {:keys [title owner project-number mode skip-branch no-checkout priority] :as input}]
+  (when (str/blank? title)
+    (steps/fail! :start/no-title "--title is required"))
+  (when (str/blank? owner)
+    (steps/fail! :start/no-owner "--owner or GHWF_OWNER is required"))
+  (let [repo (resolve-repo (:repo input))]
+    (when (str/blank? project-number)
+      (steps/fail! :start/no-project "--project-number or GHWF_PROJECT_NUMBER is required"))
+    (when-not (#{"issue" "draft-convert"} mode)
+      (steps/fail! :start/bad-mode "--mode must be 'issue' or 'draft-convert'"))
+    (when (and skip-branch no-checkout)
+      (steps/fail!
+       :start/branch-flags-conflict
+       "--skip-branch and --no-checkout are mutually exclusive: one creates no branch, the other creates one without touching the working tree"))
+    (cond (str/blank? priority)
+          (steps/fail! :start/no-priority "--priority is required: Urgent|High|Medium|Low")
+
+          (not (#{"Urgent" "High" "Medium" "Low"} priority))
+          (steps/fail! :start/off-scale-priority
+                       (str "Priority '" priority "' is not on the scale Urgent|High|Medium|Low")))
+    {:repo repo}))
+
+
+(defn- check-milestone
+  "An unknown milestone stops the run before an issue exists. Milestones are never created here."
+  [{:keys [github]} {:keys [repo milestone]}]
+  (when milestone
+    (let [open (github :open-milestones repo)]
+      (when-not (some #{milestone} open)
+        (steps/fail!
+         :start/unknown-milestone
+         (str "Milestone '" milestone "' is not an open milestone of '" repo "'. Open: " (str/join "/" open))
+         {:milestone milestone}))))
+  {})
+
+
+(defn- check-retro
+  "A merged task's retrospective comes before new work (#28, #56). When GitHub cannot be asked, say so and go on:
+  the check guards the process, not data."
+  [{:keys [github kit warn]} {:keys [repo skip-retro]}]
+  (when-not skip-retro
+    (let [{:keys [exit out err]} (github :retro-missing kit repo)
+          said (str/trim (str out err))]
+      (case (int exit)
+        0 nil
+        1 (steps/fail! :start/retro-missing said)
+        (warn "Warning: could not check for merged issues without a retrospective:" said))))
+  {})
+
+
+(defn- note-graphql-budget
+  "The GraphQL points left before the work, so start! can print what the run cost: a run that quietly eats a tenth
+  of the hourly budget is only noticed an hour later. A step of its own, here, to keep gh's calls in their order."
+  [{:keys [github]} _]
+  {:graphql-before (github :graphql-remaining)})
+
+
+;; ------------------------------------------------------------------ the issue
+
+
+(defn- csv [s] (remove str/blank? (map str/trim (str/split (or s "") #","))))
+
+
+(defn- label-args
+  "flag and label for each of --labels, a label the repository lacks created first. The repository's labels are
+  read once, on the first label, and travel on as :known-labels: the issue's edit later must not create them again."
+  [github repo labels known-labels flag]
+  (reduce (fn [{:keys [known-labels args]} label]
+            (let [known-labels (or known-labels (github :known-labels repo))]
+              (when-not (or (known-labels label) (github :create-label! repo label))
+                (steps/fail!
+                 :start/label-not-created
+                 (str "Label '"
+                      label
+                      "' does not exist in "
+                      repo
+                      " and could not be created: create it on GitHub (Issues > Labels), or drop it from --labels")))
+              {:known-labels (conj known-labels label) :args (conj args flag label)}))
+          {:known-labels known-labels :args []}
+          (csv labels)))
+
+
+(defn- issue-named-by-flag
+  "--issue N names the work: no title is matched, with reuse on or off (#12)."
+  [github {:keys [repo] number :issue}]
+  (when number
+    (let [{:keys [exit out err]} (github :issue-url repo number)]
+      (when-not (zero? exit)
+        (steps/fail!
+         :start/issue-not-found
+         (str "Issue #"
+              number
+              " not found in "
+              repo
+              " ("
+              (str/trim (str out err))
+              "): check the number, start without --issue, or pass --repo owner/name if that is the wrong repository")))
+      {:number number :url (str/trim out)})))
+
+
+(defn- open-work?
+  "One board serves several repositories, so a card only counts as an issue of this repo, or a draft, which belongs
+  to no repo yet. Only open work counts (#12): a closed issue or a Done card with a recurring title is history."
+  [{:keys [status content]} repo done-status]
+  (and (or (= "DraftIssue" (:type content))
+           (and (= "Issue" (:type content))
+                (str/starts-with? (or (:url content) "") (str "https://github.com/" repo "/"))))
+       (not= "CLOSED" (:state content))
+       (not= done-status status)))
+
+
+(defn- convert-draft
+  "A draft card made into an issue of the repository; the card keeps its id."
+  [github repo item-id]
+  (let [repo-id (github :repo-id repo)]
+    (when (str/blank? repo-id)
+      (steps/fail! :start/no-repo-id "Failed to resolve repository id"))
+    (let [{:keys [number url]} (github :convert-draft! item-id repo-id)]
+      (when-not (and number url)
+        (steps/fail! :start/draft-not-converted "Draft item conversion to issue failed"))
+      {:number (str number) :url url :item-id item-id})))
+
+
+(defn- card-with-title
+  "Open work with this title on the board: its issue, or its draft made into one."
+  [github {:keys [repo title owner project-number status-field done-status]}]
+  (when-let [{:keys [id content]}
+             (some #(when (and (= title (:title %)) (open-work? % repo done-status)) %)
+                   (github :project-items owner project-number status-field))]
+    (when-not id
+      (steps/fail! :start/card-without-id "Existing project item has no id"))
+    (case (:type content)
+      "Issue"      (do (when-not (and (:number content) (:url content))
+                         (steps/fail! :start/card-without-issue "Existing issue item is missing issue data"))
+                       {:number (str (:number content)) :url (:url content) :item-id id})
+      "DraftIssue" (convert-draft github repo id)
+      (steps/fail! :start/card-not-an-issue (str "Existing project item '" title "' is not an issue or draft issue")))))
+
+
+(defn- open-issue-with-title
+  "An open issue with this title that is not on the board yet."
+  [github {:keys [repo title]}]
+  (when-let [issue (some #(when (= title (:title %)) %) (github :open-issues-titled repo title))]
+    (when (str/blank? (:url issue))
+      (steps/fail! :start/issue-without-data "Existing issue is missing issue data"))
+    {:number (str (:number issue)) :url (:url issue)}))
+
+
+(defn- file-new
+  "A new issue, or a new draft made into one (--mode draft-convert)."
+  [github {:keys [repo title body body-file labels assignees mode project-number owner]}]
+  (if (= mode "issue")
+    (let [{:keys [known-labels args]} (label-args github repo labels nil "--label")
+          ;; gh issue create without a body asks for one, and without a terminal fails (#12)
+          url (github :file-issue!
+                      repo
+                      title
+                      (if body-file
+                        ["--body-file" body-file]
+                        ["--body" (or body "")])
+                      args
+                      (mapcat (fn [a] ["--assignee" a]) (csv assignees)))]
+      (when (str/blank? url)
+        (steps/fail! :start/issue-not-filed "Issue creation failed"))
+      {:number (last (str/split url #"/")) :url url :filed? true :known-labels known-labels})
+    (let [body (if body-file
+                 (shell/file-text body-file)
+                 (not-empty body))
+          id   (not-empty (github :create-draft! project-number owner title body))]
+      (when-not id
+        (steps/fail! :start/draft-not-created "Draft item creation failed"))
+      (convert-draft github repo id))))
+
+
+(defn- find-or-file-issue
+  "The issue this run is about: the one --issue names, else open work with this title, else a new one. Adds :number
+  and :url; :item-id when it came from a card; :filed? when this run filed it."
+  [{:keys [github]} facts]
+  (or (issue-named-by-flag github facts)
+      (when-not (:no-reuse facts)
+        (or (card-with-title github facts)
+            (open-issue-with-title github facts)))
+      (file-new github facts)))
+
+
+;; ------------------------------------------------------------------ the board, the labels, the branch
+
+
+(defn- put-on-board
+  "The issue's card on the board, unless it came from one."
+  [{:keys [github]} {:keys [item-id url number filed? project-number owner]}]
+  (when-not item-id
+    (let [{:keys [id error]} (github :item-add! project-number owner url)]
+      (when error
+        (steps/fail! :start/board-refused
+                     (if filed?
+                       (str "#" number
+                            " is filed but could not be put on the board: " (board/board-reason error)
+                            ". Then run kit start again with --issue " number)
+                       (str "#" number " could not be put on the board: " (board/board-reason error)))))
+      {:item-id id})))
+
+
+(defn- label-and-assign
+  "The labels, assignees and milestone, on a reused issue as well as on a new one."
+  [{:keys [github]} {:keys [repo number labels known-labels assignees milestone]}]
+  (let [{:keys [known-labels args]} (label-args github repo labels known-labels "--add-label")
+        edit (concat args
+                     (mapcat (fn [a] ["--add-assignee" a]) (csv assignees))
+                     (when milestone
+                       ["--milestone" milestone]))]
+    (when (seq edit)
+      (github :edit-issue! repo number edit))
+    {:known-labels known-labels}))
+
+
+(defn- set-board-fields
+  "Showcase, Priority, Size and Status on the card. A failed board update ends the run (#41): the issue exists, the
+  board does not show it as asked. The Size is mirrored as a size:* label: CI's design approval gate reads labels, it
+  cannot read a user's board (#26)."
+  [{:keys [github warn]}
+   {:keys [repo number url project-number owner showcase-field showcase priority-field priority size-field size
+           status-field status]}]
+  (let [field! (fn [field option]
+                 (when-not (str/blank? option)
+                   (when-let [e (github :set-field! project-number owner url field option)]
+                     (steps/fail! :start/field-refused
+                                  (str "#" number
+                                       " is filed, but its " field
+                                       " on the board is not '" option
+                                       "': "
+                                       (board/board-reason e)
+                                       ". Then run kit start again with --issue " number)))))]
+    (field! showcase-field showcase)
+    (field! priority-field priority)
+    (field! size-field size)
+    (when-not (or (str/blank? size) (github :size-label! repo number size))
+      (warn (str "Warning: could not set the label size:" size " on #" number)))
+    (field! status-field status)
+    {}))
+
+
+(defn- create-branch
+  "The issue's branch, from gh issue develop. Handed the branch already linked to the issue, it makes none twice:
+  with no --name it would append -1 to a taken name. --no-checkout leaves the working tree alone, so the name comes
+  from the URL gh prints."
+  [{:keys [github]} {:keys [repo number skip-branch no-checkout base branch-name]}]
+  (when-not skip-branch
+    (let [named (or branch-name (github :linked-branch repo number))
+          out   (github :develop!
+                        repo
+                        number
+                        (concat (when-not no-checkout
+                                  ["--checkout"])
+                                (when-not (str/blank? base)
+                                  ["--base" base])
+                                (when named
+                                  ["--name" named])))]
+      {:branch (if no-checkout
+                 (second (re-find #"/tree/(.*)$" (or out "")))
+                 (github :current-branch))})))
+
+
+;; ------------------------------------------------------------------ the edges
+
+
+(defn read-input
+  "The command line and the GHWF_* defaults as one map; env is (fn [name default]), shell/env in a run."
+  [args env]
+  (let [o (shell/parse-opts start-spec args)]
+    (if (:help o)
+      o
+      (assoc o
+             :owner          (or (:owner o) (env "GHWF_OWNER" nil))
+             :project-number (or (:project-number o) (env "GHWF_PROJECT_NUMBER" nil))
+             :showcase-field (or (:showcase-field o) (env "GHWF_SHOWCASE_FIELD" "Showcase"))
+             :priority-field (or (:priority-field o) (env "GHWF_PRIORITY_FIELD" "Priority"))
+             :size-field     (or (:size-field o) (env "GHWF_SIZE_FIELD" "Size"))
+             :status-field   (or (:status-field o) (env "GHWF_STATUS_FIELD" "Status"))
+             :base           (or (:base o) (env "GHWF_DEFAULT_BASE" "main"))
+             :assignees      (or (:assignees o) (env "GHWF_DEFAULT_ASSIGNEES" "@me"))
+             :showcase       (or (:showcase o) (env "GHWF_SHOWCASE" nil))
+             :priority       (or (:priority o) (env "GHWF_DEFAULT_PRIORITY" nil))
+             :size           (or (:size o) (env "GHWF_DEFAULT_SIZE" nil))
+             :status         (or (:status o) (when (:issue o) "In progress") (env "GHWF_DEFAULT_STATUS" "Backlog"))
+             :mode           (or (:mode o) "issue")
+             :done-status    (env "GHWF_DONE_STATUS" "Done")))))
+
+
+(defn- print-result
+  "What the run made, in the lines the flow's readers expect, and the GraphQL points it cost."
+  [github {:keys [url number item-id branch no-checkout graphql-before]}]
+  (println (str "Issue URL: " url))
+  (println (str "Issue Number: " number))
+  (println (str "Project Item ID: " item-id))
+  (when-not (str/blank? branch)
+    (println (str (if no-checkout "Branch: " "Checked Out Branch: ") branch)))
+  (when graphql-before
+    (when-let [after (github :graphql-remaining)]
+      (println (str "GraphQL Cost: " (- graphql-before after) " points (" after " left this hour)")))))
 
 
 (defn start!
+  "kit start: read the command line, run the recipe on the real GitHub, print what it made — or Error: and the
+  reason, exit 1."
   [kit args]
-  (let
-    [o            (shell/parse-opts start-spec args)
-     _ (when (:help o) (println start-usage) (System/exit 0))
-     title        (:title o)
-     owner        (or (:owner o) (shell/env "GHWF_OWNER" nil))
-     project-number (or (:project-number o) (shell/env "GHWF_PROJECT_NUMBER" nil))
-     showcase-field (or (:showcase-field o) (shell/env "GHWF_SHOWCASE_FIELD" "Showcase"))
-     priority-field (or (:priority-field o) (shell/env "GHWF_PRIORITY_FIELD" "Priority"))
-     size-field   (or (:size-field o) (shell/env "GHWF_SIZE_FIELD" "Size"))
-     status-field (or (:status-field o) (shell/env "GHWF_STATUS_FIELD" "Status"))
-     base         (or (:base o) (shell/env "GHWF_DEFAULT_BASE" "main"))
-     assignees    (or (:assignees o) (shell/env "GHWF_DEFAULT_ASSIGNEES" "@me"))
-     showcase     (or (:showcase o) (shell/env "GHWF_SHOWCASE" nil))
-     priority     (or (:priority o) (shell/env "GHWF_DEFAULT_PRIORITY" nil))
-     size         (or (:size o) (shell/env "GHWF_DEFAULT_SIZE" nil))
-     status       (or (:status o) (when (:issue o) "In progress") (shell/env "GHWF_DEFAULT_STATUS" "Backlog"))
-     mode         (or (:mode o) "issue")
-     _ (when (str/blank? title) (shell/die "--title is required"))
-     _ (when (str/blank? owner) (shell/die "--owner or GHWF_OWNER is required"))
-     repo         (shell/resolve-repo (:repo o))
-     _ (when (str/blank? project-number) (shell/die "--project-number or GHWF_PROJECT_NUMBER is required"))
-     _ (when-not (#{"issue" "draft-convert"} mode) (shell/die "--mode must be 'issue' or 'draft-convert'"))
-     _
-     (when (and (:skip-branch o) (:no-checkout o))
-       (shell/die
-        "--skip-branch and --no-checkout are mutually exclusive: one creates no branch, the other creates one without touching the working tree"))]
-    ;; Checked before anything is created: a run that files the issue and then dies on the priority leaves
-    ;; half-tracked work behind.
-    (cond (str/blank? priority) (shell/die "--priority is required: Urgent|High|Medium|Low")
-          (not (#{"Urgent" "High" "Medium" "Low"} priority))
-          (shell/die (str "Priority '" priority "' is not on the scale Urgent|High|Medium|Low")))
-    ;; An unknown milestone stops the run before an issue exists. Milestones are never created here.
-    (when-let [m (:milestone o)]
-      (let [open (str/split-lines
-                  (shell/gh! "api" (str "repos/" repo "/milestones?state=open") "--paginate" "--jq" ".[].title"))]
-        (when-not (some #{m} open)
-          (shell/die (str "Milestone '" m "' is not an open milestone of '" repo "'. Open: " (str/join "/" open))))))
-    ;; A merged task's retrospective comes before new work (#28, #56). When GitHub cannot be asked, say so and go
-    ;; on: the check guards the process, not data.
-    (when-not (:skip-retro o)
-      (let [{:keys [exit out err]} (shell/run "bb" kit "retro" "--missing" "--repo" repo)
-            said (str/trim (str out err))]
-        (case (int exit)
-          0 nil
-          1 (shell/die said)
-          (shell/warn "Warning: could not check for merged issues without a retrospective:" said))))
-    (let
-      [budget #(some-> (shell/gh-out "api" "rate_limit" "--jq" ".resources.graphql.remaining") not-empty parse-long)
-       before (budget)
-       labels (atom nil)
-       known? (fn [l]
-                (when-not @labels
-                  (reset! labels (try (set (map :name
-                                                (json/parse-string
-                                                 (shell/gh-out "label" "list" "-R" repo "--limit" "200" "--json" "name")
-                                                 true)))
-                                      (catch Exception _ #{}))))
-                (@labels l))
-       csv #(remove str/blank? (map str/trim (str/split (or % "") #",")))
-       label-args
-       (fn [flag]
-         (mapcat (fn [l]
-                   (when-not (known? l)
-                     (when-not (zero? (:exit (shell/run "gh" "label" "create" l "-R" repo)))
-                       (shell/die
-                        (str
-                         "Label '"
-                         l
-                         "' does not exist in "
-                         repo
-                         " and could not be created: create it on GitHub (Issues > Labels), or drop it from --labels")))
-                     (swap! labels conj l))
-                   [flag l])
-          (csv (:labels o))))
-       assignee-args (fn [flag] (mapcat (fn [a] [flag a]) (csv assignees)))
-       item-add
-       (fn [url what & [then]]
-         (try (board/board-gh! "project"
-                               "item-add" project-number
-                               "--owner"  owner
-                               "--url"    url
-                               "--format" "json"
-                               "--jq"     ".id")
-              (catch clojure.lang.ExceptionInfo e (shell/die (str what (board/board-reason (ex-message e)) then)))))
-       convert
-       (fn [item-id]
-         (let
-           [rid (shell/gh! "repo" "view" repo "--json" "id" "--jq" ".id")
-            _ (when (str/blank? rid) (shell/die "Failed to resolve repository id"))
-            ;; The schema (introspected, #12): input {itemId, repositoryId}, payload {item: ProjectV2Item}.
-            q
-            "mutation($itemId:ID!,$repositoryId:ID!){ convertProjectV2DraftIssueItemToIssue(input:{itemId:$itemId,repositoryId:$repositoryId}) { item { content { ... on Issue { number url } } } } }"
-            c (get-in (json/parse-string (shell/gh! "api" "graphql"
-                                                    "-f"  (str "query=" q)
-                                                    "-F"  (str "itemId=" item-id)
-                                                    "-F"  (str "repositoryId=" rid))
-                                         true)
-                      [:data :convertProjectV2DraftIssueItemToIssue :item :content])]
-           (when-not (and (:number c) (:url c)) (shell/die "Draft item conversion to issue failed"))
-           [(str (:number c)) (:url c)]))
-       use-item (fn [item]
-                  (let [id (or (:id item) (shell/die "Existing project item has no id"))]
-                    (case (get-in item [:content :type])
-                      "Issue"      (let [n (get-in item [:content :number])
-                                         u (get-in item [:content :url])]
-                                     (when-not (and n u) (shell/die "Existing issue item is missing issue data"))
-                                     [(str n) u id])
-                      "DraftIssue" (conj (convert id) id)
-                      (shell/die (str "Existing project item '" title "' is not an issue or draft issue")))))
-       ;; --issue N names the work: no title is matched, with reuse on or off (#12).
-       [number url item-id]
-       (cond
-         (:issue o)
-         (let [n (:issue o)
-               {:keys [exit out err]} (shell/run "gh" "issue" "view" n "-R" repo "--json" "url" "--jq" ".url")
-               u (str/trim out)]
-           (when-not (zero? exit)
-             (shell/die
-              (str
-               "Issue #"
-               n
-               " not found in "
-               repo
-               " ("
-               (str/trim (str out err))
-               "): check the number, start without --issue, or pass --repo owner/name if that is the wrong repository")))
-           [n u (item-add u (str "#" n " could not be put on the board: "))])
-
-         (not (:no-reuse o))
-         (if-let [item (find-item-by-title (project-items owner project-number status-field) title repo)]
-           (use-item item)
-           (when-let [issue (some #(when (= title (:title %)) %)
-                                  (json/parse-string (or (shell/gh-out "issue" "list"
-                                                                       "-R" repo
-                                                                       "--state" "open"
-                                                                       "--search"
-                                                                       (str title " in:title")
-                                                                       "--limit" "20"
-                                                                       "--json" "number,title,url")
-                                                         "[]")
-                                                     true))]
-             (let [n (str (:number issue))
-                   u (:url issue)]
-               (when (str/blank? u) (shell/die "Existing issue is missing issue data"))
-               [n u (item-add u (str "#" n " could not be put on the board: "))]))))
-       [number url item-id]
-       (cond
-         number [number url item-id]
-
-         (= mode "issue")
-         (let [u (shell/last-line (apply shell/gh!
-                                         (concat ["issue" "create" "-R" repo "--title" title]
-                                                 ;; gh issue create without a body asks for one, and without a terminal fails (#12)
-                                                 (if (:body-file o)
-                                                   ["--body-file" (:body-file o)]
-                                                   ["--body" (or (:body o) "")])
-                                                 (label-args "--label")
-                                                 (assignee-args "--assignee"))))
-               _ (when (str/blank? u) (shell/die "Issue creation failed"))
-               n (last (str/split u #"/"))]
-           [n u
-            (item-add u
-                      (str "#" n " is filed but could not be put on the board: ")
-                      (str ". Then run kit start again with --issue " n))])
-
-         :else
-         (let [body (if (:body-file o)
-                      (shell/file-text (:body-file o))
-                      (not-empty (:body o)))
-               item (json/parse-string (apply shell/gh!
-                                              (concat ["project" "item-create" project-number "--owner" owner "--title"
-                                                       title "--format" "json"]
-                                                      (when body ["--body" body])))
-                                       true)
-               id   (or (not-empty (:id item)) (shell/die "Draft item creation failed"))]
-           (conj (convert id) id)))]
-      (let [edit (concat (label-args "--add-label")
-                         (assignee-args "--add-assignee")
-                         (when (:milestone o) ["--milestone" (:milestone o)]))]
-        (when (seq edit)
-          (apply shell/gh! "issue" "edit" number "-R" repo edit)))
-      ;; A failed board update ends the run (#41): the issue exists, the board does not show it as asked.
-      (let [field! (fn [field option]
-                     (when-not (str/blank? option)
-                       (when-let [e (board/board-set-field project-number owner url field option)]
-                         (shell/die (str "#" number
-                                         " is filed, but its " field
-                                         " on the board is not '" option
-                                         "': "
-                                         (board/board-reason e)
-                                         ". Then run kit start again with --issue " number)))))]
-        (field! showcase-field showcase)
-        (field! priority-field priority)
-        (field! size-field size)
-        ;; The board's Size, mirrored as a size:* label: CI's design approval gate reads labels, it cannot read a
-        ;; user's board (#26). Other size labels are removed.
-        (when-not (str/blank? size)
-          (shell/run "gh"
-                     "label"
-                     "create"
-                     (str "size:" size)
-                     "-R"
-                     repo
-                     "--color"
-                     "BFD4F2"
-                     "--description"
-                     "Task size (ADR-0002), mirrors the board field" "--force")
-          (let [old  (some-> (shell/gh-out "issue"
-                                           "view" number
-                                           "-R" repo
-                                           "--json" "labels"
-                                           "--jq"
-                                           ".labels[].name | select(startswith(\"size:\"))")
-                             str/split-lines)
-                gone (mapcat (fn [l] ["--remove-label" l]) (remove #(or (str/blank? %) (= % (str "size:" size))) old))]
-            (when-not (zero?
-                       (:exit
-                        (apply shell/run "gh" "issue" "edit" number "-R" repo "--add-label" (str "size:" size) gone)))
-              (shell/warn (str "Warning: could not set the label size:" size " on #" number)))))
-        (field! status-field status))
-      (let [branch
-            (when-not (:skip-branch o)
-              ;; `gh issue develop` with no --name appends -1 to a name already taken, so a rerun would fork a
-              ;; duplicate branch. Handing it the branch already linked to the issue makes the run idempotent.
-              (let [named (or (:branch-name o)
-                              (some-> (shell/gh-out "issue" "develop" "--list" number "-R" repo)
-                                      str/split-lines
-                                      first
-                                      (str/split #"\t")
-                                      first
-                                      not-empty))
-                    out   (shell/last-line (apply shell/gh!
-                                                  (concat ["issue" "develop" number "-R" repo]
-                                                          (when-not (:no-checkout o) ["--checkout"])
-                                                          (when-not (str/blank? base) ["--base" base])
-                                                          (when named ["--name" named]))))]
-                ;; --no-checkout leaves the working tree alone, so the name comes from the URL gh prints.
-                (if (:no-checkout o)
-                  (second (re-find #"/tree/(.*)$" (or out "")))
-                  (some-> (shell/run "git" "branch" "--show-current") :out str/trim))))]
-        (println (str "Issue URL: " url))
-        (println (str "Issue Number: " number))
-        (println (str "Project Item ID: " item-id))
-        (when-not (str/blank? branch)
-          (println (str (if (:no-checkout o) "Branch: " "Checked Out Branch: ") branch)))
-        ;; A run that quietly eats a tenth of the hourly budget is only noticed an hour later. Print the price.
-        (when before
-          (when-let [after (budget)]
-            (println (str "GraphQL Cost: " (- before after) " points (" after " left this hour)"))))))))
+  (let [input (read-input args shell/env)]
+    (when (:help input)
+      (println start-usage)
+      (System/exit 0))
+    (let [ctx    {:github github/real :warn shell/warn :kit kit :resolve-repo shell/resolve-repo}
+          result (start ctx input)]
+      (when (= :fail (::steps/status result))
+        (shell/die (:message (::steps/problem result))))
+      (print-result github/real result))))

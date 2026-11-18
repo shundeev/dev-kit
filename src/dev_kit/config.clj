@@ -40,11 +40,13 @@
                                  (ex-message e))
                          [_ msg line] (re-find #"(.*) \[at line (\d+), column \d+\]" why)]
                      (fail! (str "kit.edn"
-                                 (when line (str " line " line))
+                                 (when line
+                                   (str " line " line))
                                  " cannot be read ("
                                  (or msg why)
                                  "): fix it by hand")))))]
-      (when-not (map? m) (fail! "kit.edn is not a map: make it {:repo \"owner/name\" :showcase \"…\" :modules #{}}"))
+      (when-not (map? m)
+        (fail! "kit.edn is not a map: make it {:repo \"owner/name\" :showcase \"…\" :modules #{}}"))
       (merge-config (read-defaults) m))))
 
 
@@ -54,9 +56,12 @@
 (defn config-problems
   "What is wrong with kit.edn over the defaults, each naming the key and the fix (#14)."
   [{:keys [repo showcase modules base owners board agent user-test]}]
-  (let [unknown   (when (coll? modules) (remove known-modules modules))
-        run       (when (map? user-test) (:run user-test))
-        artifacts (when (map? user-test) (:artifacts user-test))]
+  (let [unknown   (when (coll? modules)
+                    (remove known-modules modules))
+        run       (when (map? user-test)
+                    (:run user-test))
+        artifacts (when (map? user-test)
+                    (:artifacts user-test))]
     (cond-> []
       (not (and (string? repo) (re-matches #"[^/\s]+/[^/\s]+" repo)))
       (conj (str ":repo is "

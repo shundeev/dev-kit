@@ -47,14 +47,18 @@
                                      (not= agent (get-in % ["actor" "login"]))))
                        (map #(log/instant (get % "createdAt")))
                        sort)
-        after     (when design (first (remove #(log/before? % design) approvals)))
+        after     (when design
+                    (first (remove #(log/before? % design) approvals)))
         all-prs   (nodes issue "closedByPullRequestsReferences")]
     (cons
      (str "- Design approval: "
           (cond after  (str (count approvals) ", " (log/span design after) " after the first `## Design` comment")
                 (and design (seq approvals)) (str (count approvals) ", all before the first `## Design` comment")
                 design "the `## Design` comment was never approved"
-                :else  (str "none (no `## Design` comment" (when size (str "; Size " size)) ")")))
+                :else  (str "none (no `## Design` comment"
+                            (when size
+                              (str "; Size " size))
+                            ")")))
      (for [pr   (or (seq (filter #(get % "mergedAt") all-prs)) all-prs)
            :let [reviews  (remove #(= agent (get-in % ["author" "login"])) (nodes pr "reviews"))
                  approved (sort (keep #(when (= "APPROVED" (get % "state")) (log/instant (get % "submittedAt")))
@@ -87,7 +91,8 @@
                        (if approve
                          (log/span ready approve)
                          "no approval")
-                       (when (and approve merged) (str "; Approve → merged " (log/span approve merged))))
+                       (when (and approve merged)
+                         (str "; Approve → merged " (log/span approve merged))))
                   (str "- CI: " (count (filter #{"FAILURE" "ERROR"} rollups)) " of " (count rollups) " commits failed")
                   (str "- Owner steps: "
                        (if (seq steps)

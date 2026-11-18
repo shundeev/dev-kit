@@ -36,10 +36,14 @@
 (def run? (= *file* (System/getProperty "babashka.file")))
 
 
-(def input (when run? (try (json/parse-string (slurp *in*)) (catch Exception e e))))
+(def input
+  (when run?
+    (try (json/parse-string (slurp *in*)) (catch Exception e e))))
 
 
-(def command (when (map? input) (get-in input ["tool_input" "command"])))
+(def command
+  (when (map? input)
+    (get-in input ["tool_input" "command"])))
 
 
 (when (and run? (map? input))

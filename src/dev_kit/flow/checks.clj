@@ -40,7 +40,9 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 (defn checks!
   [_kit args]
   (let [o         (shell/parse-opts checks-spec args)
-        _ (when (:help o) (println checks-usage) (System/exit 0))
+        _ (when (:help o)
+            (println checks-usage)
+            (System/exit 0))
         repo      (shell/resolve-repo (:repo o))
         poll      (wait/pause)
         stop      (fn [code & msg] (binding [*out* *err*] (println (str/join " " msg))) (System/exit code))
@@ -53,12 +55,12 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
                             (shell/die (str "Run from the issue branch, not '"
                                             branch
                                             "', or name the pull request: kit checks --pr <number>")))
-                          (not-empty (shell/gh! "pr"      "list"
-                                                "-R"      repo
-                                                "--head"  branch
-                                                "--state" "open"
-                                                "--json"  "url"
-                                                "--jq"    ".[0].url // empty")))
+                          (not-empty (shell/gh! "pr" "list"
+                                       "-R"      repo
+                                       "--head"  branch
+                                       "--state" "open"
+                                       "--json"  "url"
+                                       "--jq"    ".[0].url // empty")))
                       (shell/die (str "No open pull request for branch '"
                                       branch
                                       "' in "
@@ -102,8 +104,9 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
                                       "--limit"    "20"
                                       "--json"     "databaseId,status")
                         (filter #(and (= "completed" (:status %)) (not (ruled (:databaseId %)))))
-                        (mapv
-                         #(assoc % :log (:out (shell/run "gh" "run" "view" (str (:databaseId %)) "-R" repo "--log"))))))
+                        (mapv (fn [ci-run]
+                                (let [log (shell/run "gh" "run" "view" (str (:databaseId ci-run)) "-R" repo "--log")]
+                                  (assoc ci-run :log (:out log)))))))
                 hit (first (filter #(str/includes? (str (:log %)) (str " at " head)) runs))
                 st (if hit
                      (wait/read-pr pr repo no-result)
@@ -156,7 +159,8 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
                           (wait/failed-text failed (str "on " (sha7 head)))
                           "\nFix: open the link, fix the cause, push; then run kit checks again for the new commit."))
 
-              status (do (when (not= status shown) (println status))
+              status (do (when (not= status shown)
+                           (println status))
                          (Thread/sleep (* 1000 poll))
                          (recur status (into ruled (map :databaseId runs))))
 

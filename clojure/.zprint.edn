@@ -103,33 +103,86 @@
  ;; `if` and `if-not` — the test stays on the `if` line. A branch that is no plain value (a vector, a map, a
  ;; call): each branch on a line of its own. Plain values — a string, a number, a keyword, a symbol, nil, a
  ;; boolean, `@x`, an empty collection — stay on one line while they fit. `if-let` and `if-some` take
- ;; :binding, which puts each branch on a line of its own anyway. A `;; zprint: as written` comment right
- ;; before a form leaves it as written. docs/process/code-style.md, "If Layout".
+ ;; :binding, which puts each branch on a line of its own anyway. docs/process/code-style.md, "If Layout".
+ ;; `when` and `when-not` alike: a body that is no plain value goes under the test, however short —
+ ;; `(when after ["-F" …])` too; `(when file path)` and `(when (> n 5) ", ...")` stay on one line (the owner's
+ ;; reviews of dev-kit#146).
+ ;;
+ ;; A command line — a call of gh!, gh-out, run, sh, sh-in, shell, process or board-gh! (any alias, through
+ ;; `apply` too) whose first argument is a string: the command words stay on the call's line, then each flag
+ ;; on a line of its own with its value, as a person reads `gh issue edit 12 -R o/r --add-label x`. A flag with
+ ;; no value, or an argument list spliced in, takes a line alone. A call with one flag and its value, or none,
+ ;; stays on one line while it fits. :respect-nl keeps a call's own line breaks, so write a new one on one line and let
+ ;; zprint lay it out (the owner's review of dev-kit#146).
+ ;;
+ ;; A `;; zprint: as written` comment right before a form leaves it as written.
  :list    {:option-fn
            (fn [options _ elements]
-             (when (and (contains? #{'if 'if-not} (first elements))
-                        (not (every? (fn [branch]
-                                       (or (not (coll? branch))
-                                           (empty? branch)
-                                           (and (seq? branch)
-                                                (= 'clojure.core/deref (first branch))
-                                                (not (coll? (second branch))))))
-                                     (drop 2 elements)))
-                        ;; The marker before this form or before any form around it.
-                        (not (loop [path (second (:zloc options))]
+             (let [;; The marker before this form or before any form around it.
+                   as-written? (loop [path (second (:zloc options))]
+                                 (cond
+                                   (not (map? path)) false
+                                   (= ";; zprint: as written"
+                                      (some-> (remove (fn [node] (clojure.string/blank? (str node))) (:l path))
+                                              last
+                                              str
+                                              clojure.string/trim))
+                                   true
+                                   :else (recur (:ppath path))))
+                   head        (first elements)
+                   apply?      (= 'apply head)
+                   f           (if apply? (second elements) head)
+                   args        (drop (if apply? 2 1) elements)
+                   flag?       (fn [x] (and (string? x) (clojure.string/starts-with? x "-")))
+                   words       (take-while (fn [x] (not (flag? x))) args)
+                   ;; 2: a flag and its value; 1: a flag alone, or anything spliced in after the flags
+                   groups      (loop [xs (drop (count words) args) acc []]
+                                 (cond
+                                   (empty? xs) acc
+                                   (and (flag? (first xs)) (next xs) (not (flag? (second xs))))
+                                   (recur (drop 2 xs) (conj acc 2))
+                                   :else (recur (rest xs) (conj acc 1))))]
+               (cond
+                 as-written? nil
+
+                 (and (contains? #{'if 'if-not 'when 'when-not} head)
+                      (not (every? (fn [branch]
+                                     (or (not (coll? branch))
+                                         (empty? branch)
+                                         (and (seq? branch)
+                                              (= 'clojure.core/deref (first branch))
+                                              (not (coll? (second branch))))))
+                                   (drop 2 elements))))
+                 {:fn-style :arg1-force-nl-body}
+
+                 (and (symbol? f)
+                      (contains? #{"gh!" "gh-out" "run" "sh" "sh-in" "shell" "process" "board-gh!"} (name f))
+                      (string? (first args))
+                      (<= 2 (count (filter (fn [n] (= 2 n)) groups))))
+                 ;; The values in a column: mark 1 one space past the widest flag that has a value.
+                 (let [flags (loop [xs (drop (count words) args) acc []]
                                (cond
-                                 (not (map? path)) false
-                                 (= ";; zprint: as written"
-                                    (some-> (remove (fn [node] (clojure.string/blank? (str node))) (:l path))
-                                            last
-                                            str
-                                            clojure.string/trim))
-                                 true
-                                 :else (recur (:ppath path))))))
-               {:fn-style :arg1-force-nl-body}))}
+                                 (empty? xs) acc
+                                 (and (flag? (first xs)) (next xs) (not (flag? (second xs))))
+                                 (recur (drop 2 xs) (conj acc (first xs)))
+                                 :else (recur (rest xs) acc)))
+                       widths (map count flags)
+                       ;; as :pair's :max-variance: flags too different in length are not aligned
+                       align? (<= (- (apply max widths) (apply min widths)) 15)]
+                   {:guide (vec (concat (repeat (+ (if apply? 2 1) (count words)) :element)
+                                        [:indent 2]
+                                        (when align? [:mark-at 1 (+ 4 (apply max widths))])
+                                        (mapcat (fn [n]
+                                                  (cond (not= 2 n) [:newline :element]
+                                                        align?     [:newline :element :align 1 :element]
+                                                        :else      [:newline :element :element]))
+                                                groups)))}))))}
 
  ;; Function-specific formatting
- :fn-map  {;; Threading macros - keep short forms on one line
+ :fn-map  {;; A recipe (dev-kit's steps/run, ADR-0008): ctx and the facts on its first line, then a step's name and its
+           ;; function per line, the functions aligned like the pairs of a cond.
+           "steps/run"     [:guided {:guide [:element :element :element :indent 2 :newline :element-pair-*]}]
+           ;; Threading macros - keep short forms on one line
            "->"            :none
            "->>"           :none
            ":import"       [:none {:list {:indent 1}}]

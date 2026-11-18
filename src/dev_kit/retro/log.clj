@@ -29,7 +29,10 @@
       (fail! opt s ": not a time; write it as 2026-11-12T10:00:00Z or 2026-11-12T11:00:00+01:00")))
 
 
-(defn instant [s] (when s (Instant/parse s)))
+(defn instant
+  [s]
+  (when s
+    (Instant/parse s)))
 
 
 (defn before? [^Instant a ^Instant b] (.isBefore a b))
@@ -94,7 +97,8 @@
     (if (>= i (count s))
       (conj out (str cur))
       (let [c  (.charAt s i)
-            c2 (when (< (inc i) (count s)) (.charAt s (inc i)))
+            c2 (when (< (inc i) (count s))
+                 (.charAt s (inc i)))
             op (cond (or (and (= c \&) (= c2 \&)) (and (= c \|) (= c2 \|))) 2
                      (#{\| \; \newline} c) 1)]
         (cond
@@ -303,7 +307,8 @@
         failed   (ended "StopFailure")
         named    (memoize (fn [t]
                             (let [ts (set (keep :task (filter #(= t (:turn %)) calls)))]
-                              (when (= 1 (count ts)) (first ts)))))
+                              (when (= 1 (count ts))
+                                (first ts)))))
         ;; a message, an Esc, a failed turn or a question belongs to the task the session was last working on
         latest   (loop [[t & more] turns
                         prev       nil

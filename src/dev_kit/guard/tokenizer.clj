@@ -102,7 +102,9 @@
                          (if (seq ws)
                            (conj out ws)
                            out)))
-            more     (fn [i] (when (< i n) (.charAt s i)))
+            more     (fn [i]
+                       (when (< i n)
+                         (.charAt s i)))
             quoted   (conj fl :q)]
         (if (>= i n)
           (into (end-stmt out words) nested)

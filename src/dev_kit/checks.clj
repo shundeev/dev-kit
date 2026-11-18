@@ -125,7 +125,8 @@
 
       :git-config
       (let [v (base/sh "git" "config" "--local" "--get" git-key)]
-        (when (not= value v) (str "is " (or v "unset") ", expected " value))))))
+        (when (not= value v)
+          (str "is " (or v "unset") ", expected " value))))))
 
 
 (defn label
@@ -137,7 +138,10 @@
 
 (defn submodule-problems
   []
-  (let [paths  (some-> (base/sh "git" "config" "-f" ".gitmodules" "--get-regexp" "path") str/split-lines)
+  (let [paths  (some-> (base/sh "git" "config"
+                         "-f"           ".gitmodules"
+                         "--get-regexp" "path")
+                       str/split-lines)
         status (base/sh "git" "submodule" "status" base/mount)
         dirty  (base/sh "git" "-C" base/mount "status" "--porcelain")]
     (cond-> []
@@ -268,7 +272,9 @@
   (https://code.claude.com/docs/en/memory#when-claude-code-reads-agents-md). --ci looks at the committed files only."
   [ci]
   (let [real  #(str (fs/real-path %))
-        user  (let [u (ident/expand-home "~/.claude/CLAUDE.md")] (when (fs/exists? u) (real u)))
+        user  (let [u (ident/expand-home "~/.claude/CLAUDE.md")]
+                (when (fs/exists? u)
+                  (real u)))
         found (distinct
                (for [d     (if ci
                              [base/root]
@@ -296,7 +302,8 @@
         (try
           (let [main (some #(when (= "main" (:name %)) %)
                            (json/parse-string (base/gh! "api" (str "repos/" repo "/rulesets?per_page=100")) true))
-                rs   (when main (json/parse-string (base/gh! "api" (str "repos/" repo "/rulesets/" (:id main))) true))
+                rs   (when main
+                       (json/parse-string (base/gh! "api" (str "repos/" repo "/rulesets/" (:id main))) true))
                 n    (some #(when (= "pull_request" (:type %))
                               (get-in % [:parameters :required_approving_review_count]))
                            (:rules rs))

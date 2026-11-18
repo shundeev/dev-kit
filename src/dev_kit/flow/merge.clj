@@ -66,11 +66,13 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
   [pr-url]
   (doseq [{:keys [number url]} (:closingIssuesReferences
                                 (wait/gh-json shell/die "pr" "view" pr-url "--json" "closingIssuesReferences"))]
-    (if (= "OPEN" (shell/gh! "issue" "view" url "--json" "state" "--jq" ".state"))
-      (let [r (shell/run "gh"        "issue"
-                         "close"     url
-                         "--reason"  "completed"
-                         "--comment" (str "Closed by " pr-url ", which merged."))]
+    (if (= "OPEN"
+           (shell/gh! "issue" "view" url
+             "--json" "state"
+             "--jq"   ".state"))
+      (let [r (shell/run "gh" "issue" "close" url
+                "--reason"  "completed"
+                "--comment" (str "Closed by " pr-url ", which merged."))]
         (if (zero? (:exit r))
           (println (str "Closed #" number ": " url))
           (shell/warn (str "Warning: could not close #"
@@ -86,7 +88,9 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 (defn merge!
   [kit args]
   (let [o (shell/parse-opts merge-spec args)
-        _ (when (:help o) (println merge-usage) (System/exit 0))
+        _ (when (:help o)
+            (println merge-usage)
+            (System/exit 0))
         owner (or (:owner o) (shell/env "GHWF_OWNER" nil))
         project-number (or (:project-number o) (shell/env "GHWF_PROJECT_NUMBER" nil))
         base (or (:base o) (shell/env "GHWF_DEFAULT_BASE" "main"))
@@ -94,12 +98,18 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
         done-status (or (:done-status o) (shell/env "GHWF_DONE_STATUS" "Done"))
         repo (shell/resolve-repo (:repo o))
         branch (finish/git-out "rev-parse" "--abbrev-ref" "HEAD")
-        _ (when (#{base "HEAD"} branch) (shell/die (str "Run from the issue branch, not '" branch "'")))
+        _ (when (#{base "HEAD"} branch)
+            (shell/die (str "Run from the issue branch, not '" branch "'")))
         number (or (shell/issue-branch-number branch) (shell/die (str "Branch '" branch "' is not <number>-<slug>")))
         poll (wait/pause)
         pr-list
         #(not-empty
-          (shell/gh! "pr" "list" "-R" repo "--head" branch "--state" % "--json" "url" "--jq" ".[0].url // empty"))
+          (shell/gh! "pr" "list"
+            "-R"      repo
+            "--head"  branch
+            "--state" %
+            "--json"  "url"
+            "--jq"    ".[0].url // empty"))
         open-url (pr-list "open")
         shown (atom nil)
         ;; One look at the pull request. It ends the run when merging is impossible, and brings a branch that is behind
@@ -115,7 +125,9 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
                            p)))
                 ms   (:merge-state pr)
                 seen (str (:state pr) " " ms)]
-            (when (not= seen @shown) (println (str "GitHub reports " (:state pr) ", " ms ": " url)) (reset! shown seen))
+            (when (not= seen @shown)
+              (println (str "GitHub reports " (:state pr) ", " ms ": " url))
+              (reset! shown seen))
             (cond
               (= "MERGED" (:state pr)) pr
 
@@ -140,7 +152,8 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
               (= "DIRTY" ms) (dirty-die url base)
 
               :else
-              (let [failed (when (= "BLOCKED" ms) (wait/failed-checks (wait/required-checks url repo shell/die)))]
+              (let [failed (when (= "BLOCKED" ms)
+                             (wait/failed-checks (wait/required-checks url repo shell/die)))]
                 (when (seq failed)
                   (shell/die (str
                               (wait/failed-text failed (str "on " url))
@@ -198,7 +211,10 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
         ;; A failed board update ends the run with an error (#41), after the closeout below: the merge is done.
         board-error
         (when (not-any? str/blank? [owner project-number])
-          (let [url (shell/gh! "issue" "view" number "-R" repo "--json" "url" "--jq" ".url")]
+          (let [url (shell/gh! "issue" "view" number
+                      "-R"     repo
+                      "--json" "url"
+                      "--jq"   ".url")]
             (when-let [e (board/board-set-field project-number owner url status-field done-status)]
               (str "The board " status-field
                    " of #"      number
@@ -218,6 +234,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
       (shell/ok! (shell/shell "git" "push" "origin" "--delete" branch)))
     (println (str "Merged: " pr-url))
     (close-linked-issues! pr-url)
-    (when board-error (shell/die board-error))
+    (when board-error
+      (shell/die board-error))
     (println (str "Status: " done-status))
     (println (str "Next: post the retrospective: kit retro " number))))

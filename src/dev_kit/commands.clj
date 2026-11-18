@@ -23,7 +23,8 @@
   [{:keys [quiet] :as opts}]
   (let [ps (checks/problems (config/read-config) opts)]
     (when (or (seq ps) (not quiet))
-      (when-not quiet (println "dev-kit doctor" (str "(" base/root ")")))
+      (when-not quiet
+        (println "dev-kit doctor" (str "(" base/root ")")))
       (print-problems ps quiet))
     (System/exit (if (some #(= :fail (first %)) ps) 1 0))))
 
@@ -51,14 +52,16 @@
   "Writes nothing until kit.edn is valid and no project file sits where dev-kit writes; then brings every item in
   place on its own, so one that fails leaves the others done (#14)."
   [opts]
-  (let [new     (when-not (fs/exists? config/config-file) (init/new-config opts))
+  (let [new     (when-not (fs/exists? config/config-file)
+                  (init/new-config opts))
         cfg     (if new
                   (config/merge-config (config/read-defaults) new)
                   (config/read-config))
         _ (some-> (seq (config/config-problems cfg)) refuse!)
         items   (ident/managed-items cfg)
         _ (some-> (seq (checks/ownership-problems items)) refuse!)
-        _ (when new (init/create-config! new))
+        _ (when new
+            (init/create-config! new))
         stale   (ident/stale-paths items)
         _ (run! #(fs/delete-if-exists (base/rel %)) stale)
         results (doall (for [item items]
@@ -75,7 +78,8 @@
     (println "dev-kit init" (str "(" base/root ")"))
     (doseq [c changes] (println "  wrote" c))
     (doseq [[l msg] results :when (= l :fail)] (println (str "  FAIL  " msg)))
-    (when (and (empty? changes) (empty? failed)) (println "  nothing to change"))
+    (when (and (empty? changes) (empty? failed))
+      (println "  nothing to change"))
     (some-> (:agent cfg) ident/offer-login!)
     ;; doctor's view of what is left, without repeating the items that failed above
     (let [ps (remove (fn [[_ msg]] (some #(str/starts-with? msg (str % ": ")) failed)) (checks/problems cfg {}))]
