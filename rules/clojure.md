@@ -2,6 +2,20 @@
 
 - Format: zprint with `.zprint.edn` (shared from dev-kit). Check: `.shared/clojure/zprint_check.sh`;
   fix: `.shared/clojure/zprint_check.sh --write`. The pre-commit hook checks staged files.
+  The config lays out a CLI call (`gh!`, `sh`, `run`, …) with two or more flag–value pairs one
+  pair per line, values in a column; one pair stays on the call's line. `if`, `if-not`, `when`
+  and `when-not` put a branch that is a call, vector or map on its own line; a plain value stays
+  inline. zprint keeps the source's line breaks: write such a call on one line and let it lay
+  it out.
+- A command whose output is parsed runs in a `let`; the parsing reads the bound value.
+- Conditional arguments: `cond->` with `:always` for the unconditional part, never `true`.
+- `apply` starts its own line under the call it feeds.
+- A message built from text and values is a `format` with its template on one line; never a
+  `str` broken over lines.
+- One flat `cond` where a nested one says the same: combine the tests instead of a branch that is
+  itself a `cond`.
+- Names are words (`statement`, `words`, `dir`), not `st`, `ws`, `wd`; a single letter only for a
+  loop index or a short `fn`'s argument.
 - Lint: `clj-kondo --lint src test`. Shared strict linters come from dev-kit through
   `:config-paths` in `.clj-kondo/config.edn`; project-only settings live in that file.
 - Navigate Clojure symbols with LSP (clojure-lsp) first; grep only for plain text.
