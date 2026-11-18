@@ -263,7 +263,11 @@
    :ready-workflow?
    (fn
      ([repo base] (ready-workflow? repo base))
-     ([repo base fail] (ready-workflow? repo base fail)))})
+     ([repo base fail] (ready-workflow? repo base fail)))
+
+   ;; finish, merge and release turn auto-merge on with this one call; each step decides what a refusal means.
+   :auto-merge!
+   (fn [pr-url] (shell/run "gh" "pr" "merge" pr-url "--auto" "--squash"))})
 
 
 (def finish-operations
@@ -328,20 +332,88 @@
         (concat flags ["--title" title "--body" body]))))
 
    :edit-pr!
-   (fn [pr-url args] (apply shell/run "gh" "pr" "edit" pr-url args))
-
-   :auto-merge!
-   (fn [pr-url] (shell/run "gh" "pr" "merge" pr-url "--auto" "--squash"))})
+   (fn [pr-url args] (apply shell/run "gh" "pr" "edit" pr-url args))})
 
 
 (def merge-operations
-  "kit merge's operations."
-  {})
+  "kit merge's operations. The git calls print to the terminal and end the run with git's own exit code when they fail,
+  as the scripts did under `set -e`; so does a gh call made through shell/gh!."
+  {:update-branch!
+   (fn [pr-url] (shell/shell "gh" "pr" "update-branch" pr-url))
+
+   :squash-merge!
+   (fn [pr-url] (shell/shell "gh" "pr" "merge" pr-url "--squash"))
+
+   :closing-issues
+   (fn [pr-url fail]
+     (:closingIssuesReferences (wait/gh-json fail "pr" "view" pr-url "--json" "closingIssuesReferences")))
+
+   :issue-state
+   (fn [issue-url]
+     (shell/gh! "issue" "view" issue-url
+       "--json" "state"
+       "--jq"   ".state"))
+
+   :close-issue!
+   (fn [issue-url note]
+     (shell/run "gh" "issue" "close" issue-url
+       "--reason"  "completed"
+       "--comment" note))
+
+   :fetch-base!
+   (fn [base] (shell/ok! (shell/shell "git" "fetch" "-q" "origin" base)))
+
+   :worktree-branches
+   (fn []
+     (let [listing (shell/git-out "worktree" "list" "--porcelain")]
+       (for [line  (str/split-lines listing)
+             :when (str/starts-with? line "branch refs/heads/")]
+         (str/replace-first line "branch refs/heads/" ""))))
+
+   :detach-at-base!
+   (fn [base] (shell/ok! (shell/shell "git" "switch" "-q" "--detach" (str "origin/" base))))
+
+   :switch-to!
+   (fn [branch] (shell/ok! (shell/shell "git" "switch" "-q" branch)))
+
+   :pull-ff-only!
+   (fn [] (shell/ok! (shell/shell "git" "pull" "-q" "--ff-only")))
+
+   :delete-local-branch!
+   (fn [branch] (shell/ok! (shell/shell "git" "branch" "-D" branch)))
+
+   :remote-branch?
+   (fn [branch]
+     (zero? (:exit (shell/run "git" "ls-remote" "--exit-code" "--heads" "origin" branch))))
+
+   :delete-remote-branch!
+   (fn [branch] (shell/ok! (shell/shell "git" "push" "origin" "--delete" branch)))})
 
 
 (def release-operations
   "kit release's operations."
-  {})
+  {:view-pr-for-release
+   (fn [pr repo]
+     (let [{:keys [state isDraft labels url]}
+           (json/parse-string (shell/gh! "pr" "view" pr
+                                "-R"     repo
+                                "--json" "state,isDraft,labels,url")
+                              true)]
+       {:state state
+        :draft isDraft
+        :hold  (boolean (some #(= "hold" (:name %)) labels))
+        :url   url}))
+
+   :remove-label!
+   (fn [pr repo label]
+     (shell/ok! (shell/shell "gh" "pr" "edit" pr
+                  "-R"             repo
+                  "--remove-label" label)))
+
+   :mark-ready!
+   (fn [pr repo]
+     (shell/ok! (shell/shell "gh" "pr" "ready" pr "-R" repo)))
+  })
 
 
 (def checks-operations

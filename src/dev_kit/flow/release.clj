@@ -1,11 +1,10 @@
 (ns dev-kit.flow.release
   "kit release: frees a held pull request: removes hold, marks it ready, turns auto-merge on (ADR-0007)."
   (:require
-   [cheshire.core :as json]
    [clojure.string :as str]
-   [dev-kit.flow.finish :as finish]
+   [dev-kit.flow.github :as github]
    [dev-kit.flow.shell :as shell]
-   [dev-kit.flow.wait :as wait]))
+   [dev-kit.flow.steps :as steps]))
 
 
 ;; ------------------------------------------------------------------ kit release
@@ -29,58 +28,125 @@ Options:
   {"--pr" [:pr :value] "--repo" [:repo :value] "--help" [:help :flag] "-h" [:help :flag]})
 
 
-(defn- checks-not-green
-  "The required checks of a PR that are not green, as \"name (bucket)\"; empty when all are. Dies when GitHub reports none."
-  [repo pr]
-  (let [checks (wait/required-checks pr repo shell/die)]
+(defn read-input
+  "The command line as one map. kit release reads no GHWF_* variable, so there is no env."
+  [args]
+  (shell/parse-opts release-spec args))
+
+
+(defn- resolve-repo
+  [ctx {:keys [repo]}]
+  {:repo ((:resolve-repo ctx) repo)})
+
+
+(defn- find-pr
+  "The pull request: --pr, else the open one of the current branch. The branch is read either way."
+  [{:keys [github]} {:keys [pr repo]}]
+  (let [branch (github :head-branch)]
+    {:pr
+     (or
+      pr
+      (github :open-pr-url repo branch "open")
+      (steps/fail!
+       :release/no-open-pr
+       (format
+        "No open pull request for branch '%s' in %s. Fix: run it from the held PR's branch, or name it with --pr <number>"
+        branch
+        repo)))}))
+
+
+(defn- read-pr-state
+  "The PR's state, draft and hold. Its URL names it in every message and turns on auto-merge; the PR as given stands in
+  when GitHub gives none."
+  [{:keys [github]} {:keys [pr repo]}]
+  (let [found (github :view-pr-for-release pr repo)]
+    (assoc found :url (or (:url found) pr))))
+
+
+(defn- check-open
+  [_ctx {:keys [state url]}]
+  (when-not (= state "OPEN")
+    (steps/fail! :release/not-open (format "%s is %s, not open: nothing to release." url state)))
+  nil)
+
+
+(defn- check-checks-passed
+  "Refuses while GitHub reports no required check, or one that is not green; nothing has been changed yet."
+  [{:keys [github]} {:keys [pr repo url]}]
+  (let [checks (github :required-checks
+                       pr
+                       repo
+                       #(steps/fail! :release/checks-unreadable %))]
     (when (empty? checks)
-      (shell/die (str "GitHub reports no required check on " pr
-                      ", so none can be called green. Fix: run it again once CI has started, or gh pr ready " pr)))
-    (->> checks (remove #(#{"pass" "skipping"} (:bucket %))) (map #(str (:name %) " (" (:bucket %) ")")))))
+      (steps/fail!
+       :release/no-required-check
+       (format
+        "GitHub reports no required check on %s, so none can be called green. Fix: run it again once CI has started, or gh pr ready %s"
+        pr
+        pr)))
+    (let [bad (->> checks
+                   (remove #(#{"pass" "skipping"} (:bucket %)))
+                   (map #(str (:name %) " (" (:bucket %) ")")))]
+      (when (seq bad)
+        (steps/fail!
+         :release/check-not-green
+         (format
+          "A required check of %s is not green: %s. Nothing was changed: wait for it (kit checks, in the background), then run kit release again; a failed check is fixed first."
+          url
+          (str/join ", " bad)))))
+    nil))
+
+
+(defn- remove-hold
+  [{:keys [github out]} {:keys [pr repo hold]}]
+  (when hold
+    (github :remove-label! pr repo "hold")
+    (out "Hold removed."))
+  nil)
+
+
+(defn- mark-ready
+  [{:keys [github out]} {:keys [pr repo draft]}]
+  (when draft
+    (github :mark-ready! pr repo)
+    (out "Marked ready: the owners are asked for a review."))
+  nil)
+
+
+(defn- turn-on-auto-merge
+  "A repository that does not allow auto-merge gets a warning with the fix; the release still stands."
+  [{:keys [github warn]} {:keys [url]}]
+  (let [{:keys [exit out err]} (github :auto-merge! url)]
+    (when-not (zero? exit)
+      (warn "Warning: auto-merge could not be turned on:" (str/trim (str out err)))
+      (warn
+       "  Fix: the owner turns on Settings > General > 'Allow auto-merge' (dev-kit#37); until then kit merge merges after the Approve.")))
+  nil)
+
+
+(defn release
+  "The recipe of kit release. ctx: :github, :warn, :out (prints a line), :resolve-repo."
+  [ctx input]
+  (steps/run ctx input
+    :resolve-repo        resolve-repo
+    :find-pr             find-pr
+    :read-pr-state       read-pr-state
+    :check-open          check-open
+    :check-checks-passed check-checks-passed
+    :remove-hold         remove-hold
+    :mark-ready          mark-ready
+    :turn-on-auto-merge  turn-on-auto-merge))
 
 
 (defn release!
+  "kit release: read the command line, run the recipe on the real GitHub, print what it did, or the refusal."
   [_kit args]
-  (let [o      (shell/parse-opts release-spec args)
-        _ (when (:help o)
-            (println release-usage)
-            (System/exit 0))
-        repo   (shell/resolve-repo (:repo o))
-        branch (shell/git-out "rev-parse" "--abbrev-ref" "HEAD")
-        pr     (or (:pr o)
-                   (not-empty (shell/gh! "pr" "list"
-                                "-R"      repo
-                                "--head"  branch
-                                "--state" "open"
-                                "--json"  "url"
-                                "--jq"    ".[0].url // empty"))
-                   (shell/die (str "No open pull request for branch '"
-                                   branch
-                                   "' in "
-                                   repo
-                                   ". Fix: run it from the held PR's branch, or name it with --pr <number>")))
-        {:keys [state isDraft labels url]}
-        (json/parse-string (shell/gh! "pr" "view" pr
-                             "-R"     repo
-                             "--json" "state,isDraft,labels,url")
-                           true)
-        url    (or url pr)
-        held?  (boolean (some #(= "hold" (:name %)) labels))
-        _ (when-not (= state "OPEN")
-            (shell/die (str url " is " state ", not open: nothing to release.")))
-        bad    (checks-not-green repo pr)]
-    (when (seq bad)
-      (shell/die (str "A required check of " url
-                      " is not green: "      (str/join ", " bad)
-                      ". Nothing was changed: wait for it "
-                      "(kit checks, in the background), then run kit release again; a failed check is fixed first.")))
-    (when held?
-      (shell/ok! (shell/shell "gh" "pr" "edit" pr
-                   "-R"             repo
-                   "--remove-label" "hold"))
-      (println "Hold removed."))
-    (when isDraft
-      (shell/ok! (shell/shell "gh" "pr" "ready" pr "-R" repo))
-      (println "Marked ready: the owners are asked for a review."))
-    (finish/turn-on-auto-merge! url)
-    (println (str "Released: " url))))
+  (let [input (read-input args)]
+    (when (:help input)
+      (println release-usage)
+      (System/exit 0))
+    (let [ctx    {:github github/real :warn shell/warn :out println :resolve-repo shell/resolve-repo}
+          result (release ctx input)]
+      (when (= :fail (::steps/status result))
+        (shell/exit-with! (steps/refusal result)))
+      (println (format "Released: %s" (:url result))))))

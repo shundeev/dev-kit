@@ -78,12 +78,6 @@ Options:
        "  Fix: the owner turns on Settings > General > 'Allow auto-merge' (dev-kit#37); until then kit merge merges after the Approve."))))
 
 
-(defn turn-on-auto-merge!
-  "request-auto-merge on the real GitHub, for release until it is a recipe too."
-  [pr-url]
-  (request-auto-merge github/real shell/warn pr-url))
-
-
 ;; ------------------------------------------------------------------ the steps
 
 

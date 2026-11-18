@@ -12,7 +12,7 @@
   "The commands the guard will judge in a command line: each statement from its command word on,
   nested ones included."
   [line]
-  (mapv #(mapv :t (statements/strip-head %)) (statements/expand (tokenizer/tokenize line))))
+  (mapv #(mapv :text (statements/strip-head %)) (statements/expand (tokenizer/tokenize line))))
 
 
 (deftest quoted-text-is-text-not-a-command

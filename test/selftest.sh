@@ -595,142 +595,73 @@ if bash .shared/claude/hooks/session-start.sh 2>&1 | grep -q behind; then bad "o
 git -C .shared remote set-url origin "$old_origin"
 
 echo "- delivery guard"
+# The rules are told as tables in `bb test` (test/dev_kit/guard_rules_test.clj), with fakes for git and gh. Here only
+# what needs a real run: the entry reading its input, git and gh run in the push's own folder, the output the hook's
+# readers parse.
 guard() { jq -nc --arg c "$1" '{tool_input:{command:$c}}' | bb .shared/claude/hooks/guard.clj; }
 contains "denies raw gh issue create" '"permissionDecision":"deny"' "$(guard 'gh issue create --title x')"
-contains "denies gh pr create from main" '"permissionDecision":"deny"' "$(guard 'gh pr create --fill')"
-[ -z "$(guard 'gh pr create --head 12-landing --fill')" ] && ok "allows gh pr create from an issue branch" || bad "issue branch denied"
-[ -z "$(guard 'gh issue create --help')" ] && ok "allows --help" || bad "--help denied"
+contains "denies gh pr create from main, the branch read by git" '"permissionDecision":"deny"' "$(guard 'gh pr create --fill')"
 contains "asks on DELIVERY_GUARD=off" '"permissionDecision":"ask"' "$(guard 'DELIVERY_GUARD=off gh issue create -t x')"
 [ -z "$(guard 'git status')" ] && ok "ignores unrelated commands" || bad "unrelated command judged"
-# #38: a forced push may rewrite only an issue branch (<number>-<slug>); main is protected on the server too.
+# #38: a forced push may rewrite only an issue branch (<number>-<slug>); the branch of HEAD is read by git in the folder.
 FB="$WORK/force"; git init -q -b 42-some-task "$FB"; git init -q -b main "$WORK/force-main"
-for c in "git push --force-with-lease origin 42-some-task" "cd $FB && git push --force-with-lease" \
-         "git -C $FB push --force-with-lease origin" "git push origin main"; do
-  out="$(guard "$c")"
-  if [ -z "$out" ]; then ok "push passes: $c"; else bad "push judged: $c" "$out"; fi
-done
-for c in "git push --force-with-lease origin main" "git push --force-with-lease origin HEAD:main" \
-         "cd $WORK/force-main && git push --force-with-lease" "git push --force-if-includes --force-with-lease origin feature-x"; do
-  contains "a forced push to a non-issue branch is refused: $c" '"permissionDecision":"deny"' "$(guard "$c")"
-done
-contains "  the refusal says which branches may be rewritten" "<number>-<slug>" "$(guard 'git push --force-with-lease origin main')"
-# #117: a forced push to a branch whose open PR holds an approval is refused: the rewrite dismisses it.
+out="$(guard "cd $FB && git push --force-with-lease")"
+if [ -z "$out" ]; then ok "a forced push from an issue branch passes (HEAD read by git)"; else bad "push judged" "$out"; fi
+contains "a forced push from main is refused (HEAD read by git)" "<number>-<slug>" "$(guard "cd $WORK/force-main && git push --force-with-lease")"
+# #117: a forced push to a branch whose open PR holds an approval is refused; gh is the real command, a fake on PATH.
 AG="$WORK/approved"; mkdir -p "$AG"; : > "$AG/log"
 aguard() { jq -nc --arg c "$1" '{tool_input:{command:$c}}' \
   | PATH="$KIT/test/fake-gh:$PATH" FAKE_GH_DIR="$AG" FAKE_GH_LOG="$AG/log" bb .shared/claude/hooks/guard.clj; }
 echo APPROVED > "$AG/pr-list"
-for c in "git push --force origin 42-some-task" "git push -f origin 42-some-task" "git push -fu origin 42-some-task" \
-         "git push --force-with-lease origin 42-some-task" "git push origin +42-some-task" "git push origin +HEAD:42-some-task" \
-         "cd $FB && git push --force-with-lease"; do
-  contains "an approved PR's branch is not force-pushed: $c" '"permissionDecision":"deny"' "$(aguard "$c")"
-done
-contains "  the refusal names the way out" "gh pr update-branch" "$(aguard 'git push -f origin 42-some-task')"
-# gh runs in the push's directory, not the session's: the repository acted on is judged (#99), whatever GHWF_REPO says
-CG="$WORK/cwdgh"; mkdir -p "$CG"
-printf '#!/bin/sh\n[ "$(pwd -P)" = "%s" ] && echo APPROVED || exit 1\n' "$(cd "$FB" && pwd -P)" > "$CG/gh"; chmod +x "$CG/gh"
-cguard() { jq -nc --arg c "$1" '{tool_input:{command:$c}}' | PATH="$CG:$PATH" GHWF_REPO=u473t8/session-repo bb .shared/claude/hooks/guard.clj; }
-for c in "cd $FB && git push -f origin 42-some-task" "git -C $FB push -f origin 42-some-task"; do
-  contains "gh asks the pushed repository: $c" '"permissionDecision":"deny"' "$(cguard "$c")"
-done
-out="$(cguard 'git push -f origin 42-some-task')"
-if [ -z "$out" ]; then ok "a push from the session's own folder does not borrow another repository's answer"; else bad "judged" "$out"; fi
-# #124: a directory given through a variable or ~ is resolved from the command itself, else the environment; one that
-# cannot be is never replaced by the session's folder.
-HM="$WORK/home"; mkdir -p "$HM"; git init -q -b 42-some-task "$HM/repo"
-vguard() { jq -nc --arg c "$1" '{tool_input:{command:$c}}' | HOME="$HM" S_ENV="$FB" bb .shared/claude/hooks/guard.clj; }
-for c in "S=$FB; cd \$S && git push --force-with-lease" "S=$FB && cd \"\$S\" && git push --force-with-lease" \
-         "S=$FB; cd \${S} && git push --force-with-lease" "export S=$FB; cd \$S && git push --force-with-lease" \
-         "S=$FB; git -C \$S push --force-with-lease" "cd ~/repo && git push --force-with-lease" \
-         "git -C ~/repo push --force-with-lease" "R=repo; cd ~/\$R && git push --force-with-lease" \
-         "D=$FB; S=\$D; cd \$S && git push --force-with-lease" "cd \$S_ENV && git push --force-with-lease"; do
-  out="$(vguard "$c")"
-  if [ -z "$out" ]; then ok "a variable directory is resolved: $c"; else bad "judged: $c" "$out"; fi
-done
-contains "a variable directory on main is refused as main" "'main'" "$(vguard "S=$WORK/force-main; cd \$S && git push --force-with-lease")"
-for c in 'cd $UNSET && git push -f' 'cd "$(pwd)" && git push -f' 'cd `pwd` && git push -f origin 42-some-task' \
-         'git -C $UNSET push --force-with-lease' 'S=$(pwd); cd $S && git push -f'; do
-  out="$(vguard "$c")"
-  contains "an unresolvable directory is refused: $c" '"permissionDecision":"deny"' "$out"
-  contains "  and the fix is named" 'git -C <absolute path>' "$out"
-done
-contains "  and the variable is named" '$UNSET' "$(vguard 'cd $UNSET && git push -f')"
-out="$(vguard 'cd $UNSET && git push -f origin main')"
-contains "a push to main is refused as main whatever the directory" "'main'" "$out"
-out="$(vguard 'cd $UNSET && git push origin 42-some-task')"
-if [ -z "$out" ]; then ok "an unforced push in an unresolvable directory passes"; else bad "judged" "$out"; fi
-for c in "S=$FB; cd \$S && git push -f origin 42-some-task" "S=$FB; git -C \$S push -f origin 42-some-task"; do
-  contains "gh runs in the resolved directory: $c" '"permissionDecision":"deny"' "$(cguard "$c")"
-done
-# #126: gh pr create judges the branch of the directory it runs in, or --head's; -R names the repository only.
-for c in "cd $FB && gh pr create --fill" "S=$FB; cd \$S && gh pr create --fill" "cd $FB && gh pr create -R o/r --fill" \
-         "gh pr create --head 12-x --fill" "gh pr create -R o/r --head me:12-x --fill" 'cd $UNSET && gh pr create --head 12-x'; do
-  out="$(vguard "$c")"; if [ -z "$out" ]; then ok "gh pr create allowed: $c"; else bad "judged: $c" "$out"; fi
-done
-for c in "cd $WORK/force-main && gh pr create --fill" "cd $WORK/force-main && gh pr create -R o/r --fill"; do
-  contains "gh pr create from a directory on main is refused: $c" "'main'" "$(vguard "$c")"
-done
-out="$(vguard 'cd $UNSET && gh pr create --fill')"
-contains "gh pr create in an unresolvable directory is refused" '"permissionDecision":"deny"' "$out"
-contains "  and the fix is named" 'gh pr create --head <number>-<slug>' "$out"
-for state in REVIEW_REQUIRED CHANGES_REQUESTED ""; do
-  echo "$state" > "$AG/pr-list"
-  out="$(aguard 'git push --force-with-lease origin 42-some-task')"
-  if [ -z "$out" ]; then ok "a PR with review '${state:-none}': the forced push passes"; else bad "judged with review '$state'" "$out"; fi
-done
+contains "an approved PR's branch is not force-pushed" "gh pr update-branch" "$(aguard 'git push -f origin 42-some-task')"
+echo REVIEW_REQUIRED > "$AG/pr-list"
+out="$(aguard 'git push --force-with-lease origin 42-some-task')"
+if [ -z "$out" ]; then ok "a PR with another review state: the forced push passes"; else bad "judged" "$out"; fi
 echo APPROVED > "$AG/pr-list"; touch "$AG/silent-fail"
 out="$(aguard 'git push -f origin 42-some-task')"
 if [ -z "$out" ]; then ok "GitHub cannot be read: the forced push passes"; else bad "refused offline" "$out"; fi
 rm "$AG/silent-fail"; : > "$AG/log"
-for c in "git push origin 42-some-task" "git push -u origin 42-some-task" "git status"; do
-  out="$(aguard "$c")"; if [ -z "$out" ]; then ok "an unforced command passes: $c"; else bad "judged: $c" "$out"; fi
+for c in "git push origin 42-some-task" "git push -u origin 42-some-task" "git status"; do aguard "$c" >/dev/null; done
+if [ -s "$AG/log" ]; then bad "an unforced command read GitHub" "$(cat "$AG/log")"; else ok "an unforced command reads nothing from GitHub"; fi
+# gh runs in the push's directory, not the session's: the repository acted on is judged (#99), whatever GHWF_REPO says
+CG="$WORK/cwdgh"; mkdir -p "$CG"
+printf '#!/bin/sh\n[ "$(pwd -P)" = "%s" ] && echo APPROVED || exit 1\n' "$(cd "$FB" && pwd -P)" > "$CG/gh"; chmod +x "$CG/gh"
+cguard() { jq -nc --arg c "$1" '{tool_input:{command:$c}}' | PATH="$CG:$PATH" GHWF_REPO=u473t8/session-repo bb .shared/claude/hooks/guard.clj; }
+for c in "cd $FB && git push -f origin 42-some-task" "git -C $FB push -f origin 42-some-task" "S=$FB; cd \$S && git push -f origin 42-some-task"; do
+  contains "gh asks the pushed repository: $c" '"permissionDecision":"deny"' "$(cguard "$c")"
 done
-if [ -s "$AG/log" ]; then bad "an unforced command read GitHub" "$(cat "$AG/log")"; else ok "  and reads nothing from GitHub"; fi
-# #64: in zsh an unquoted $v stays one word, so a command that needs it split is refused.
+out="$(cguard 'git push -f origin 42-some-task')"
+if [ -z "$out" ]; then ok "a push from the session's own folder does not borrow another repository's answer"; else bad "judged" "$out"; fi
+# #124: a directory given through a variable or ~ is resolved from the command itself, else the environment.
+HM="$WORK/home"; mkdir -p "$HM"; git init -q -b 42-some-task "$HM/repo"
+vguard() { jq -nc --arg c "$1" '{tool_input:{command:$c}}' | HOME="$HM" S_ENV="$FB" bb .shared/claude/hooks/guard.clj; }
+for c in "cd ~/repo && git push --force-with-lease" 'cd $S_ENV && git push --force-with-lease'; do
+  out="$(vguard "$c")"
+  if [ -z "$out" ]; then ok "a directory from HOME or the environment is resolved: $c" ; else bad "judged: $c" "$out"; fi
+done
+contains "an unresolvable directory is refused, with the fix" 'git -C <absolute path>' "$(vguard 'cd $UNSET && git push -f')"
+# #126: gh pr create judges the branch of the directory it runs in.
+out="$(vguard "cd $FB && gh pr create --fill")"; if [ -z "$out" ]; then ok "gh pr create allowed from an issue branch's folder"; else bad "judged" "$out"; fi
+contains "gh pr create from a directory on main is refused" "'main'" "$(vguard "cd $WORK/force-main && gh pr create --fill")"
+# #64 and its zsh rules: SHELL comes from the process, so only a run proves it is read.
 zguard() { jq -nc --arg c "$1" '{tool_input:{command:$c}}' | SHELL=/bin/zsh bb .shared/claude/hooks/guard.clj; }
-for c in 'set -- $t' 'env $E bash x.sh' 'for n in $list; do echo $n; done' '$cmd --flag' 'for n in ${list}; do :; done'; do
-  contains "zsh: refuses a command relying on splitting: $c" '"permissionDecision":"deny"' "$(zguard "$c")"
-done
-contains "  the refusal names the fix" '${=' "$(zguard 'set -- $t')"
-for c in 'set -- ${=t}' 'for n in ${=list}; do :; done' 'echo "$v"' 'for x in $(seq 3); do :; done' 'env A=1 bash x.sh' 'echo $v'; do
-  out="$(zguard "$c")"
-  if [ -z "$out" ]; then ok "zsh: passes $c"; else bad "zsh: judged $c" "$out"; fi
-done
+contains "zsh: refuses a variable holding words used as a command" '${=' "$(zguard 'cmd="git status"; $cmd --flag')"
+out="$(zguard '$B cmd')"
+if [ -z "$out" ]; then ok "zsh: a variable of unknown value as a command passes"; else bad "zsh: judged" "$out"; fi
+contains "zsh: a modifier after a variable is refused, with the fix" '${v:h}' "$(zguard 'echo "$a:host"')"
 out="$(jq -nc '{tool_input:{command:"set -- $t"}}' | SHELL=/bin/bash bb .shared/claude/hooks/guard.clj)"
 if [ -z "$out" ]; then ok "bash splits words itself: no refusal"; else bad "refused in bash" "$out"; fi
-# #54: a gh api call that only reads runs without a window; one that can change GitHub asks the owner.
-for c in "gh api repos/u473t8/x" "gh api repos/u473t8/x --paginate --jq '.[] | .name'" \
-         "gh api graphql -f query='{viewer{login}}'" "gh api -X GET repos/u473t8/x -f per_page=100"; do
-  out="$(guard "$c")"
-  if [ -z "$out" ]; then ok "gh api read passes: $c"; else bad "gh api read judged: $c" "$out"; fi
-done
-for c in "gh api -X POST repos/u473t8/x/issues -f title=t" "gh api repos/u473t8/x/issues -f title=t" \
-         "gh api --method=DELETE repos/u473t8/x/git/refs/heads/y" "gh api -XPATCH repos/u473t8/x" \
-         "gh api graphql -f query='mutation { addStar(input: {}) { clientMutationId } }'" \
-         "gh api graphql -F query=@q.graphql" 'echo "gone: $(gh api -X DELETE repos/u473t8/x/git/refs/heads/y)"'; do
-  contains "gh api write asks the owner: $c" '"permissionDecision":"ask"' "$(guard "$c")"
-done
+# #54 and #93: the output of a decision reaches its readers whatever the rule
+contains "gh api write asks the owner" '"permissionDecision":"ask"' "$(guard 'gh api -X POST repos/u473t8/x/issues -f title=t')"
 if jq -e '.permissions.ask | index("Bash(gh api *)")' .claude/settings.json >/dev/null; then bad "settings still ask for every gh api call"
 else ok "settings no longer ask for every gh api call"; fi
-# #93: the guard reads commands with a tokenizer, so quoted text is text and nested commands are seen.
-for c in 'gh issue create --title "x" --help' 'git commit -m "a && gh issue create -t y"' \
-         'gh pr create --head 12-x --title "a; gh issue create"' $'cat <<\'EOF\' > b.md\ngh issue create -t y\nEOF'; do
-  out="$(guard "$c")"
-  if [ -z "$out" ]; then ok "tokenizer: quoted or heredoc text is no command: $c"; else bad "tokenizer: judged text: $c" "$out"; fi
-done
-for c in 'bash -c "gh issue create -t x"' "eval 'gh issue create -t x'" 'echo `gh issue create -t x`' \
-         $'cat <<<"gh x"\ngh issue create -t y' $'cat <<EOF\nx\nEOF\ngh issue create -t y' 'sh -c "cd /tmp && gh issue create -t x"'; do
-  contains "tokenizer: a nested or following command is judged: $c" '"permissionDecision":"deny"' "$(guard "$c")"
-done
-# The independent review of #93: what a careless reading would let through.
-for c in $'cat <<EOF|gh issue create -t y\nbody\nEOF' $'cat <<EOF;gh issue create -t y\nbody\nEOF' \
-         $'cat <<A; cat <<B\nx\nA\ny\nB\ngh issue create -t y' $'cat <<EOF\r\nbody\r\nEOF\r\ngh issue create -t y' \
-         "echo \$'it\\'s' && gh issue create -t y" "gh issue create --title '--help'" \
-         'if true; then gh issue create -t x; fi' 'for x in a b; do gh issue create -t x; done' \
-         'sudo -u bob gh issue create -t x' 'sudo -E gh issue create -t x' "bash -lc 'gh issue create -t x'" \
-         'echo "$(case x in x) gh issue create -t y;; esac)"' \
-         'git -c core.x=y push --force-with-lease origin main' 'git --no-pager push --force-with-lease origin main'; do
-  contains "tokenizer: still judged: $c" '"permissionDecision":"deny"' "$(guard "$c")"
-done
+contains "tokenizer: a command after a heredoc is judged" '"permissionDecision":"deny"' "$(guard $'cat <<EOF\nx\nEOF\ngh issue create -t y')"
+out="$(guard $'cat <<\'EOF\' > b.md\ngh issue create -t y\nEOF')"
+if [ -z "$out" ]; then ok "tokenizer: a heredoc body is no command"; else bad "tokenizer: judged text" "$out"; fi
+nogh="$WORK/nogh"; mkdir -p "$nogh"
+for t in bash git awk sed cat head tr grep jq node dirname readlink mktemp rm bb; do ln -sf "$(command -v $t)" "$nogh/$t"; done
+out="$(jq -nc '{tool_input:{command:"git push -f origin 42-some-task"}}' | PATH="$nogh" bb .shared/claude/hooks/guard.clj 2>&1)"; code=$?
+[ "$code" -eq 2 ] && ok "a read that cannot run (no gh) refuses with exit 2" || bad "no gh: exit $code" "$out"
 
 echo "- fail closed"
 jq -e '.hooks.PreToolUse[0].hooks[0].onFailure == "block"' .claude/settings.json >/dev/null && ok "PreToolUse hook fails closed" || bad "PreToolUse onFailure"
@@ -783,32 +714,14 @@ passes "lets through: --force-with-lease to an issue branch (#38)" "$(call Bash 
 passes "lets through: git status" "$(call Bash '{"command":"git status"}')"
 passes "lets through: a Read of README.md" "$(call Read '{"file_path":"README.md"}')"
 refused "the delivery guard still runs after it" "$(call Bash '{"command":"gh issue create --title x"}')"
-# #109: a command that waits runs in the background, so the agent is woken when it exits.
-waitcalls=('sleep 5' 'gh pr checks 12 --watch --fail-fast' 'gh run watch 99' '.shared/bin/kit merge' 'bb .shared/bin/kit merge'
-           '.shared/bin/kit checks' 'bb .shared/bin/kit checks --pr 5' 'bb bin/kit merge' 'bash -c "sleep 2"' 'echo $(sleep 1)' 'git status && sleep 3')
-for c in "${waitcalls[@]}"; do
-  refused "a waiting command in the foreground is refused: $c" "$(call Bash "$(jq -nc --arg c "$c" '{command:$c}')")"
-  passes "  and runs in the background: $c" "$(call Bash "$(jq -nc --arg c "$c" '{command:$c, run_in_background:true}')")"
-done
+# #109: a command that waits runs in the background (the rule's cases are tables in `bb test`; here the entry hook
+# carries run_in_background to the guard).
+refused "a waiting command in the foreground is refused" "$(call Bash '{"command":"sleep 5"}')"
+passes "  and runs in the background" "$(call Bash '{"command":"sleep 5","run_in_background":true}')"
 contains "  the refusal says what to do" "run_in_background" "$(call Bash '{"command":"sleep 5"}')"
-# #109, fourth PR: a Monitor call reaches the guard as a Bash call (tool_name Bash, {command, description}, no
-# run_in_background), so the rule judges the command: a wait for one event is refused, a poll loop is not.
-single=('sleep 5' 'sleep 2; echo done' 'gh pr checks 1 --watch' 'while true; do gh pr checks 1 --watch; done' 'kit merge'
-        'while true; do kit checks; sleep 5; done')
-for c in "${single[@]}"; do
-  refused "a wait for one event, as Monitor sends it, is refused: $c" "$(call Bash "$(jq -nc --arg c "$c" '{command:$c, description:"wait"}')")"
-  passes "  with run_in_background it is allowed: $c" "$(call Bash "$(jq -nc --arg c "$c" '{command:$c, description:"wait", run_in_background:true}')")"
-done
-polls=('while true; do gh api x || true; sleep 30; done' 'until grep -q X f; do sleep 1; done' 'for i in 1 2 3; do echo $i; sleep 1; done')
-for c in "${polls[@]}"; do
-  passes "a poll loop, as Monitor sends it, is allowed: $c" "$(call Bash "$(jq -nc --arg c "$c" '{command:$c, description:"poll"}')")"
-  passes "  and in the background: $c" "$(call Bash "$(jq -nc --arg c "$c" '{command:$c, description:"poll", run_in_background:true}')")"
-done
-refused "a sleep after a loop is outside it and refused" "$(call Bash '{"command":"for i in 1 2; do echo $i; done; sleep 3"}')"
+refused "a wait as Monitor sends it (command and description) is refused" "$(call Bash '{"command":"gh pr checks 1 --watch","description":"wait"}')"
+passes "a poll loop, as Monitor sends it, is allowed" "$(call Bash '{"command":"until grep -q X f; do sleep 1; done","description":"poll"}')"
 refused "Bash running a command another rule refuses is still refused" "$(call Bash '{"command":"gh issue create --title x","description":"x"}')"
-for c in 'echo "kit merge later"' 'echo kit checks' 'git merge main' 'gh pr checks 12' 'echo sleep'; do
-  passes "a word like merge or sleep in text or another command is not refused: $c" "$(call Bash "$(jq -nc --arg c "$c" '{command:$c}')")"
-done
 [ -f .cc-safety-net/policy.json ] && ok "init writes the project's policy" || bad "no .cc-safety-net/policy.json"
 cp .cc-safety-net/policy.json "$WORK/policy.json"; echo hi > notes.txt
 jq '.secret_protection = {deny_paths: ["notes.txt"]}' "$WORK/policy.json" > .cc-safety-net/policy.json

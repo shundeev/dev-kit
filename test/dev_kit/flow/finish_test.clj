@@ -77,7 +77,7 @@
         pr     (the-pr world)]
     (is (= :ok (::steps/status result)) "the finish succeeds")
     (is (= ["feat(GH-1): add landing page"] (fake/commits world)) "the staged work is committed under the subject")
-    (is (= ["1-add-landing-page"] (fake/remote-branches world)) "and pushed")
+    (is (= #{"1-add-landing-page"} (fake/remote-branches world)) "and pushed")
     (is (= "Closes #1\n\nWhat changed.\nADR: none" (:body pr)) "the PR closes the issue")
     (is (false? (:draft pr)) "it opens ready, where main has no ready workflow")
     (is (= ["shundeev/owners"] (:owners pr)) "the owners are asked at once")
@@ -241,7 +241,7 @@
     (is (empty? (fake/remote-branches world)) "nothing is pushed")
     (is (= :ok (::steps/status again)) "--no-commit goes on")
     (is (= ["feat(GH-1): add landing page"] (fake/commits pushed)) "it commits nothing more")
-    (is (= ["1-add-landing-page"] (fake/remote-branches pushed)) "it pushes what is on the branch")
+    (is (= #{"1-add-landing-page"} (fake/remote-branches pushed)) "it pushes what is on the branch")
     (is (some? (the-pr pushed)) "and opens the PR")))
 
 
