@@ -319,9 +319,30 @@
 
 
 (defn- release-operations
-  "kit release's operations."
-  [_world]
-  {})
+  "kit release's operations. A pull request that does not exist is an error, as gh's would end the run. Option
+  :auto-merge-refusal is the text GitHub answers when it does not allow auto-merge."
+  [world]
+  (let [pr-or-throw (fn [pr]
+                      (or (pr-of @world pr) (throw (ex-info (str "no pull request " pr) {:pr pr}))))
+        change-pr   (fn [pr change] (swap! world update-in [:prs (:number (pr-or-throw pr))] change))]
+    {:view-pr-for-release
+     (fn [pr _repo]
+       (let [found (pr-or-throw pr)]
+         {:state (:state found)
+          :draft (boolean (:draft found))
+          :hold  (boolean (some #{"hold"} (:labels found)))
+          :url   (:url found)}))
+
+     :remove-label!
+     (fn [pr _repo label] (change-pr pr #(update % :labels (fn [labels] (vec (remove #{label} labels))))))
+
+     :mark-ready!
+     (fn [pr _repo] (change-pr pr #(assoc % :draft false)))
+
+     :auto-merge!
+     (fn [url]
+       (or (:auto-merge-refusal @world)
+           (do (change-pr url #(assoc % :auto-merge true)) nil)))}))
 
 
 (defn- checks-operations
