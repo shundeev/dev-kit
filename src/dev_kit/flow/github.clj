@@ -321,7 +321,35 @@
 
 (def release-operations
   "kit release's operations."
-  {})
+  {:view-pr-for-release
+   (fn [pr repo]
+     (let [{:keys [state isDraft labels url]}
+           (json/parse-string (shell/gh! "pr" "view" pr
+                                "-R"     repo
+                                "--json" "state,isDraft,labels,url")
+                              true)]
+       {:state state
+        :draft isDraft
+        :hold  (boolean (some #(= "hold" (:name %)) labels))
+        :url   url}))
+
+   :remove-label!
+   (fn [pr repo label]
+     (shell/ok! (shell/shell "gh" "pr" "edit" pr
+                  "-R"             repo
+                  "--remove-label" label)))
+
+   :mark-ready!
+   (fn [pr repo]
+     (shell/ok! (shell/shell "gh" "pr" "ready" pr "-R" repo)))
+
+   ;; The same call as kit finish's auto-merge (finish/turn-on-auto-merge!): it moves to the shared map once finish is a
+   ;; recipe.
+   :auto-merge!
+   (fn [url]
+     (let [merge-result (shell/run "gh" "pr" "merge" url "--auto" "--squash")]
+       (when-not (zero? (:exit merge-result))
+         (str/trim (str (:out merge-result) (:err merge-result))))))})
 
 
 (def checks-operations
