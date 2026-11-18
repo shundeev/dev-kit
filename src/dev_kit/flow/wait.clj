@@ -3,7 +3,8 @@
   (:require
    [cheshire.core :as json]
    [clojure.string :as str]
-   [dev-kit.flow.shell :as shell]))
+   [dev-kit.flow.shell :as shell]
+   [dev-kit.flow.steps :as steps]))
 
 
 ;; ------------------------------------------------------------------ waiting on a pull request
@@ -14,12 +15,30 @@
 ;; call a process on this machine.
 
 
+(defn- bad-poll [v] (str "GHWF_MERGE_POLL is '" v "': give it a whole number of seconds, or unset it for 10"))
+
+
 (defn pause
-  "The pause between two looks, in seconds: GHWF_MERGE_POLL, for kit merge and kit checks alike."
+  "The pause between two looks, in seconds: GHWF_MERGE_POLL, for kit merge and kit checks alike. It goes once both
+  are recipes, which take `poll-seconds` in a step."
   []
   (let [v (shell/env "GHWF_MERGE_POLL" "10")]
     (or (parse-long v)
-        (shell/die (str "GHWF_MERGE_POLL is '" v "': give it a whole number of seconds, or unset it for 10")))))
+        (shell/die (bad-poll v)))))
+
+
+(defn poll-seconds
+  "The pause between two looks, in seconds, from GHWF_MERGE_POLL's text (\"10\" when unset); any other text stops
+  the step."
+  [text]
+  (or (parse-long text)
+      (steps/fail! :wait/bad-poll (bad-poll text))))
+
+
+(defn sleep!
+  "The real clock of a recipe's ctx (:sleep): waits the given seconds. Tests hand a clock that advances a script."
+  [seconds]
+  (Thread/sleep (* 1000 seconds)))
 
 
 (defn- pr-args
@@ -30,17 +49,22 @@
     [pr]))
 
 
+(defn gh-failure-text
+  "What a failed gh call says: the command's first two words and gh's output."
+  [command output]
+  (format
+   "gh %s failed: %s. Fix: run it by hand to see why; an unreachable GitHub and an expired token both show there."
+   command
+   (str/trim output)))
+
+
 (defn gh-json
   "A gh call's JSON output. A call that fails goes to `fail` (die, or a stop with its own exit code) with gh's message."
   [fail & args]
   (let [{:keys [exit out err]} (apply shell/run "gh" args)]
     (if (zero? exit)
       (json/parse-string out true)
-      (fail (str "gh "
-                 (str/join " " (take 2 args))
-                 " failed: "
-                 (str/trim (str out err))
-                 ". Fix: run it by hand to see why; an unreachable GitHub and an expired token both show there.")))))
+      (fail (gh-failure-text (str/join " " (take 2 args)) (str out err))))))
 
 
 (defn read-pr
@@ -69,6 +93,15 @@
      :auto-merge  (some? (:autoMergeRequest j))}))
 
 
+(defn checks-failure-text
+  "What a failed `gh pr checks` says: the pull request as gh took it and gh's output."
+  [pr output]
+  (format
+   "gh pr checks failed: %s. Fix: run `gh pr checks %s --required` by hand to see why; an unreachable GitHub and an expired token both show there."
+   (str/trim output)
+   pr))
+
+
 (defn required-checks
   "The required checks registered on the pull request's head commit, as {:name :bucket :link}; [] when none is."
   [pr repo fail]
@@ -78,11 +111,7 @@
     (cond (sequential? parsed) parsed
           (re-find #"(?i)no (required )?checks reported" (str out err)) []
           :else
-          (fail (str "gh pr checks failed: "
-                     (str/trim (str out err))
-                     ". Fix: run `gh pr checks "
-                     (first (pr-args pr repo))
-                     " --required` by hand to see why; an unreachable GitHub and an expired token both show there.")))))
+          (fail (checks-failure-text (first (pr-args pr repo)) (str out err))))))
 
 
 (defn failed-text

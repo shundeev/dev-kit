@@ -1,13 +1,17 @@
 (ns dev-kit.flow.github
-  "The GitHub that kit start talks to, as named operations over data (#139, the pilot). A step calls
-  `((:github ctx) :op args…)`; the real operations below are today's gh calls, moved unchanged and in the same
+  "The GitHub (and git) that the flow commands talk to, as named operations over data (#139). A step calls
+  `((:github ctx) :op args…)`; the real operations below are today's gh and git calls, moved unchanged and in the same
   order, since the selftest's fake gh checks them as strings. Tests hand an in-memory GitHub with the same
-  operations instead. An operation returns data and decides nothing: refusing is the step's."
+  operations instead. An operation returns data and decides nothing: refusing is the step's.
+
+  The operations are kept one map per command, plus the shared ones, so each command is rewritten on its own; no
+  name may appear in two maps."
   (:require
    [cheshire.core :as json]
    [clojure.string :as str]
    [dev-kit.flow.board :as board]
-   [dev-kit.flow.shell :as shell]))
+   [dev-kit.flow.shell :as shell]
+   [dev-kit.flow.wait :as wait]))
 
 
 (def items-query
@@ -70,8 +74,8 @@
   "mutation($itemId:ID!,$repositoryId:ID!){ convertProjectV2DraftIssueItemToIssue(input:{itemId:$itemId,repositoryId:$repositoryId}) { item { content { ... on Issue { number url } } } } }")
 
 
-(def operations
-  "Each operation by name. Arguments and results are plain data; a failing gh call that is not the step's to judge
+(def start-operations
+  "kit start's operations. Arguments and results are plain data; a failing gh call that is not the step's to judge
   ends the run inside shell/gh!, as before the pilot."
   {:open-milestones
    (fn [repo]
@@ -203,6 +207,88 @@
 
    :current-branch
    (fn [] (some-> (shell/run "git" "branch" "--show-current") :out str/trim))})
+
+
+(def ready-workflow-path ".github/workflows/ready-when-green.yml")
+
+
+(defn ready-workflow?
+  "Whether `base` of `repo` holds the ready workflow (ADR-0007). Not-found is a plain no; any other failure ends the
+  run: guessing would open a ready PR in a repository that has the workflow, or a draft that nothing marks ready."
+  [repo base]
+  (let [{:keys [exit out err]}
+        (shell/run "gh" "api" (str "repos/" repo "/contents/" ready-workflow-path "?ref=" base) "--silent")]
+    (cond
+      (zero? exit) true
+      (re-find #"404|Not Found" (str out err)) false
+      :else
+      (let [said (or (not-empty (str/trim (str out err))) (str "gh exit code " exit))]
+        (shell/die
+         (format
+          "Could not look for %s on '%s' of %s (%s). Nothing was committed or pushed: run it again when GitHub answers, or check 'gh auth status'."
+          ready-workflow-path
+          base
+          repo
+          said))))))
+
+
+(def shared-operations
+  "Operations more than one command uses, with the same gh or git call."
+  {:head-branch
+   (fn [] (shell/git-out "rev-parse" "--abbrev-ref" "HEAD"))
+
+   :open-pr-url
+   (fn [repo branch state]
+     (not-empty (shell/gh! "pr" "list"
+                  "-R"      repo
+                  "--head"  branch
+                  "--state" state
+                  "--json"  "url"
+                  "--jq"    ".[0].url // empty")))
+
+   :read-pr
+   (fn [pr repo fail] (wait/read-pr pr repo fail))
+
+   :required-checks
+   (fn [pr repo fail] (wait/required-checks pr repo fail))
+
+   :ready-workflow?
+   (fn [repo base] (ready-workflow? repo base))})
+
+
+(def finish-operations
+  "kit finish's operations."
+  {})
+
+
+(def merge-operations
+  "kit merge's operations."
+  {})
+
+
+(def release-operations
+  "kit release's operations."
+  {})
+
+
+(def checks-operations
+  "kit checks' operations."
+  {})
+
+
+(def command-operations
+  "Each command's operations by the command, the shared ones under :shared."
+  {:shared  shared-operations
+   :start   start-operations
+   :finish  finish-operations
+   :merge   merge-operations
+   :release release-operations
+   :checks  checks-operations})
+
+
+(def operations
+  "Every operation by name."
+  (apply merge (vals command-operations)))
 
 
 (defn real

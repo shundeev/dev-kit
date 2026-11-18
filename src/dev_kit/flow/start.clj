@@ -414,8 +414,8 @@ Options:
 
 
 (defn start!
-  "kit start: read the command line, run the recipe on the real GitHub, print what it made — or Error: and the
-  reason, exit 1."
+  "kit start: read the command line, run the recipe on the real GitHub, print what it made — or the refusal (Error: and
+  the reason, exit 1)."
   [kit args]
   (let [input (read-input args shell/env)]
     (when (:help input)
@@ -424,5 +424,5 @@ Options:
     (let [ctx    {:github github/real :warn shell/warn :kit kit :resolve-repo shell/resolve-repo}
           result (start ctx input)]
       (when (= :fail (::steps/status result))
-        (shell/die (:message (::steps/problem result))))
+        (shell/exit-with! (steps/refusal result)))
       (print-result github/real result))))

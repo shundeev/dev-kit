@@ -46,7 +46,7 @@ Options:
             (println release-usage)
             (System/exit 0))
         repo   (shell/resolve-repo (:repo o))
-        branch (finish/git-out "rev-parse" "--abbrev-ref" "HEAD")
+        branch (shell/git-out "rev-parse" "--abbrev-ref" "HEAD")
         pr     (or (:pr o)
                    (not-empty (shell/gh! "pr" "list"
                                 "-R"      repo

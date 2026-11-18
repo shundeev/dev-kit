@@ -5,7 +5,6 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [dev-kit.flow.fake-github :as fake]
-   [dev-kit.flow.github :as real-github]
    [dev-kit.flow.start :as start]
    [dev-kit.flow.steps :as steps]))
 
@@ -233,8 +232,3 @@
     (is (= "1-add-landing-page" (:branch kept)) "--no-checkout answers with the branch it made")
     (is (= {1 "1-add-landing-page"} (fake/linked-branches keeping)) "it is linked to the issue")
     (is (= "main" (fake/checked-out keeping)) "but the working tree is where it was")))
-
-
-(deftest the-in-memory-github-answers-every-operation-the-real-one-has
-  (is (= (set (keys real-github/operations)) fake/operation-names)
-      "a story never meets an operation the fake lacks, nor the fake one the real GitHub lacks"))

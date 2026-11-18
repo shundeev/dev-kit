@@ -3,7 +3,6 @@
   (:require
    [clojure.string :as str]
    [dev-kit.flow.board :as board]
-   [dev-kit.flow.finish :as finish]
    [dev-kit.flow.shell :as shell]
    [dev-kit.flow.wait :as wait]))
 
@@ -97,7 +96,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
         status-field (or (:status-field o) (shell/env "GHWF_STATUS_FIELD" "Status"))
         done-status (or (:done-status o) (shell/env "GHWF_DONE_STATUS" "Done"))
         repo (shell/resolve-repo (:repo o))
-        branch (finish/git-out "rev-parse" "--abbrev-ref" "HEAD")
+        branch (shell/git-out "rev-parse" "--abbrev-ref" "HEAD")
         _ (when (#{base "HEAD"} branch)
             (shell/die (str "Run from the issue branch, not '" branch "'")))
         number (or (shell/issue-branch-number branch) (shell/die (str "Branch '" branch "' is not <number>-<slug>")))
@@ -225,7 +224,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
     ;; Leave the issue branch. When the base branch is checked out in another worktree, this one cannot switch to
     ;; it; it stays detached on the merged base instead.
     (shell/ok! (shell/shell "git" "fetch" "-q" "origin" base))
-    (if (some #{(str "branch refs/heads/" base)} (str/split-lines (finish/git-out "worktree" "list" "--porcelain")))
+    (if (some #{(str "branch refs/heads/" base)} (str/split-lines (shell/git-out "worktree" "list" "--porcelain")))
       (shell/ok! (shell/shell "git" "switch" "-q" "--detach" (str "origin/" base)))
       (do (shell/ok! (shell/shell "git" "switch" "-q" base))
           (shell/ok! (shell/shell "git" "pull" "-q" "--ff-only"))))
