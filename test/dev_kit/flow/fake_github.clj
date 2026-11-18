@@ -143,6 +143,18 @@
        (mapv val)))
 
 
+(defn local-branches
+  "The branches the clone has."
+  [world]
+  (set (:local-branches @world)))
+
+
+(defn remote-branches
+  "The branches GitHub has."
+  [world]
+  (set (:remote-branches @world)))
+
+
 (defn slept
   "The pauses a command took while it waited, in seconds, in order."
   [world]
@@ -303,7 +315,17 @@
          (vec (:checks found)))))
 
    :ready-workflow?
-   (fn [_repo _base] (:ready-workflow @world))})
+   (fn [_repo _base] (:ready-workflow @world))
+
+   :auto-merge!
+   (fn [pr-url]
+     (let [found (pr-of @world pr-url)
+           turn  (fn [fields] (swap! world update-in [:prs (:number found)] merge fields))]
+       (if-let [message (:refuse-auto-merge found)]
+         (do (when (:merges-meanwhile found)
+               (turn {:state "MERGED"}))
+             {:exit 1 :out "" :err message})
+         (do (turn {:auto-merge true}) {:exit 0 :out "" :err ""}))))})
 
 
 (defn- finish-operations
@@ -312,15 +334,96 @@
   {})
 
 
+(defn- update-pr
+  "The pull request a gh argument names, changed by `change`."
+  [world pr change]
+  (let [number (:number (pr-of @world pr))]
+    (swap! world update-in [:prs number] change)))
+
+
+(defn- git-refuses!
+  [message]
+  (throw (ex-info (format "git would refuse: %s" message) {})))
+
+
 (defn- merge-operations
-  "kit merge's operations."
-  [_world]
-  {})
+  "kit merge's operations. Besides the world's pull requests, it reads these options of new-world:
+  :local-branches    the branches the clone has
+  :remote-branches   the branches GitHub has
+  :other-worktrees   the branches checked out in the clone's other worktrees
+  :unclosable        numbers of issues that GitHub refuses to close
+  and these of a pull request: :closes (numbers of the issues it closes), :refuse-update (gh refuses to update the
+  branch), :refuse-auto-merge (the message gh gives), :merges-meanwhile (GitHub merges it while it refuses auto-merge),
+  :refuse-squash. It keeps what was done to a pull request: :updates (how often its branch was updated), :squashed."
+  [world]
+  {:update-branch!
+   (fn [pr-url]
+     (if (:refuse-update (pr-of @world pr-url))
+       1
+       (do (update-pr world pr-url #(-> % (assoc :merge-state "CLEAN") (update :updates (fnil inc 0)))) 0)))
+
+   :squash-merge!
+   (fn [pr-url]
+     (if (:refuse-squash (pr-of @world pr-url))
+       1
+       (do (update-pr world pr-url #(assoc % :state "MERGED" :squashed true)) 0)))
+
+   :closing-issues
+   (fn [pr-url _fail]
+     (vec (for [number (:closes (pr-of @world pr-url))]
+            (select-keys (get-in @world [:issues number]) [:number :url]))))
+
+   :issue-state
+   (fn [issue-url] (:state (issue-of-url @world issue-url)))
+
+   :close-issue!
+   (fn [issue-url note]
+     (let [issue (issue-of-url @world issue-url)]
+       (if (contains? (set (:unclosable @world)) (:number issue))
+         {:exit 1 :out "" :err "GraphQL: the fake GitHub refuses to close it"}
+         (do (swap! world update-in [:issues (:number issue)] assoc :state "CLOSED" :closed-with note)
+             {:exit 0 :out "" :err ""}))))
+
+   :fetch-base!
+   (fn [_base] nil)
+
+   :worktree-branches
+   (fn []
+     (let [current @world]
+       (concat (:other-worktrees current)
+               (when-not (= "HEAD" (:current-branch current))
+                 [(:current-branch current)]))))
+
+   :detach-at-base!
+   (fn [_base] (swap! world assoc :current-branch "HEAD") nil)
+
+   :switch-to!
+   (fn [branch]
+     (when (some #{branch} (:other-worktrees @world))
+       (git-refuses! (format "'%s' is checked out in another worktree" branch)))
+     (swap! world assoc :current-branch branch)
+     nil)
+
+   :pull-ff-only!
+   (fn [] nil)
+
+   :delete-local-branch!
+   (fn [branch]
+     (when (= branch (:current-branch @world))
+       (git-refuses! (format "cannot delete the branch '%s' it is checked out" branch)))
+     (swap! world update :local-branches #(disj (set %) branch))
+     nil)
+
+   :remote-branch?
+   (fn [branch] (contains? (set (:remote-branches @world)) branch))
+
+   :delete-remote-branch!
+   (fn [branch] (swap! world update :remote-branches #(disj (set %) branch)) nil)})
 
 
 (defn- release-operations
-  "kit release's operations. A pull request that does not exist is an error, as gh's would end the run. Option
-  :auto-merge-refusal is the text GitHub answers when it does not allow auto-merge."
+  "kit release's operations. A pull request that does not exist is an error, as gh's would end the run. A PR's
+  :refuse-auto-merge is the text GitHub answers when it does not allow auto-merge (the shared :auto-merge!)."
   [world]
   (let [pr-or-throw (fn [pr]
                       (or (pr-of @world pr) (throw (ex-info (str "no pull request " pr) {:pr pr}))))
@@ -337,12 +440,7 @@
      (fn [pr _repo label] (change-pr pr #(update % :labels (fn [labels] (vec (remove #{label} labels))))))
 
      :mark-ready!
-     (fn [pr _repo] (change-pr pr #(assoc % :draft false)))
-
-     :auto-merge!
-     (fn [url]
-       (or (:auto-merge-refusal @world)
-           (do (change-pr url #(assoc % :auto-merge true)) nil)))}))
+     (fn [pr _repo] (change-pr pr #(assoc % :draft false)))}))
 
 
 (defn- checks-operations

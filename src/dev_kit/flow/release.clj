@@ -116,10 +116,11 @@ Options:
 (defn- turn-on-auto-merge
   "A repository that does not allow auto-merge gets a warning with the fix; the release still stands."
   [{:keys [github warn]} {:keys [url]}]
-  (when-let [reason (github :auto-merge! url)]
-    (warn "Warning: auto-merge could not be turned on:" reason)
-    (warn
-     "  Fix: the owner turns on Settings > General > 'Allow auto-merge' (dev-kit#37); until then kit merge merges after the Approve."))
+  (let [{:keys [exit out err]} (github :auto-merge! url)]
+    (when-not (zero? exit)
+      (warn "Warning: auto-merge could not be turned on:" (str/trim (str out err)))
+      (warn
+       "  Fix: the owner turns on Settings > General > 'Allow auto-merge' (dev-kit#37); until then kit merge merges after the Approve.")))
   nil)
 
 
