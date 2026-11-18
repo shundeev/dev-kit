@@ -262,8 +262,61 @@
 
 
 (def merge-operations
-  "kit merge's operations."
-  {})
+  "kit merge's operations. The git calls print to the terminal and end the run with git's own exit code when they fail,
+  as the scripts did under `set -e`; so does a gh call made through shell/gh!."
+  {:update-branch!
+   (fn [pr-url] (shell/shell "gh" "pr" "update-branch" pr-url))
+
+   :auto-merge!
+   (fn [pr-url] (shell/run "gh" "pr" "merge" pr-url "--auto" "--squash"))
+
+   :squash-merge!
+   (fn [pr-url] (shell/shell "gh" "pr" "merge" pr-url "--squash"))
+
+   :closing-issues
+   (fn [pr-url fail]
+     (:closingIssuesReferences (wait/gh-json fail "pr" "view" pr-url "--json" "closingIssuesReferences")))
+
+   :issue-state
+   (fn [issue-url]
+     (shell/gh! "issue" "view" issue-url
+       "--json" "state"
+       "--jq"   ".state"))
+
+   :close-issue!
+   (fn [issue-url note]
+     (shell/run "gh" "issue" "close" issue-url
+       "--reason"  "completed"
+       "--comment" note))
+
+   :fetch-base!
+   (fn [base] (shell/ok! (shell/shell "git" "fetch" "-q" "origin" base)))
+
+   :worktree-branches
+   (fn []
+     (let [listing (shell/git-out "worktree" "list" "--porcelain")]
+       (for [line  (str/split-lines listing)
+             :when (str/starts-with? line "branch refs/heads/")]
+         (str/replace-first line "branch refs/heads/" ""))))
+
+   :detach-at-base!
+   (fn [base] (shell/ok! (shell/shell "git" "switch" "-q" "--detach" (str "origin/" base))))
+
+   :switch-to!
+   (fn [branch] (shell/ok! (shell/shell "git" "switch" "-q" branch)))
+
+   :pull-ff-only!
+   (fn [] (shell/ok! (shell/shell "git" "pull" "-q" "--ff-only")))
+
+   :delete-local-branch!
+   (fn [branch] (shell/ok! (shell/shell "git" "branch" "-D" branch)))
+
+   :remote-branch?
+   (fn [branch]
+     (zero? (:exit (shell/run "git" "ls-remote" "--exit-code" "--heads" "origin" branch))))
+
+   :delete-remote-branch!
+   (fn [branch] (shell/ok! (shell/shell "git" "push" "origin" "--delete" branch)))})
 
 
 (def release-operations
