@@ -2,7 +2,7 @@
   "kit checks: waits until the pull request's required checks have finished and says how they ended (#109)."
   (:require
    [clojure.string :as str]
-   [dev-kit.flow.finish :as finish]
+   [dev-kit.flow.github :as github]
    [dev-kit.flow.shell :as shell]
    [dev-kit.flow.wait :as wait]))
 
@@ -47,7 +47,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
         poll      (wait/pause)
         stop      (fn [code & msg] (binding [*out* *err*] (println (str/join " " msg))) (System/exit code))
         no-result #(stop 2 (str %))
-        branch    (finish/git-out "rev-parse" "--abbrev-ref" "HEAD")
+        branch    (shell/git-out "rev-parse" "--abbrev-ref" "HEAD")
         _ (when (and (:pr o) (not (re-matches #"\d+" (:pr o))))
             (shell/die (str "--pr is '" (:pr o) "': give the pull request's number")))
         pr        (or (:pr o)
@@ -67,7 +67,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
                                       repo
                                       ". Fix: open it with kit finish, or name it: kit checks --pr <number>")))
         {:keys [head base]} (wait/read-pr pr repo no-result)
-        ready?    (finish/ready-workflow? repo base)
+        ready?    (github/ready-workflow? repo base)
         sha7      #(subs (str %) 0 (min 7 (count (str %))))
         ;; What the base requires, once: a check that is not registered yet is told from one the base never asks for.
         wanted    (->> (wait/gh-json no-result "api" (str "repos/" repo "/rules/branches/" base))
@@ -99,7 +99,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
                         (wait/gh-json no-result
                                       "run"        "list"
                                       "-R"         repo
-                                      "--workflow" (last (str/split finish/ready-workflow-path #"/"))
+                                      "--workflow" (last (str/split github/ready-workflow-path #"/"))
                                       "--event"    "workflow_run"
                                       "--limit"    "20"
                                       "--json"     "databaseId,status")

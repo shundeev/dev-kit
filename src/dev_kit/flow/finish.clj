@@ -4,6 +4,7 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [dev-kit.flow.board :as board]
+   [dev-kit.flow.github :as github]
    [dev-kit.flow.shell :as shell]))
 
 
@@ -65,37 +66,6 @@ Options:
    "-h" [:help :flag]})
 
 
-(defn git-out [& args] (some-> (apply shell/run "git" args) :out str/trim))
-
-
-(def ready-workflow-path ".github/workflows/ready-when-green.yml")
-
-
-(defn ready-workflow?
-  "Whether `base` of `repo` holds the ready workflow (ADR-0007). Not-found is a plain no; any other failure ends the
-  run: guessing would open a ready PR in a repository that has the workflow, or a draft that nothing marks ready."
-  [repo base]
-  (let [{:keys [exit out err]}
-        (shell/run "gh" "api" (str "repos/" repo "/contents/" ready-workflow-path "?ref=" base) "--silent")]
-    (cond (zero? exit) true
-          (re-find #"404|Not Found" (str out err)) false
-          :else
-          (shell/die
-           (str
-            "Could not look for "
-            ready-workflow-path
-            " on '"
-            base
-            "' of "
-            repo
-            " ("
-            (let [m (str/trim (str out err))]
-              (if (str/blank? m)
-                (str "gh exit code " exit)
-                m))
-            "). Nothing was committed or pushed: run it again when GitHub answers, or check 'gh auth status'.")))))
-
-
 (defn- ensure-hold-label!
   "The label hold exists in the repository; made when it does not."
   [repo]
@@ -133,12 +103,13 @@ Options:
         ;; Without --type the PR follows the branch: its first `type(GH-n): …` commit that is not docs, else the first, else feat.
         ctype          (or (:type o)
                            (let [types (keep #(second (re-find #"^([a-z]+)\(GH-[0-9]+\): " %))
-                                             (str/split-lines (git-out "log" "--reverse"
-                                                                       "--format=%s" (str "origin/" base "..HEAD"))))]
+                                             (str/split-lines (shell/git-out "log" "--reverse"
+                                                                             "--format=%s"
+                                                                             (str "origin/" base "..HEAD"))))]
                              (or (first (remove #{"docs"} types)) (first types)))
                            "feat")
         repo           (shell/resolve-repo (:repo o))
-        branch         (git-out "rev-parse" "--abbrev-ref" "HEAD")
+        branch         (shell/git-out "rev-parse" "--abbrev-ref" "HEAD")
         _ (when (= branch "HEAD")
             (shell/die "Detached HEAD is not supported"))
         _ (when (= branch base)
@@ -192,7 +163,7 @@ Options:
             (shell/die (str "The pull request would fail CI's shape check; nothing was committed or pushed:\n"
                             (str/trimr (str (:out shape) (:err shape))))))
         ;; ADR-0007: with the ready workflow on main the PR opens as a draft and the workflow marks it ready.
-        base-draft?    (ready-workflow? repo base)
+        base-draft?    (github/ready-workflow? repo base)
         ;; An open PR is judged by its own state, not by the base's: a ready PR gets what a ready PR gets, and a
         ;; draft is left to the workflow.
         draft?         (if pr-url
@@ -214,7 +185,7 @@ Options:
             (shell/die
              (str
               "--hold works through "
-              ready-workflow-path
+              github/ready-workflow-path
               ", which '"
               base
               "' of "

@@ -23,6 +23,12 @@
   (apply p/sh {:continue true} args))
 
 
+(defn git-out
+  "git's trimmed stdout; a failure gives what git printed on stdout, often nothing."
+  [& args]
+  (some-> (apply run "git" args) :out str/trim))
+
+
 (defn shell
   "A command whose output goes to ours, as in a terminal; its exit code."
   [& args]
@@ -35,6 +41,13 @@
   (let [{:keys [exit out]} (apply run "gh" args)]
     (when (zero? exit)
       (str/trim out))))
+
+
+(defn exit-with!
+  "Ends the run as a stopped recipe says: its text on stderr, its exit code."
+  [{:keys [text exit]}]
+  (binding [*out* *err*] (println text))
+  (System/exit exit))
 
 
 (defn ok!

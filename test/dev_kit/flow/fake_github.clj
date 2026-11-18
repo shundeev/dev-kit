@@ -1,9 +1,16 @@
 (ns dev-kit.flow.fake-github
-  "An in-memory GitHub for the stories (#139): the same named operations as `dev-kit.flow.github/operations`, the
-  same arguments and the same answers, over an atom that holds what exists: issues, the board's cards with their
-  fields, labels, milestones and linked branches. A story reads the world afterwards instead of listing calls."
+  "An in-memory GitHub for the stories (#139): the same named operations as `dev-kit.flow.github/operations`, kept
+  in the same maps by command, with the same arguments and the same answers, over an atom that holds what exists:
+  issues, the board's cards with their fields, labels, milestones, linked branches, pull requests with their checks,
+  and what happens while a command waits. A story reads the world afterwards instead of listing calls."
   (:require
-   [clojure.string :as str]))
+   [clojure.string :as str]
+   [dev-kit.flow.wait :as wait]))
+
+
+(def ^:private known-options
+  #{:labels :uncreatable :milestones :issues :drafts :refuse-field :refuse-board :retro-missing :current-branch :graphql
+    :refuse-size-label :prs :ready-workflow :script})
 
 
 (defn new-world
@@ -18,25 +25,40 @@
   :retro-missing     the answer of the retrospective check, {:exit :out :err}
   :current-branch    the branch checked out now
   :graphql           the GraphQL points left this hour (nil: GitHub does not say)
-  :refuse-size-label true when the size:* label cannot be set"
+  :refuse-size-label true when the size:* label cannot be set
+  :prs               pull requests that exist, numbered after the issues in this order: {:branch :state (\"OPEN\")
+                     :draft :labels :head :base (\"main\") :decision :merge-state :auto-merge :owners :checks
+                     :unreadable :checks-unreadable}; :checks are the required ones, {:name :bucket :link};
+                     :unreadable and :checks-unreadable are gh's output when reading it fails
+  :ready-workflow    true when the base branch holds the ready workflow
+  :script            what happens on GitHub while a command waits: one function of the world per pause, in order;
+                     a pause the script does not plan is an error
+  Any other option goes into the world as it is: a command's operations name the ones they read."
   [{:keys [labels uncreatable milestones issues drafts refuse-field refuse-board retro-missing current-branch graphql
-           refuse-size-label]}]
-  (let [world (atom {:issues            {}
-                     :cards             []
-                     :labels            (set labels)
-                     :created-labels    []
-                     :uncreatable       (set uncreatable)
-                     :milestones        (vec milestones)
-                     :linked            {}
-                     :current-branch    (or current-branch "main")
-                     :next-number       1
-                     :next-card         1
-                     :refuse-field      refuse-field
-                     :refuse-board      refuse-board
-                     :retro-missing     (or retro-missing {:exit 0 :out "" :err ""})
-                     :graphql           graphql
-                     :refuse-size-label refuse-size-label
-                     :label-reads       0})]
+           refuse-size-label prs ready-workflow script]
+    :as   options}]
+  (let [world (atom
+               {:issues            {}
+                :cards             []
+                :labels            (set labels)
+                :created-labels    []
+                :uncreatable       (set uncreatable)
+                :milestones        (vec milestones)
+                :linked            {}
+                :current-branch    (or current-branch "main")
+                :next-number       1
+                :next-card         1
+                :refuse-field      refuse-field
+                :refuse-board      refuse-board
+                :retro-missing     (or retro-missing {:exit 0 :out "" :err ""})
+                :graphql           graphql
+                :refuse-size-label refuse-size-label
+                :label-reads       0
+                :prs               {}
+                :ready-workflow    (boolean ready-workflow)
+                :script            (vec script)
+                :slept             []})]
+    (swap! world merge (apply dissoc options known-options))
     (doseq [issue issues]
       (swap! world (fn [w]
                      (let [n (:next-number w)]
@@ -57,6 +79,15 @@
                      (-> w
                          (update :cards conj {:id (str "PVTI_" (:next-card w)) :draft title :fields {}})
                          (update :next-card inc)))))
+    (doseq [pr prs]
+      (swap! world (fn [w]
+                     (let [n (:next-number w)]
+                       (-> w
+                           (assoc-in [:prs n]
+                            (merge {:state "OPEN" :base "main" :labels [] :owners [] :checks []}
+                                   pr
+                                   {:number n :url (str "https://github.com/o/r/pull/" n)}))
+                           (update :next-number inc))))))
     world))
 
 
@@ -102,6 +133,52 @@
   "The labels created in the repository since the start, in order."
   [world]
   (:created-labels @world))
+
+
+(defn prs
+  "The pull requests, by number."
+  [world]
+  (->> (:prs @world)
+       (sort-by key)
+       (mapv val)))
+
+
+(defn slept
+  "The pauses a command took while it waited, in seconds, in order."
+  [world]
+  (:slept @world))
+
+
+;; ------------------------------------------------------------------ what happens while a command waits
+
+
+(defn clock
+  "The clock of a story's ctx (:sleep): each pause runs the next event of the world's script."
+  [world]
+  (fn [seconds]
+    (swap! world (fn [w]
+                   (let [[event & later] (:script w)]
+                     (when-not event
+                       (throw (ex-info (str "the story's script ran out: the command paused "
+                                            (inc (count (:slept w)))
+                                            " times, the script plans "
+                                            (count (:slept w)))
+                                       {:slept (:slept w)})))
+                     (-> (event w)
+                         (assoc :script (vec later))
+                         (update :slept conj seconds)))))
+    nil))
+
+
+(defn pr-becomes
+  "An event of the script: the pull request numbered n takes these fields, e.g. {:state \"MERGED\"}."
+  [n fields]
+  (fn [w] (update-in w [:prs n] merge fields)))
+
+
+(def nothing-happens
+  "An event of the script: a pause after which GitHub is as before."
+  identity)
 
 
 ;; ------------------------------------------------------------------ the operations
@@ -182,8 +259,78 @@
         (cond-> ms (assoc-in [:issues n :milestone] ms)))))
 
 
-(defn- operations-over
-  "Each operation of the real GitHub, as a function of the world's atom and the same arguments."
+(defn- pr-of
+  "The pull request a gh argument names: its number or its URL."
+  [w pr]
+  (if (re-matches #"\d+" (str pr))
+    (get-in w [:prs (parse-long (str pr))])
+    (some #(when (= pr (:url %)) %) (vals (:prs w)))))
+
+
+(defn- shared-operations
+  [world]
+  {:head-branch
+   (fn [] (:current-branch @world))
+
+   :open-pr-url
+   (fn [_repo branch state]
+     (some #(when (and (= branch (:branch %)) (= (str/upper-case state) (:state %))) (:url %)) (prs world)))
+
+   :read-pr
+   (fn [pr _repo fail]
+     (let [found (pr-of @world pr)]
+       (cond (nil? found)
+             (fail (wait/gh-failure-text
+                    "pr view"
+                    (str "GraphQL: Could not resolve to a PullRequest with the number of " pr ".")))
+             (:unreadable found) (fail (wait/gh-failure-text "pr view" (:unreadable found)))
+             :else
+             {:state       (:state found)
+              :decision    (:decision found)
+              :merge-state (:merge-state found)
+              :head        (:head found)
+              :base        (:base found)
+              :draft       (boolean (:draft found))
+              :hold        (boolean (some #{"hold"} (:labels found)))
+              :owners      (:owners found)
+              :auto-merge  (boolean (:auto-merge found))})))
+
+   :required-checks
+   (fn [pr _repo fail]
+     (let [found (pr-of @world pr)]
+       (if-let [output (:checks-unreadable found)]
+         (fail (wait/checks-failure-text pr output))
+         (vec (:checks found)))))
+
+   :ready-workflow?
+   (fn [_repo _base] (:ready-workflow @world))})
+
+
+(defn- finish-operations
+  "kit finish's operations."
+  [_world]
+  {})
+
+
+(defn- merge-operations
+  "kit merge's operations."
+  [_world]
+  {})
+
+
+(defn- release-operations
+  "kit release's operations."
+  [_world]
+  {})
+
+
+(defn- checks-operations
+  "kit checks' operations."
+  [_world]
+  {})
+
+
+(defn- start-operations
   [world]
   {:open-milestones
    (fn [_repo] (:milestones @world))
@@ -311,9 +458,26 @@
    (fn [] (:current-branch @world))})
 
 
-(def operation-names
-  "The operations this GitHub answers; a story checks them against the real GitHub's."
-  (set (keys (operations-over (atom {})))))
+(defn- command-operations
+  "Each command's operations over the world, by the command, as `dev-kit.flow.github/command-operations` keeps them."
+  [world]
+  {:shared  (shared-operations world)
+   :start   (start-operations world)
+   :finish  (finish-operations world)
+   :merge   (merge-operations world)
+   :release (release-operations world)
+   :checks  (checks-operations world)})
+
+
+(defn- operations-over
+  "Each operation of the real GitHub, as a function of the world's atom and the same arguments."
+  [world]
+  (apply merge (vals (command-operations world))))
+
+
+(def command-operation-names
+  "The operations this GitHub answers, by command; a story checks them against the real GitHub's."
+  (update-vals (command-operations (atom {})) (comp set keys)))
 
 
 (defn label-reads
