@@ -444,9 +444,39 @@
 
 
 (defn- checks-operations
-  "kit checks' operations."
-  [_world]
-  {})
+  "kit checks' operations. The world's options: :required-contexts, the checks the base requires (default none);
+  :rules-unreadable, gh's output when reading the base's rules fails; :ready-runs, the ready workflow's runs
+  {:databaseId :status :log}, which an event of the script may change."
+  [world]
+  {:required-contexts
+   (fn [repo base fail]
+     (if-let [output (:rules-unreadable @world)]
+       (fail (wait/gh-failure-text (str "api repos/" repo "/rules/branches/" base) output))
+       (vec (distinct (:required-contexts @world)))))
+
+   :ready-runs
+   (fn [_repo _fail] (mapv #(select-keys % [:databaseId :status]) (:ready-runs @world)))
+
+   :run-log
+   (fn [_repo id] (some #(when (= id (:databaseId %)) (:log %)) (:ready-runs @world)))})
+
+
+(defn- review-operations
+  "kit review's operations. The world's :viewer is who runs kit (default \"the-agent\"); a pull request's
+  :committed is its head commit's date. A pull request's :reviews are {:author :state :at :body} and its :threads
+  {:resolved? :path :line :comments [{:author :body}]}, as the real read gives them; :reviews-unreadable is gh's
+  output when reading them fails."
+  [world]
+  {:read-reviews
+   (fn [pr _repo fail]
+     (let [found (pr-of @world pr)]
+       (if-let [output (:reviews-unreadable found)]
+         (fail (wait/gh-failure-text "api graphql" output))
+         {:state          (:state found)
+          :viewer         (:viewer @world "the-agent")
+          :head-committed (:committed found)
+          :reviews        (vec (:reviews found))
+          :threads        (vec (:threads found))})))})
 
 
 (defn- start-operations
@@ -585,7 +615,8 @@
    :finish  (finish-operations world)
    :merge   (merge-operations world)
    :release (release-operations world)
-   :checks  (checks-operations world)})
+   :checks  (checks-operations world)
+   :review  (review-operations world)})
 
 
 (defn- operations-over

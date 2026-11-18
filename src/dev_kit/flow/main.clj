@@ -6,6 +6,7 @@
    [dev-kit.flow.finish :as finish]
    [dev-kit.flow.merge :as merge]
    [dev-kit.flow.release :as release]
+   [dev-kit.flow.review :as review]
    [dev-kit.flow.start :as start]))
 
 
@@ -13,7 +14,7 @@
 
 
 (defn main
-  "kit start | finish | release | merge | checks | board, with the path of bin/kit for the commands that call it back."
+  "kit start | finish | release | merge | checks | review | board, with the path of bin/kit for the commands that call it back."
   [cmd args kit]
   (case cmd
     "start"   (start/start! kit args)
@@ -21,4 +22,5 @@
     "release" (release/release! kit args)
     "merge"   (merge/merge! kit args)
     "checks"  (checks/checks! kit args)
+    "review"  (review/review! kit args)
     "board"   (board/board! kit args)))

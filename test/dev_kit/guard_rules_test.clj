@@ -328,7 +328,8 @@
 
 (def waiting-in-the-foreground
   ["sleep 5" "gh pr checks 12 --watch --fail-fast" "gh run watch 99" ".shared/bin/kit merge"
-   "bb .shared/bin/kit merge" ".shared/bin/kit checks" "bb .shared/bin/kit checks --pr 5" "bb bin/kit merge"
+   "bb .shared/bin/kit merge" ".shared/bin/kit review --wait" "bb .shared/bin/kit review --pr 5 --wait"
+   ".shared/bin/kit checks" "bb .shared/bin/kit checks --pr 5" "bb bin/kit merge"
    "bash -c \"sleep 2\"" "echo $(sleep 1)" "git status && sleep 3" "sleep 2; echo done" "gh pr checks 1 --watch"
    "while true; do gh pr checks 1 --watch; done" "kit merge" "while true; do kit checks; sleep 5; done"
    "for i in 1 2; do echo $i; done; sleep 3"])

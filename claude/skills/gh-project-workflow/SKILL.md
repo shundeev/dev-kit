@@ -139,6 +139,22 @@ registered yet) and has finished.
 `kit merge` ends the same way on its own reasons: PR closed, a required check failed, a
 conflict (`DIRTY`), the approval gone; it names which and says what to do.
 
+## Waiting for the owner's review
+
+```bash
+.shared/bin/kit review [--pr <number>] [--wait]
+```
+
+Prints the owner's latest review of the PR (state, time, text) and every unresolved review thread
+(`path:line`, then each comment as `author: text`). The owner is `GHWF_HUMAN`; without it the
+command refuses and says to run `kit init` or `kit identity`. With `--wait`, run it as a background
+command like `kit checks` (the guard refuses it otherwise): it ends once the owner has a review
+submitted after the agent last gave the PR back, the later of the head commit's date and the
+agent's own latest review (its thread replies). A review of the owner's that is already after that
+is reported at once. It looks every `GHWF_MERGE_POLL` seconds; any state counts. Reviews by anyone
+else never end it. Exit 0 the review was printed,
+1 no `GHWF_HUMAN`, or the PR merged or closed while waiting, 2 gh could not be read.
+
 ## Dependencies between issues
 
 Native relation, not prose: `gh issue edit <child> --add-blocked-by <blocker>`.

@@ -224,7 +224,7 @@
 
 
 (defn flow!
-  "kit start, finish, merge, checks and board set: the delivery flow's GitHub steps, in bin/flow.clj (#95)."
+  "kit start, finish, merge, checks, review and board set: the delivery flow's GitHub steps, in bin/flow.clj (#95)."
   [cmd args]
   (when-let [exit (and (= "merge" cmd) (newer-merge! args))] (System/exit exit))
   (load-file (str (fs/path base/kit-dir "bin" "flow.clj")))
@@ -272,7 +272,7 @@
                       (after-git!)
                       (sync!))
         "hook"      (hook! args)
-        ("start" "finish" "release" "merge" "checks" "board") (flow! cmd args)
+        ("start" "finish" "release" "merge" "checks" "review" "board") (flow! cmd args)
         nil         (usage)
         (do (usage) (base/die "unknown command" cmd)))
       (catch clojure.lang.ExceptionInfo e

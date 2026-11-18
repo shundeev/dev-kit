@@ -190,6 +190,12 @@ component is an M: stop, resize it and ask for G1.
   checks pass and the branch contains the latest `main`. Then run `kit merge` for the
   closeout; it also updates a branch that fell behind, and merging `main` in keeps the approval.
   Run `kit merge` as a background command (the guard refuses it otherwise): it waits until the PR is merged or merging became impossible, names which (`gh-project-workflow`), and the agent is woken when it exits.
+- Waiting for the owner's review runs `kit review --wait` as a background command and reads its
+  output: it ends when the owner (and nobody else: not the agent's own replies) has a review submitted
+  after the agent last gave the PR back (a push or a reply), of any state, and prints that review and the
+  unresolved threads. Without
+  `--wait` it prints the same at once. It ends with exit 1 if the PR merged or closed meanwhile.
+  Never write an ad-hoc wait script for it.
 - The agent never approves a pull request.
 - An owner step still open after the merge: reopen the issue and keep its card **In progress**.
   A branch from `gh issue develop` closes its issue on merge, whatever the PR body says.
