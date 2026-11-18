@@ -32,13 +32,15 @@
   "gh's trimmed stdout; nil when it fails."
   [& args]
   (let [{:keys [exit out]} (apply run "gh" args)]
-    (when (zero? exit) (str/trim out))))
+    (when (zero? exit)
+      (str/trim out))))
 
 
 (defn ok!
   "Ends the run with a failed command's own exit code, as the scripts did under `set -e`."
   [exit]
-  (when-not (zero? exit) (System/exit exit)))
+  (when-not (zero? exit)
+    (System/exit exit)))
 
 
 (defn gh!

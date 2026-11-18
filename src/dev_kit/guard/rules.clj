@@ -23,7 +23,8 @@
   "A command's stdout in directory dir (nil: this one), or nil when it fails."
   [dir & args]
   (let [{:keys [exit out]} (apply p/sh (cond-> {:continue true} dir (assoc :dir dir)) args)]
-    (when (zero? exit) (str/trim out))))
+    (when (zero? exit)
+      (str/trim out))))
 
 
 (defn- sh-out [& args] (apply sh-in nil args))
@@ -122,7 +123,8 @@
             :else (recur more (update acc :endpoint #(or % w)))))
         method (some-> method str/upper-case)]
     (cond
-      method (when (not= method "GET") (str method " " endpoint))
+      method (when (not= method "GET")
+               (str method " " endpoint))
       (= endpoint "graphql") (cond (some #(str/includes? % "mutation") ts)   "a GraphQL mutation"
                                    (some #(str/starts-with? % "query=@") ts) "a GraphQL query read from a file")
       fields (str "POST " endpoint ": fields make gh send POST"))))
@@ -281,7 +283,8 @@ If the owner asked for the raw command, re-run it prefixed with DELIVERY_GUARD=o
                     ;; The branch is --head's, else that of the directory the command runs in (ADR-0006, #126): -R names
                     ;; the repository and changes nothing here.
                     (let [named  (head-branch ts)
-                          branch (when-not (or named (map? wd)) (sh-in wd "git" "symbolic-ref" "--short" "-q" "HEAD"))]
+                          branch (when-not (or named (map? wd))
+                                   (sh-in wd "git" "symbolic-ref" "--short" "-q" "HEAD"))]
                       (when (and (not named) (map? wd))
                         (decide
                          "deny"
@@ -320,7 +323,8 @@ From a <number>-<slug> branch, commit, push, open the PR and set Status in one s
 If the owner asked for the raw command, re-run it prefixed with DELIVERY_GUARD=off."))))
                     nil)))
               (recur more
-                     (let [d (when (and (= head "cd") sub) (resolve-dir vars sub))]
+                     (let [d (when (and (= head "cd") sub)
+                               (resolve-dir vars sub))]
                        (if (or (map? d) (some-> d (str/starts-with? "/")))
                          d
                          wd))
@@ -334,11 +338,13 @@ If the owner asked for the raw command, re-run it prefixed with DELIVERY_GUARD=o
 ;; it from a Bash call, so there is no Monitor clause here; the waiting rule below tells them apart by the command.
 (defn -main
   [input]
-  (let [command     (when (map? input) (get-in input ["tool_input" "command"]))
+  (let [command     (when (map? input)
+                      (get-in input ["tool_input" "command"]))
         background? (when (map? input)
                       (true? (get-in input ["tool_input" "run_in_background"])))]
     (try
-      (when (instance? Exception input) (throw input)) ; the hook's input was no JSON
+      (when (instance? Exception input)
+        (throw input)) ; the hook's input was no JSON
       (when (and (string? command) (not (str/blank? command)))
         (judge (loop-marked (statements/expand (tokenizer/tokenize command))) background?))
       (catch Exception e

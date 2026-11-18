@@ -88,7 +88,9 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 (defn merge!
   [kit args]
   (let [o (shell/parse-opts merge-spec args)
-        _ (when (:help o) (println merge-usage) (System/exit 0))
+        _ (when (:help o)
+            (println merge-usage)
+            (System/exit 0))
         owner (or (:owner o) (shell/env "GHWF_OWNER" nil))
         project-number (or (:project-number o) (shell/env "GHWF_PROJECT_NUMBER" nil))
         base (or (:base o) (shell/env "GHWF_DEFAULT_BASE" "main"))
@@ -96,7 +98,8 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
         done-status (or (:done-status o) (shell/env "GHWF_DONE_STATUS" "Done"))
         repo (shell/resolve-repo (:repo o))
         branch (finish/git-out "rev-parse" "--abbrev-ref" "HEAD")
-        _ (when (#{base "HEAD"} branch) (shell/die (str "Run from the issue branch, not '" branch "'")))
+        _ (when (#{base "HEAD"} branch)
+            (shell/die (str "Run from the issue branch, not '" branch "'")))
         number (or (shell/issue-branch-number branch) (shell/die (str "Branch '" branch "' is not <number>-<slug>")))
         poll (wait/pause)
         pr-list
@@ -122,7 +125,9 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
                            p)))
                 ms   (:merge-state pr)
                 seen (str (:state pr) " " ms)]
-            (when (not= seen @shown) (println (str "GitHub reports " (:state pr) ", " ms ": " url)) (reset! shown seen))
+            (when (not= seen @shown)
+              (println (str "GitHub reports " (:state pr) ", " ms ": " url))
+              (reset! shown seen))
             (cond
               (= "MERGED" (:state pr)) pr
 
@@ -147,7 +152,8 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
               (= "DIRTY" ms) (dirty-die url base)
 
               :else
-              (let [failed (when (= "BLOCKED" ms) (wait/failed-checks (wait/required-checks url repo shell/die)))]
+              (let [failed (when (= "BLOCKED" ms)
+                             (wait/failed-checks (wait/required-checks url repo shell/die)))]
                 (when (seq failed)
                   (shell/die (str
                               (wait/failed-text failed (str "on " url))
@@ -228,6 +234,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
       (shell/ok! (shell/shell "git" "push" "origin" "--delete" branch)))
     (println (str "Merged: " pr-url))
     (close-linked-issues! pr-url)
-    (when board-error (shell/die board-error))
+    (when board-error
+      (shell/die board-error))
     (println (str "Status: " done-status))
     (println (str "Next: post the retrospective: kit retro " number))))

@@ -47,7 +47,8 @@
                   "-F" (str "owner=" owner)
                   "-F" (str "number=" number)
                   "-f" (str "status=" status-field)
-                  (when after ["-F" (str "after=" after)]))
+                  (when after
+                    ["-F" (str "after=" after)]))
           conn  (get-in (json/parse-string out true) [:data :owner :projectV2 :items])
           items (into items
                       (for [{:keys [id isArchived status content]} (:nodes conn)
@@ -147,7 +148,8 @@
                  "--owner"  owner
                  "--title"  title
                  "--format" "json"
-                 (when body ["--body" body]))]
+                 (when body
+                   ["--body" body]))]
        (:id (json/parse-string out true))))
 
    :item-add!

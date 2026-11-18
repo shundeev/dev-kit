@@ -112,7 +112,8 @@
                    (label (:kind r))
                    " · "
                    (one-line (:cause r))
-                   (when (:why r) (str " (rule " (:why r) ")"))))))
+                   (when (:why r)
+                     (str " (rule " (:why r) ")"))))))
          (time-lines spans)
          (when-let [recurring (seq (ordered (filter #(>= (val %) 3) fortnight)))]
            (concat ["" "Recurring in the last 14 days (3 or more, whichever task):"]

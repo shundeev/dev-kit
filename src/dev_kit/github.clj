@@ -158,7 +158,8 @@
                           "protects the default branch to main in Settings → Rules → Rulesets, or delete it, then run"
                           "kit github again"))
         main       (first mains)
-        have       (when main (read! "the main ruleset" "api" (str "repos/" repo "/rulesets/" (:id main))))
+        have       (when main
+                     (read! "the main ruleset" "api" (str "repos/" repo "/rulesets/" (:id main))))
         ;; Without --check an existing ruleset keeps its check: dev-kit's own is selftest, a project's is checks.
         check-name (or check-name
                        (some #(when (= "required_status_checks" (:type %))
@@ -174,7 +175,8 @@
                                                    "api"
                                                    (str "orgs/" (str/replace t "/" "/teams/")))))
                                      (:id me))
-        diffs      (when have (seq (ruleset-differences want have)))
+        diffs      (when have
+                     (seq (ruleset-differences want have)))
         perm       #(try (str/trim (base/gh! "api"  (str "repos/" repo "/collaborators/" % "/permission")
                                              "--jq" ".permission"))
                          (catch clojure.lang.ExceptionInfo _ "none"))

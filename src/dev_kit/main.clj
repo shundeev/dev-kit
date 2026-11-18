@@ -67,7 +67,8 @@
           {:keys [exit out err]} (try (p/sh {:in input :env env :continue true} "bash" entry)
                                       (finally (fs/delete-tree state)))
           out   (str/trim (str out))
-          d     (when (str/starts-with? out "{") (:hookSpecificOutput (json/parse-string out true)))
+          d     (when (str/starts-with? out "{")
+                  (:hookSpecificOutput (json/parse-string out true)))
           why   (some-> (:permissionDecisionReason d) (str/replace #"\s+" " "))
           [code verdict] (cond (= "ask" (:permissionDecision d)) [3 (str "asks: " why)]
                                (= "deny" (:permissionDecision d)) [2 (str "refused: " why)]

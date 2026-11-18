@@ -45,7 +45,8 @@
   [verdicts]
   (doseq [[level msg] verdicts]
     (println (str (if (= level :ok) "  ok    " "  FAIL  ") msg)))
-  (when (some #(not= :ok (first %)) verdicts) (System/exit 1)))
+  (when (some #(not= :ok (first %)) verdicts)
+    (System/exit 1)))
 
 
 (defn section-text
@@ -310,13 +311,15 @@
         {:strs [title body]} (read! #(json/parse-string (base/gh! "api"  (str "repos/" repo "/pulls/" pr)
                                                                   "--jq" "{title, body}")))
         files  (read! #(doall (pr-files repo pr)))
-        issue  (when n (try (fetch-issue repo n) (catch Exception e {"error" (ex-message e)})))]
+        issue  (when n
+                 (try (fetch-issue repo n) (catch Exception e {"error" (ex-message e)})))]
     (report! (concat (for [p (concat (shape-problems branch title (str body) pr)
                                      (size-problems issue (str body))
                                      (adr-problems files)
                                      (rule-problems files (str body)))]
                        [:fail p])
-                     (when n [(issue-verdict repo n issue files cfg)])))))
+                     (when n
+                       [(issue-verdict repo n issue files cfg)])))))
 
 
 (defn gate-shape!
@@ -345,7 +348,8 @@
   [file]
   (let [full         (fs/absolutize file)
         existing     (first (filter fs/exists? (take-while some? (iterate fs/parent full))))
-        real         (when existing (fs/real-path existing))
+        real         (when existing
+                       (fs/real-path existing))
         dir          (when real
                        (if (fs/directory? real)
                          real
@@ -392,7 +396,8 @@
                                                 :permissionDecisionReason (str "Refused: " reason)}})))]
     (when (and n (on-dev-kit? top) (not (some-> path (str/starts-with? "adr/"))))
       (let [cfg   (try (repo-config top) (catch Exception _ nil))
-            repo  (when cfg (or (base/origin-repo top) (:repo cfg)))
+            repo  (when cfg
+                    (or (base/origin-repo top) (:repo cfg)))
             cache (str (fs/absolutize (fs/path dir (base/sh-in dir "git" "rev-parse" "--git-path" (str "kit/g1-" n)))))
             now   (quot (System/currentTimeMillis) 1000)
             [t level reason] (some-> (base/slurp-if cache) (str/split #" " 3))]
@@ -421,7 +426,8 @@
                           (str "could not check the design approval of #" n
                                " (" (ex-message e)
                                "); retry, or check by hand: kit gate --g1 " n)])))]
-            (when (not= level :ok) (deny! reason))))))))
+            (when (not= level :ok)
+              (deny! reason))))))))
 
 
 (defn gate!

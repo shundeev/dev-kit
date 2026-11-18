@@ -42,7 +42,9 @@ Options:
 (defn release!
   [_kit args]
   (let [o      (shell/parse-opts release-spec args)
-        _ (when (:help o) (println release-usage) (System/exit 0))
+        _ (when (:help o)
+            (println release-usage)
+            (System/exit 0))
         repo   (shell/resolve-repo (:repo o))
         branch (finish/git-out "rev-parse" "--abbrev-ref" "HEAD")
         pr     (or (:pr o)
@@ -64,7 +66,8 @@ Options:
                            true)
         url    (or url pr)
         held?  (boolean (some #(= "hold" (:name %)) labels))
-        _ (when-not (= state "OPEN") (shell/die (str url " is " state ", not open: nothing to release.")))
+        _ (when-not (= state "OPEN")
+            (shell/die (str url " is " state ", not open: nothing to release.")))
         bad    (checks-not-green repo pr)]
     (when (seq bad)
       (shell/die (str "A required check of " url

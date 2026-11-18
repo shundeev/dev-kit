@@ -31,7 +31,8 @@
   "Runs a command in dir. Returns trimmed stdout, or nil when it fails."
   [dir & args]
   (let [{:keys [exit out]} (apply p/sh {:dir (str dir) :continue true} args)]
-    (when (zero? exit) (str/trim out))))
+    (when (zero? exit)
+      (str/trim out))))
 
 
 (defn sh
@@ -43,7 +44,10 @@
 (defn rel [& parts] (str (apply fs/path root parts)))
 
 
-(defn slurp-if [path] (when (fs/regular-file? path) (slurp path)))
+(defn slurp-if
+  [path]
+  (when (fs/regular-file? path)
+    (slurp path)))
 
 
 (defn origin-repo

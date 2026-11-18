@@ -104,6 +104,9 @@
  ;; call): each branch on a line of its own. Plain values — a string, a number, a keyword, a symbol, nil, a
  ;; boolean, `@x`, an empty collection — stay on one line while they fit. `if-let` and `if-some` take
  ;; :binding, which puts each branch on a line of its own anyway. docs/process/code-style.md, "If Layout".
+ ;; `when` and `when-not` alike: a body that is no plain value goes under the test, however short —
+ ;; `(when after ["-F" …])` too; `(when file path)` and `(when (> n 5) ", ...")` stay on one line (the owner's
+ ;; reviews of dev-kit#146).
  ;;
  ;; A command line — a call of gh!, gh-out, run, sh, sh-in, shell, process or board-gh! (any alias, through
  ;; `apply` too) whose first argument is a string: the command words stay on the call's line, then each flag
@@ -142,7 +145,7 @@
                (cond
                  as-written? nil
 
-                 (and (contains? #{'if 'if-not} head)
+                 (and (contains? #{'if 'if-not 'when 'when-not} head)
                       (not (every? (fn [branch]
                                      (or (not (coll? branch))
                                          (empty? branch)

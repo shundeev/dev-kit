@@ -111,8 +111,10 @@ Options:
   work behind. It also names the repository the run works in (:repo), between the owner and the project, as the
   refusals have always come in that order."
   [{:keys [resolve-repo]} {:keys [title owner project-number mode skip-branch no-checkout priority] :as input}]
-  (when (str/blank? title) (steps/fail! :start/no-title "--title is required"))
-  (when (str/blank? owner) (steps/fail! :start/no-owner "--owner or GHWF_OWNER is required"))
+  (when (str/blank? title)
+    (steps/fail! :start/no-title "--title is required"))
+  (when (str/blank? owner)
+    (steps/fail! :start/no-owner "--owner or GHWF_OWNER is required"))
   (let [repo (resolve-repo (:repo input))]
     (when (str/blank? project-number)
       (steps/fail! :start/no-project "--project-number or GHWF_PROJECT_NUMBER is required"))
@@ -223,9 +225,11 @@ Options:
   "A draft card made into an issue of the repository; the card keeps its id."
   [github repo item-id]
   (let [repo-id (github :repo-id repo)]
-    (when (str/blank? repo-id) (steps/fail! :start/no-repo-id "Failed to resolve repository id"))
+    (when (str/blank? repo-id)
+      (steps/fail! :start/no-repo-id "Failed to resolve repository id"))
     (let [{:keys [number url]} (github :convert-draft! item-id repo-id)]
-      (when-not (and number url) (steps/fail! :start/draft-not-converted "Draft item conversion to issue failed"))
+      (when-not (and number url)
+        (steps/fail! :start/draft-not-converted "Draft item conversion to issue failed"))
       {:number (str number) :url url :item-id item-id})))
 
 
@@ -235,7 +239,8 @@ Options:
   (when-let [{:keys [id content]}
              (some #(when (and (= title (:title %)) (open-work? % repo done-status)) %)
                    (github :project-items owner project-number status-field))]
-    (when-not id (steps/fail! :start/card-without-id "Existing project item has no id"))
+    (when-not id
+      (steps/fail! :start/card-without-id "Existing project item has no id"))
     (case (:type content)
       "Issue"      (do (when-not (and (:number content) (:url content))
                          (steps/fail! :start/card-without-issue "Existing issue item is missing issue data"))
@@ -248,7 +253,8 @@ Options:
   "An open issue with this title that is not on the board yet."
   [github {:keys [repo title]}]
   (when-let [issue (some #(when (= title (:title %)) %) (github :open-issues-titled repo title))]
-    (when (str/blank? (:url issue)) (steps/fail! :start/issue-without-data "Existing issue is missing issue data"))
+    (when (str/blank? (:url issue))
+      (steps/fail! :start/issue-without-data "Existing issue is missing issue data"))
     {:number (str (:number issue)) :url (:url issue)}))
 
 
@@ -266,13 +272,15 @@ Options:
                         ["--body" (or body "")])
                       args
                       (mapcat (fn [a] ["--assignee" a]) (csv assignees)))]
-      (when (str/blank? url) (steps/fail! :start/issue-not-filed "Issue creation failed"))
+      (when (str/blank? url)
+        (steps/fail! :start/issue-not-filed "Issue creation failed"))
       {:number (last (str/split url #"/")) :url url :filed? true :known-labels known-labels})
     (let [body (if body-file
                  (shell/file-text body-file)
                  (not-empty body))
           id   (not-empty (github :create-draft! project-number owner title body))]
-      (when-not id (steps/fail! :start/draft-not-created "Draft item creation failed"))
+      (when-not id
+        (steps/fail! :start/draft-not-created "Draft item creation failed"))
       (convert-draft github repo id))))
 
 
@@ -311,8 +319,10 @@ Options:
   (let [{:keys [known-labels args]} (label-args github repo labels known-labels "--add-label")
         edit (concat args
                      (mapcat (fn [a] ["--add-assignee" a]) (csv assignees))
-                     (when milestone ["--milestone" milestone]))]
-    (when (seq edit) (github :edit-issue! repo number edit))
+                     (when milestone
+                       ["--milestone" milestone]))]
+    (when (seq edit)
+      (github :edit-issue! repo number edit))
     {:known-labels known-labels}))
 
 
@@ -352,9 +362,12 @@ Options:
           out   (github :develop!
                         repo
                         number
-                        (concat (when-not no-checkout ["--checkout"])
-                                (when-not (str/blank? base) ["--base" base])
-                                (when named ["--name" named])))]
+                        (concat (when-not no-checkout
+                                  ["--checkout"])
+                                (when-not (str/blank? base)
+                                  ["--base" base])
+                                (when named
+                                  ["--name" named])))]
       {:branch (if no-checkout
                  (second (re-find #"/tree/(.*)$" (or out "")))
                  (github :current-branch))})))
@@ -404,8 +417,11 @@ Options:
   reason, exit 1."
   [kit args]
   (let [input (read-input args shell/env)]
-    (when (:help input) (println start-usage) (System/exit 0))
+    (when (:help input)
+      (println start-usage)
+      (System/exit 0))
     (let [ctx    {:github github/real :warn shell/warn :kit kit :resolve-repo shell/resolve-repo}
           result (start ctx input)]
-      (when (= :fail (::steps/status result)) (shell/die (:message (::steps/problem result))))
+      (when (= :fail (::steps/status result))
+        (shell/die (:message (::steps/problem result))))
       (print-result github/real result))))

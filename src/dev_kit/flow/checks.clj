@@ -40,7 +40,9 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 (defn checks!
   [_kit args]
   (let [o         (shell/parse-opts checks-spec args)
-        _ (when (:help o) (println checks-usage) (System/exit 0))
+        _ (when (:help o)
+            (println checks-usage)
+            (System/exit 0))
         repo      (shell/resolve-repo (:repo o))
         poll      (wait/pause)
         stop      (fn [code & msg] (binding [*out* *err*] (println (str/join " " msg))) (System/exit code))
@@ -157,7 +159,8 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
                           (wait/failed-text failed (str "on " (sha7 head)))
                           "\nFix: open the link, fix the cause, push; then run kit checks again for the new commit."))
 
-              status (do (when (not= status shown) (println status))
+              status (do (when (not= status shown)
+                           (println status))
                          (Thread/sleep (* 1000 poll))
                          (recur status (into ruled (map :databaseId runs))))
 

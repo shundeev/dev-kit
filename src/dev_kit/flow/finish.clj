@@ -122,7 +122,9 @@ Options:
 (defn finish!
   [kit args]
   (let [o              (shell/parse-opts finish-spec args)
-        _ (when (:help o) (println finish-usage) (System/exit 0))
+        _ (when (:help o)
+            (println finish-usage)
+            (System/exit 0))
         owner          (or (:owner o) (shell/env "GHWF_OWNER" nil))
         project-number (or (:project-number o) (shell/env "GHWF_PROJECT_NUMBER" nil))
         base           (or (:base o) (shell/env "GHWF_DEFAULT_BASE" "main"))
@@ -137,8 +139,10 @@ Options:
                            "feat")
         repo           (shell/resolve-repo (:repo o))
         branch         (git-out "rev-parse" "--abbrev-ref" "HEAD")
-        _ (when (= branch "HEAD") (shell/die "Detached HEAD is not supported"))
-        _ (when (= branch base) (shell/die (str "On the base branch '" base "': run from the issue branch")))
+        _ (when (= branch "HEAD")
+            (shell/die "Detached HEAD is not supported"))
+        _ (when (= branch base)
+            (shell/die (str "On the base branch '" base "': run from the issue branch")))
         ;; The issue is the branch's number: CI's pull request gate accepts no other (#21).
         number         (or
                         (shell/issue-branch-number branch)
@@ -160,7 +164,8 @@ Options:
                                     "--state" "open"
                                     "--json"  "url"
                                     "--jq"    ".[0].url // empty"))
-        _ (when-not (or pr-url (:body-file o)) (shell/die "--pr-body-file is required to open the pull request"))
+        _ (when-not (or pr-url (:body-file o))
+            (shell/die "--pr-body-file is required to open the pull request"))
         subject        (cond
                          (:summary o)      (str ctype "(GH-" number "): " (:summary o))
                          (:message-file o) (first (str/split-lines (slurp (:message-file o))))
@@ -181,7 +186,8 @@ Options:
                          "--shape"
                          "--branch" branch
                          "--title"  subject
-                         (when (and (not pr-url) (:body-file o)) ["--body-file" (:body-file o)]))
+                         (when (and (not pr-url) (:body-file o))
+                           ["--body-file" (:body-file o)]))
         _ (when-not (zero? (:exit shape))
             (shell/die (str "The pull request would fail CI's shape check; nothing was committed or pushed:\n"
                             (str/trimr (str (:out shape) (:err shape))))))
@@ -216,7 +222,8 @@ Options:
               " does not hold yet. Nothing was "
               "committed or pushed: run kit finish without --hold (the PR opens ready, the owners are asked at once), "
               "or after the dev-kit update PR with the file has merged.")))
-        _ (when (:hold o) (ensure-hold-label! repo))]
+        _ (when (:hold o)
+            (ensure-hold-label! repo))]
     (when-not (:no-commit o)
       (when (seq (:add o))
         (shell/ok! (apply shell/shell "git" "add" "--" (:add o))))
@@ -247,8 +254,10 @@ Options:
           human     (not-empty (System/getenv "GHWF_HUMAN"))
           ;; A draft asks nobody: the owners are requested when the ready workflow marks it ready (ADR-0007), and
           ;; asking now would send the notification this change moves to the passed checks.
-          edit      (concat (when (and reviewers (not draft?)) ["--add-reviewer" reviewers])
-                            (when human ["--add-assignee" human]))]
+          edit      (concat (when (and reviewers (not draft?))
+                              ["--add-reviewer" reviewers])
+                            (when human
+                              ["--add-assignee" human]))]
       ;; On the reviewers' desk, assigned to the person behind the agent (#52). Repeating it is harmless.
       (when-not human
         (shell/warn

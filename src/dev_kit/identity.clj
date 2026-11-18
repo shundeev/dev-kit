@@ -81,7 +81,8 @@
   [dir env]
   (let [f (str (fs/path dir local-settings))
         m (read-json-object f)]
-    (when (= ::invalid m) (config/fail! local-settings "is not a JSON object; fix or remove it, then run again"))
+    (when (= ::invalid m)
+      (config/fail! local-settings "is not a JSON object; fix or remove it, then run again"))
     (fs/create-dirs (fs/parent f))
     (spit f
           (config/json-text (update m
@@ -90,7 +91,8 @@
                                            (merge %
                                                   env
                                                   (when-let [h (human-login)]
-                                                    (when (str/blank? (get % "GHWF_HUMAN")) {"GHWF_HUMAN" h})))))))))
+                                                    (when (str/blank? (get % "GHWF_HUMAN"))
+                                                      {"GHWF_HUMAN" h})))))))))
 
 
 (defn ignored-problem
@@ -292,7 +294,8 @@
   "Managed files left over from an older dev-kit version or a module that was switched off."
   [items]
   (let [wanted (set (map :path items))
-        links  (for [f     (when (fs/directory? (base/rel ".claude/skills")) (fs/list-dir (base/rel ".claude/skills")))
+        links  (for [f     (when (fs/directory? (base/rel ".claude/skills"))
+                             (fs/list-dir (base/rel ".claude/skills")))
                      :when (and (fs/sym-link? f)
                                 (str/includes? (str (fs/read-link f)) (str base/mount "/")))]
                  f)
