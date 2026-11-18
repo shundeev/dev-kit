@@ -315,7 +315,17 @@
          (vec (:checks found)))))
 
    :ready-workflow?
-   (fn [_repo _base] (:ready-workflow @world))})
+   (fn [_repo _base] (:ready-workflow @world))
+
+   :auto-merge!
+   (fn [pr-url]
+     (let [found (pr-of @world pr-url)
+           turn  (fn [fields] (swap! world update-in [:prs (:number found)] merge fields))]
+       (if-let [message (:refuse-auto-merge found)]
+         (do (when (:merges-meanwhile found)
+               (turn {:state "MERGED"}))
+             {:exit 1 :out "" :err message})
+         (do (turn {:auto-merge true}) {:exit 0 :out "" :err ""}))))})
 
 
 (defn- finish-operations
@@ -351,15 +361,6 @@
      (if (:refuse-update (pr-of @world pr-url))
        1
        (do (update-pr world pr-url #(-> % (assoc :merge-state "CLEAN") (update :updates (fnil inc 0)))) 0)))
-
-   :auto-merge!
-   (fn [pr-url]
-     (let [found (pr-of @world pr-url)]
-       (if-let [message (:refuse-auto-merge found)]
-         (do (when (:merges-meanwhile found)
-               (update-pr world pr-url #(assoc % :state "MERGED")))
-             {:exit 1 :out "" :err message})
-         (do (update-pr world pr-url #(assoc % :auto-merge true)) {:exit 0 :out "" :err ""}))))
 
    :squash-merge!
    (fn [pr-url]
@@ -421,8 +422,8 @@
 
 
 (defn- release-operations
-  "kit release's operations. A pull request that does not exist is an error, as gh's would end the run. Option
-  :auto-merge-refusal is the text GitHub answers when it does not allow auto-merge."
+  "kit release's operations. A pull request that does not exist is an error, as gh's would end the run. A PR's
+  :refuse-auto-merge is the text GitHub answers when it does not allow auto-merge (the shared :auto-merge!)."
   [world]
   (let [pr-or-throw (fn [pr]
                       (or (pr-of @world pr) (throw (ex-info (str "no pull request " pr) {:pr pr}))))
@@ -439,12 +440,7 @@
      (fn [pr _repo label] (change-pr pr #(update % :labels (fn [labels] (vec (remove #{label} labels))))))
 
      :mark-ready!
-     (fn [pr _repo] (change-pr pr #(assoc % :draft false)))
-
-     :auto-merge!
-     (fn [url]
-       (or (:auto-merge-refusal @world)
-           (do (change-pr url #(assoc % :auto-merge true)) nil)))}))
+     (fn [pr _repo] (change-pr pr #(assoc % :draft false)))}))
 
 
 (defn- checks-operations

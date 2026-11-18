@@ -54,8 +54,7 @@
 
 (deftest where-the-repository-forbids-auto-merge-the-release-stands-with-a-warning
   (let [world  (fake/new-world {:current-branch "7-held"
-                                :prs [(held-draft)]
-                                :auto-merge-refusal "Auto merge is not allowed for this repository"})
+                                :prs [(held-draft :refuse-auto-merge "Auto merge is not allowed for this repository")]})
         result (kit-release world)]
     (is (= :ok (::steps/status result)))
     (is (false? (:draft (the-pr world))) "the PR is ready")

@@ -253,7 +253,11 @@
    (fn [pr repo fail] (wait/required-checks pr repo fail))
 
    :ready-workflow?
-   (fn [repo base] (ready-workflow? repo base))})
+   (fn [repo base] (ready-workflow? repo base))
+
+   ;; finish, merge and release turn auto-merge on with this one call; each step decides what a refusal means.
+   :auto-merge!
+   (fn [pr-url] (shell/run "gh" "pr" "merge" pr-url "--auto" "--squash"))})
 
 
 (def finish-operations
@@ -266,9 +270,6 @@
   as the scripts did under `set -e`; so does a gh call made through shell/gh!."
   {:update-branch!
    (fn [pr-url] (shell/shell "gh" "pr" "update-branch" pr-url))
-
-   :auto-merge!
-   (fn [pr-url] (shell/run "gh" "pr" "merge" pr-url "--auto" "--squash"))
 
    :squash-merge!
    (fn [pr-url] (shell/shell "gh" "pr" "merge" pr-url "--squash"))
@@ -342,14 +343,7 @@
    :mark-ready!
    (fn [pr repo]
      (shell/ok! (shell/shell "gh" "pr" "ready" pr "-R" repo)))
-
-   ;; The same call as kit finish's auto-merge (finish/turn-on-auto-merge!): it moves to the shared map once finish is a
-   ;; recipe.
-   :auto-merge!
-   (fn [url]
-     (let [merge-result (shell/run "gh" "pr" "merge" url "--auto" "--squash")]
-       (when-not (zero? (:exit merge-result))
-         (str/trim (str (:out merge-result) (:err merge-result))))))})
+  })
 
 
 (def checks-operations
