@@ -11,6 +11,7 @@
    [dev-kit.flow.github :as github]
    [dev-kit.flow.merge :as merge-cmd]
    [dev-kit.flow.release :as release]
+   [dev-kit.flow.review :as review]
    [dev-kit.flow.shell :as shell]
    [dev-kit.flow.start :as start]
    [dev-kit.flow.wait :as wait]))
@@ -387,24 +388,6 @@
   (throw (ex-info (format "git would refuse: %s" message) {})))
 
 
-(defn- review-operations
-  "kit review's operations. The world's :viewer is who runs kit (default \"the-agent\"); a pull request's
-  :committed is its head commit's date. A pull request's :reviews are {:author :state :at :body} and its :threads
-  {:resolved? :path :line :comments [{:author :body}]}, as the real read gives them; :reviews-unreadable is gh's
-  output when reading them fails."
-  [world]
-  {:read-reviews
-   (fn [pr _repo fail]
-     (let [found (pr-of @world pr)]
-       (if-let [output (:reviews-unreadable found)]
-         (fail (wait/gh-failure-text "api graphql" output))
-         {:state          (:state found)
-          :viewer         (:viewer @world "the-agent")
-          :head-committed (:committed found)
-          :reviews        (vec (:reviews found))
-          :threads        (vec (:threads found))})))})
-
-
 (defn start-substitutes
   "What the world answers in place of kit start's own calls, by the var of each: the functions right above its steps."
   [world]
@@ -592,7 +575,7 @@
   "Each command's operations over the world, by the command, as `dev-kit.flow.github/command-operations` keeps them."
   [world]
   {:shared (shared-operations world)
-   :review (review-operations world)})
+  })
 
 
 (defn- operations-over
@@ -786,7 +769,22 @@
    (fn [_repo id] (some #(when (= id (:databaseId %)) (:log %)) (:ready-runs @world)))})
 
 
-(defn review-substitutes "What the world answers in place of kit review's own calls, by var." [_world] {})
+(defn review-substitutes
+  "What the world answers in place of kit review's own calls, by var. The world's :viewer is who runs kit (default
+  \"the-agent\"); a pull request's :committed is its head commit's date. A pull request's :reviews are {:author :state
+  :at :body} and its :threads {:resolved? :path :line :comments [{:author :body}]}, as the real read gives them;
+  :reviews-unreadable is gh's output when reading them fails."
+  [world]
+  {#'review/graphql-reviews
+   (fn [pr _repo fail]
+     (let [found (pr-of @world pr)]
+       (if-let [output (:reviews-unreadable found)]
+         (fail (wait/gh-failure-text "api graphql" output))
+         {:state          (:state found)
+          :viewer         (:viewer @world "the-agent")
+          :head-committed (:committed found)
+          :reviews        (vec (:reviews found))
+          :threads        (vec (:threads found))})))})
 
 
 (def ^:private real-world-primitives

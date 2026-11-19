@@ -26,17 +26,14 @@
   "Runs kit review against the world. Returns what the owner reads (:printed), how it ended (:exit, :text of a refusal)
   and the pauses (:slept)."
   [world variables & args]
-  (let [printed (atom [])
-        ctx     {:github       (fake/github world)
-                 :resolve-repo (fn [explicit] (or explicit "o/r"))
-                 :sleep        (fake/clock world)
-                 :out          #(swap! printed conj %)}
+  (let [out     (java.io.StringWriter.)
         input   (review/read-input (vec args) (fn [variable default] (get variables variable default)))
-        result  (fake/with-github world #(review/review ctx input))
+        result  (binding [*out* out]
+                  (fake/with-github world #(review/review input)))
         refusal (when (= :fail (::steps/status result))
                   (steps/refusal result))]
     {:printed (str/join "\n"
-                        (concat @printed
+                        (concat (remove str/blank? (str/split-lines (str out)))
                                 (when-not refusal
                                   (review/report-lines result))))
      :exit    (get refusal :exit 0)

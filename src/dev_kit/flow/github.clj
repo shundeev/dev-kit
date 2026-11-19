@@ -120,104 +120,10 @@
    :set-field!      set-field!})
 
 
-(def reviews-query
-  "A pull request's state, the head commit's date, its reviews and review threads (PullRequest.reviews, .reviewThreads
-  and .commits, docs.github.com/en/graphql/reference/pulls), and who is asking (viewer). A thread's `line` is null once its code changed: `originalLine` then
-  tells where it was."
-  "query($owner: String!, $name: String!, $number: Int!, $reviewsAfter: String, $threadsAfter: String) {
-      viewer { login }
-      repository(owner: $owner, name: $name) {
-        pullRequest(number: $number) {
-          state
-          commits(last: 1) { nodes { commit { committedDate } } }
-          reviews(first: 100, after: $reviewsAfter) {
-            pageInfo { hasNextPage endCursor }
-            nodes { author { login } state submittedAt body }
-          }
-          reviewThreads(first: 100, after: $threadsAfter) {
-            pageInfo { hasNextPage endCursor }
-            nodes { isResolved path line originalLine comments(first: 100) { nodes { author { login } body } } }
-          }
-        }
-      }
-    }")
-
-
-(defn- pr-coordinates
-  "owner, name and number of a pull request given as a URL, or as a number with its repository."
-  [pr repo]
-  (if-let [[_ owner repo-name number] (re-find #"github\.com/([^/]+)/([^/]+)/pull/(\d+)" (str pr))]
-    [owner repo-name number]
-    (conj (str/split repo #"/" 2) (str pr))))
-
-
-(defn- review-of
-  [{:keys [author state submittedAt body]}]
-  {:author (:login author) :state state :at submittedAt :body body})
-
-
-(defn- thread-of
-  [{:keys [isResolved path line originalLine comments]}]
-  {:resolved? isResolved
-   :path      path
-   :line      (or line originalLine)
-   :comments  (mapv (fn [{:keys [author body]}]
-                      {:author (:login author) :body body})
-                    (:nodes comments))})
-
-
-(defn read-reviews
-  "The pull request's {:state :viewer (the login of whoever runs kit) :head-committed (the head commit's date)
-  :reviews :threads}, every page of both lists, one query for a page. A review is
-  {:author :state :at :body} (a pending one, not submitted, is left out), a thread {:resolved? :path :line :comments}
-  with its comments {:author :body}. The cursors of a list that has ended stay, and ask for the page after its last."
-  [pr repo fail]
-  (let [[owner repo-name number] (pr-coordinates pr repo)]
-    (loop [reviews-after nil
-           threads-after nil
-           result        {:reviews [] :threads []}]
-      (let [response (apply wait/gh-json
-                            fail
-                            "api"
-                            "graphql"
-                            "-f"
-                            (str "query=" reviews-query)
-                            "-f"
-                            (str "owner=" owner)
-                            "-f"
-                            (str "name=" repo-name)
-                            "-F"
-                            (str "number=" number)
-                            (concat (when reviews-after
-                                      ["-f" (str "reviewsAfter=" reviews-after)])
-                                    (when threads-after
-                                      ["-f" (str "threadsAfter=" threads-after)])))
-            request  (get-in response [:data :repository :pullRequest])]
-        (when-not request
-          (fail (wait/gh-failure-text "api graphql"
-                                      (str (or (some-> response :errors first :message) "no such pull request")))))
-        (let [{:keys [reviews reviewThreads]} request
-              result (->
-                      result
-                      (assoc :state  (:state request)
-                             :viewer (get-in response [:data :viewer :login])
-                             :head-committed (get-in request [:commits :nodes 0 :commit :committedDate]))
-                      (update :reviews into (comp (remove #(nil? (:submittedAt %))) (map review-of)) (:nodes reviews))
-                      (update :threads into (map thread-of) (:nodes reviewThreads)))]
-          (if (or (get-in reviews [:pageInfo :hasNextPage]) (get-in reviewThreads [:pageInfo :hasNextPage]))
-            (recur (get-in reviews [:pageInfo :endCursor]) (get-in reviewThreads [:pageInfo :endCursor]) result)
-            result))))))
-
-
-(def review-operations
-  "kit review's operations. A gh call that gives no answer goes to the step's `fail` with gh's message."
-  {:read-reviews read-reviews})
-
-
 (def command-operations
   "Each command's operations by the command, the shared ones under :shared."
   {:shared shared-operations
-   :review review-operations})
+  })
 
 
 (def operations
