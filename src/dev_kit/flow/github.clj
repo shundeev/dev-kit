@@ -121,71 +121,6 @@
    :set-field!      set-field!})
 
 
-(def finish-operations
-  "kit finish's operations. A failing git or gh call that is not the step's to judge ends the run inside the
-  operation, with its own exit code and its output on the terminal."
-  {:branch-commit-types
-   (fn [base]
-     (str/split-lines (shell/git-out "log" "--reverse" "--format=%s" (str "origin/" base "..HEAD"))))
-
-   :issue-title
-   (fn [repo number]
-     (shell/gh! "issue" "view" number
-       "-R"     repo
-       "--json" "title"
-       "--jq"   ".title"))
-
-   :check-shape
-   (fn [kit branch title body-file]
-     (apply shell/run "bb" kit "gate"
-       "--shape"
-       "--branch" branch
-       "--title"  title
-       (when body-file
-         ["--body-file" body-file])))
-
-   :pr-draft?
-   (fn [pr-url]
-     (= "true"
-        (shell/gh! "pr" "view" pr-url
-          "--json" "isDraft"
-          "--jq"   ".isDraft")))
-
-   :create-hold-label!
-   (fn [repo]
-     (shell/run "gh" "label" "create" "hold"
-       "-R"            repo
-       "--color"       "FBCA04"
-       "--description" "Stays a draft until kit release (ADR-0007)"))
-
-   :stage!
-   (fn [paths] (shell/ok! (apply shell/shell "git" "add" "--" paths)))
-
-   :staged?
-   (fn [] (not (zero? (:exit (shell/run "git" "diff" "--cached" "--quiet")))))
-
-   :commit!
-   (fn [message-file subject]
-     (shell/ok! (if message-file
-                  (shell/shell "git" "commit" "-F" message-file)
-                  (shell/shell "git" "commit" "-m" subject))))
-
-   :push!
-   (fn [branch] (shell/ok! (shell/shell "git" "push" "-u" "origin" branch)))
-
-   :create-pr!
-   (fn [repo base branch flags title body]
-     (shell/last-line
-      (apply shell/gh! "pr" "create"
-        "-R"     repo
-        "--base" base
-        "--head" branch
-        (concat flags ["--title" title "--body" body]))))
-
-   :edit-pr!
-   (fn [pr-url args] (apply shell/run "gh" "pr" "edit" pr-url args))})
-
-
 (def merge-operations
   "kit merge's operations. The git calls print to the terminal and end the run with git's own exit code when they fail,
   as the scripts did under `set -e`; so does a gh call made through shell/gh!."
@@ -390,7 +325,6 @@
 (def command-operations
   "Each command's operations by the command, the shared ones under :shared."
   {:shared  shared-operations
-   :finish  finish-operations
    :merge   merge-operations
    :release release-operations
    :checks  checks-operations

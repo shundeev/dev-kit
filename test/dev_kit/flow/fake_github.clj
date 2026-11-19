@@ -6,6 +6,7 @@
   (:require
    [clojure.string :as str]
    [dev-kit.flow.board :as board]
+   [dev-kit.flow.finish :as finish]
    [dev-kit.flow.github :as github]
    [dev-kit.flow.shell :as shell]
    [dev-kit.flow.start :as start]
@@ -371,97 +372,6 @@
   (vec (:shape-checks @world)))
 
 
-(defn- finish-operations
-  "kit finish's operations. Options of the world they read, besides the ones new-world knows:
-  :commits           subjects of the commits on the branch, oldest first (what git log origin/main..HEAD shows)
-  :staged            paths staged already
-  :shape-refusal     the text CI's shape rules print when they refuse the title or the body
-  :workflow-unreadable  gh's message when GitHub cannot say whether the base holds the ready workflow
-  :refuse-pr-edit    gh's message when it refuses to edit a pull request
-  :no-auto-merge     true when the repository does not allow auto-merge
-  The branch checked out is :current-branch; a push or a commit that git would refuse ends the real run inside the
-  operation, so the in-memory one has no such case."
-  [world]
-  {:branch-commit-types
-   (fn [_base] (:commits @world []))
-
-   :issue-title
-   (fn [_repo number]
-     (or (get-in @world [:issues (number-of number) :title])
-         (throw (ex-info (format "the fake GitHub has no issue %s: gh would end the run" number) {:number number}))))
-
-   :check-shape
-   (fn [_kit branch title body-file]
-     (swap! world update :shape-checks (fnil conj []) {:branch branch :title title :body-file body-file})
-     (if-let [refusal (:shape-refusal @world)]
-       {:exit 1 :out refusal :err ""}
-       {:exit 0 :out "" :err ""}))
-
-   :pr-draft?
-   (fn [pr-url] (boolean (:draft (pr-of @world pr-url))))
-
-   :create-hold-label!
-   (fn [_repo]
-     (let [current @world]
-       (cond (contains? (:labels current) "hold")
-             {:exit 1 :out "" :err "label with name \"hold\" already exists"}
-             (contains? (:uncreatable current) "hold")
-             {:exit 1 :out "" :err "HTTP 403: the fake GitHub does not let this token create labels"}
-             :else (do (swap! world #(-> % (update :labels conj "hold") (update :created-labels conj "hold")))
-                       {:exit 0 :out "" :err ""}))))
-
-   :stage!
-   (fn [paths] (swap! world update :staged #(vec (distinct (concat % paths)))) nil)
-
-   :staged?
-   (fn [] (boolean (seq (:staged @world))))
-
-   :commit!
-   (fn [_message-file subject]
-     (swap! world #(-> % (update :commits (fnil conj []) subject) (assoc :staged [])))
-     nil)
-
-   :push!
-   (fn [branch] (swap! world update :remote-branches (fnil conj []) branch) nil)
-
-   :create-pr!
-   (fn [repo base branch flags title body]
-     (let [current @world]
-       (when-not (some #{branch} (:remote-branches current))
-         (throw (ex-info (format "the branch %s is not on GitHub: gh pr create would refuse" branch) {:branch branch})))
-       (let [number (:next-number current)
-             url    (format "https://github.com/%s/pull/%s" repo number)]
-         (swap! world #(-> %
-                           (assoc-in [:prs number]
-                            {:number number
-                             :url    url
-                             :branch branch
-                             :base   base
-                             :state  "OPEN"
-                             :draft  (boolean (some #{"--draft"} flags))
-                             :labels (flag-values "--label" flags)
-                             :owners []
-                             :checks []
-                             :title  title
-                             :body   body})
-                           (update :next-number inc)))
-         url)))
-
-   :edit-pr!
-   (fn [pr-url args]
-     (if-let [refusal (:refuse-pr-edit @world)]
-       {:exit 1 :out "" :err refusal}
-       (let [{:keys [number]} (pr-of @world pr-url)]
-         (swap! world update-in
-           [:prs number]
-           (fn [pr]
-             (-> pr
-                 (update :owners #(vec (distinct (concat % (flag-values "--add-reviewer" args)))))
-                 (update :assignees #(vec (distinct (concat % (flag-values "--add-assignee" args)))))
-                 (update :labels #(vec (distinct (concat % (flag-values "--add-label" args))))))))
-         {:exit 0 :out "" :err ""})))})
-
-
 (defn- update-pr
   "The pull request a gh argument names, changed by `change`."
   [world pr change]
@@ -718,7 +628,6 @@
   "Each command's operations over the world, by the command, as `dev-kit.flow.github/command-operations` keeps them."
   [world]
   {:shared  (shared-operations world)
-   :finish  (finish-operations world)
    :merge   (merge-operations world)
    :release (release-operations world)
    :checks  (checks-operations world)
@@ -783,7 +692,96 @@
      #'wait/sleep!            (clock world)}))
 
 
-(defn finish-substitutes "What the world answers in place of kit finish's own calls, by var." [_world] {})
+(defn finish-substitutes
+  "What the world answers in place of kit finish's own calls, by the var of each: the functions right above its
+  steps. Options of the world they read, besides the ones new-world knows:
+  :commits           subjects of the commits on the branch, oldest first (what git log origin/main..HEAD shows)
+  :staged            paths staged already
+  :shape-refusal     the text CI's shape rules print when they refuse the title or the body
+  :workflow-unreadable  gh's message when GitHub cannot say whether the base holds the ready workflow
+  :refuse-pr-edit    gh's message when it refuses to edit a pull request
+  :no-auto-merge     true when the repository does not allow auto-merge
+  The branch checked out is :current-branch; a push or a commit that git would refuse ends the real run inside the
+  call, so the in-memory one has no such case."
+  [world]
+  {#'finish/branch-commit-types
+   (fn [_base] (:commits @world []))
+
+   #'finish/issue-title
+   (fn [_repo number]
+     (or (get-in @world [:issues (number-of number) :title])
+         (throw (ex-info (format "the fake GitHub has no issue %s: gh would end the run" number) {:number number}))))
+
+   #'finish/run-shape-check
+   (fn [_kit branch title body-file]
+     (swap! world update :shape-checks (fnil conj []) {:branch branch :title title :body-file body-file})
+     (if-let [refusal (:shape-refusal @world)]
+       {:exit 1 :out refusal :err ""}
+       {:exit 0 :out "" :err ""}))
+
+   #'finish/pr-draft?
+   (fn [pr-url] (boolean (:draft (pr-of @world pr-url))))
+
+   #'finish/create-hold-label!
+   (fn [_repo]
+     (let [current @world]
+       (cond (contains? (:labels current) "hold")
+             {:exit 1 :out "" :err "label with name \"hold\" already exists"}
+             (contains? (:uncreatable current) "hold")
+             {:exit 1 :out "" :err "HTTP 403: the fake GitHub does not let this token create labels"}
+             :else (do (swap! world #(-> % (update :labels conj "hold") (update :created-labels conj "hold")))
+                       {:exit 0 :out "" :err ""}))))
+
+   #'finish/stage!
+   (fn [paths] (swap! world update :staged #(vec (distinct (concat % paths)))) nil)
+
+   #'finish/staged?
+   (fn [] (boolean (seq (:staged @world))))
+
+   #'finish/commit!
+   (fn [_message-file subject]
+     (swap! world #(-> % (update :commits (fnil conj []) subject) (assoc :staged [])))
+     nil)
+
+   #'finish/push!
+   (fn [branch] (swap! world update :remote-branches (fnil conj []) branch) nil)
+
+   #'finish/create-pr!
+   (fn [repo base branch flags title body]
+     (let [current @world]
+       (when-not (some #{branch} (:remote-branches current))
+         (throw (ex-info (format "the branch %s is not on GitHub: gh pr create would refuse" branch) {:branch branch})))
+       (let [number (:next-number current)
+             url    (format "https://github.com/%s/pull/%s" repo number)]
+         (swap! world #(-> %
+                           (assoc-in [:prs number]
+                            {:number number
+                             :url    url
+                             :branch branch
+                             :base   base
+                             :state  "OPEN"
+                             :draft  (boolean (some #{"--draft"} flags))
+                             :labels (flag-values "--label" flags)
+                             :owners []
+                             :checks []
+                             :title  title
+                             :body   body})
+                           (update :next-number inc)))
+         url)))
+
+   #'finish/edit-pr!
+   (fn [pr-url args]
+     (if-let [refusal (:refuse-pr-edit @world)]
+       {:exit 1 :out "" :err refusal}
+       (let [{:keys [number]} (pr-of @world pr-url)]
+         (swap! world update-in
+           [:prs number]
+           (fn [pr]
+             (-> pr
+                 (update :owners #(vec (distinct (concat % (flag-values "--add-reviewer" args)))))
+                 (update :assignees #(vec (distinct (concat % (flag-values "--add-assignee" args)))))
+                 (update :labels #(vec (distinct (concat % (flag-values "--add-label" args))))))))
+         {:exit 0 :out "" :err ""})))})
 
 
 (defn merge-substitutes "What the world answers in place of kit merge's own calls, by var." [_world] {})
