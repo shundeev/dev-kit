@@ -35,19 +35,6 @@
           (partition 2 steps)))
 
 
-(defn run-with-ctx
-  "`run` for a step that is (fn [ctx facts]), the old shape. It goes away when the last command is converted to
-  direct calls; use `run` in a converted command."
-  [ctx facts & steps]
-  (when (odd? (count steps))
-    (throw (ex-info "steps/run-with-ctx takes a name and a function for each step" {:steps steps})))
-  (apply run
-         facts
-         (mapcat (fn [[step-name step]]
-                   [step-name (fn [facts] (step ctx facts))])
-          (partition 2 steps))))
-
-
 (defn refusal
   "How a stopped run ends: the text for stderr and the exit code. \"Error: <text>\" and 1, unless the step's fail!
   named another :exit or a :plain text."

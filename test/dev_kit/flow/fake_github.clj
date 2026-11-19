@@ -174,7 +174,7 @@
 
 
 (defn clock
-  "The clock of a story's ctx (:sleep): each pause runs the next event of the world's script."
+  "The clock a story substitutes for wait/sleep!: each pause runs the next event of the world's script."
   [world]
   (fn [seconds]
     (swap! world (fn [w]
@@ -288,16 +288,17 @@
     (some #(when (= pr (:url %)) %) (vals (:prs w)))))
 
 
-(defn- shared-operations
+(defn- shared-substitutes
+  "What the world answers in place of the functions several commands share, by the var of each."
   [world]
-  {:head-branch
+  {#'github/head-branch
    (fn [] (:current-branch @world))
 
-   :open-pr-url
+   #'github/open-pr-url
    (fn [_repo branch state]
      (some #(when (and (= branch (:branch %)) (= (str/upper-case state) (:state %))) (:url %)) (prs world)))
 
-   :read-pr
+   #'github/read-pr
    (fn [pr _repo fail]
      (let [found (pr-of @world pr)]
        (cond (nil? found)
@@ -316,14 +317,14 @@
               :owners      (:owners found)
               :auto-merge  (boolean (:auto-merge found))})))
 
-   :required-checks
+   #'github/required-checks
    (fn [pr _repo fail]
      (let [found (pr-of @world pr)]
        (if-let [output (:checks-unreadable found)]
          (fail (wait/checks-failure-text pr output))
          (vec (:checks found)))))
 
-   :ready-workflow?
+   #'github/ready-workflow?
    (fn
      ([_repo _base] (:ready-workflow @world))
      ([repo base fail]
@@ -331,7 +332,7 @@
         (fail (github/ready-workflow-failure repo base 1 message))
         (:ready-workflow @world))))
 
-   :auto-merge!
+   #'github/auto-merge!
    (fn [pr-url]
      (let [found (pr-of @world pr-url)
            turn  (fn [fields] (swap! world update-in [:prs (:number found)] merge fields))]
@@ -345,17 +346,23 @@
              {:exit 1 :out "" :err message})
          (do (turn {:auto-merge true}) {:exit 0 :out "" :err ""}))))
 
-   :issue-url
+   #'github/issue-url
    (fn [_repo number]
      (if-let [issue (get-in @world [:issues (number-of number)])]
        {:exit 0 :out (str (:url issue) "\n") :err ""}
        {:exit 1 :out "" :err (str "Could not resolve to an issue with the number of " number ".")}))
 
-   :set-field!
+   #'github/set-field!
    (fn [_project-number _owner url field option]
      (if (= field (:refuse-field @world))
        (str "GraphQL: the fake board has no option '" option "' in " field)
-       (do (swap! world (fn [w] (assoc-in w [:cards (card-index w url) :fields field] option))) nil)))})
+       (do (swap! world (fn [w] (assoc-in w [:cards (card-index w url) :fields field] option))) nil)))
+
+   #'shell/resolve-repo
+   (fn [explicit] (or explicit "o/r"))
+
+   #'wait/sleep!
+   (clock world)})
 
 
 (defn commits
@@ -391,7 +398,17 @@
 (defn start-substitutes
   "What the world answers in place of kit start's own calls, by the var of each: the functions right above its steps."
   [world]
-  {#'start/open-milestones
+  {#'start/item-add!
+   (fn [_project-number _owner url]
+     (if (:refuse-board @world)
+       {:error "GraphQL: Could not resolve to a ProjectV2 (the fake board refuses)"}
+       (let [w (swap! world (fn [w]
+                              (if (card-index w url)
+                                w
+                                (new-card w {:issue (:number (issue-of-url w url))}))))]
+         {:id (:id (get (:cards w) (card-index w url)))})))
+
+   #'start/open-milestones
    (fn [_repo] (:milestones @world))
 
    #'start/retro-missing
@@ -571,69 +588,13 @@
    (fn [branch] (swap! world update :remote-branches #(disj (set %) branch)) nil)})
 
 
-(defn- command-operations
-  "Each command's operations over the world, by the command, as `dev-kit.flow.github/command-operations` keeps them."
-  [world]
-  {:shared (shared-operations world)
-  })
-
-
-(defn- operations-over
-  "Each operation of the real GitHub, as a function of the world's atom and the same arguments."
-  [world]
-  (apply merge (vals (command-operations world))))
-
-
-(def command-operation-names
-  "The operations this GitHub answers, by command; a story checks them against the real GitHub's."
-  (update-vals (command-operations (atom {})) (comp set keys)))
-
-
 (defn label-reads
   "How often the repository's labels were read."
   [world]
   (:label-reads @world))
 
 
-(defn github
-  "The GitHub of the world, called as the real one: (github :op args…)."
-  [world]
-  (let [ops (operations-over world)]
-    (fn [op & args]
-      (apply (or (ops op) (throw (ex-info (str "no GitHub operation " op) {:op op}))) args))))
-
-
 ;; ------------------------------------------------------------------ the world in place of the real one, by var
-
-
-(defn- item-add
-  "The board's answer to github/item-add!: the issue's card, or the board's refusal."
-  [world]
-  (fn [_project-number _owner url]
-    (if (:refuse-board @world)
-      {:error "GraphQL: Could not resolve to a ProjectV2 (the fake board refuses)"}
-      (let [w (swap! world (fn [w]
-                             (if (card-index w url)
-                               w
-                               (new-card w {:issue (:number (issue-of-url w url))}))))]
-        {:id (:id (get (:cards w) (card-index w url)))}))))
-
-
-(defn- shared-substitutes
-  "What the world answers in place of the functions several commands share, by the var of each."
-  [world]
-  (let [ops (shared-operations world)]
-    {#'github/head-branch     (:head-branch ops)
-     #'github/open-pr-url     (:open-pr-url ops)
-     #'github/read-pr         (:read-pr ops)
-     #'github/required-checks (:required-checks ops)
-     #'github/ready-workflow? (:ready-workflow? ops)
-     #'github/auto-merge!     (:auto-merge! ops)
-     #'github/issue-url       (:issue-url ops)
-     #'github/set-field!      (:set-field! ops)
-     #'github/item-add!       (item-add world)
-     #'shell/resolve-repo     (fn [explicit] (or explicit "o/r"))
-     #'wait/sleep!            (clock world)}))
 
 
 (defn finish-substitutes

@@ -449,11 +449,22 @@ Options:
 ;; ------------------------------------------------------------------ the board, the labels, the branch
 
 
+(defn- item-add!
+  "The issue's card on the board: {:id card-id}, or {:error message} when the board refuses."
+  [project-number owner url]
+  (try {:id (board/board-gh! "project" "item-add" project-number
+              "--owner"  owner
+              "--url"    url
+              "--format" "json"
+              "--jq"     ".id")}
+       (catch clojure.lang.ExceptionInfo e {:error (ex-message e)})))
+
+
 (defn- put-on-board
   "The issue's card on the board, unless it came from one."
   [{:keys [item-id url number filed? project-number owner]}]
   (when-not item-id
-    (let [{:keys [id error]} (github/item-add! project-number owner url)]
+    (let [{:keys [id error]} (item-add! project-number owner url)]
       (when error
         (steps/fail! :start/board-refused
                      (if filed?

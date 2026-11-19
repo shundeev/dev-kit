@@ -36,7 +36,7 @@
 
 
 (defn sleep!
-  "The real clock of a recipe's ctx (:sleep): waits the given seconds. Tests hand a clock that advances a script."
+  "Waits the given seconds between two looks at GitHub. A story substitutes it with its clock, which plays the script."
   [seconds]
   (Thread/sleep (* 1000 seconds)))
 

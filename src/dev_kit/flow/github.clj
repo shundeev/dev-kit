@@ -2,11 +2,7 @@
   "What several flow commands ask of GitHub and git, as plain functions a step calls directly (#139, step 7b): a
   reader goes from the call to the code in one jump. The calls are today's gh and git calls, in the same order, since
   the selftest's fake gh checks them as strings. A function returns data and decides nothing: refusing is the
-  step's. A call only one command needs sits in that command's file, above its step.
-
-  The per-command operation maps below are for the commands not yet converted: a step calls
-  `((:github ctx) :op args…)` and tests hand an in-memory GitHub. A map goes away with its command; no name may
-  appear in two maps."
+  step's. A call only one command needs sits in that command's file, above its step."
   (:require
    [clojure.string :as str]
    [dev-kit.flow.board :as board]
@@ -21,17 +17,6 @@
     "-R"     repo
     "--json" "url"
     "--jq"   ".url"))
-
-
-(defn item-add!
-  "The issue's card on the board: {:id card-id}, or {:error message} when the board refuses."
-  [project-number owner url]
-  (try {:id (board/board-gh! "project" "item-add" project-number
-              "--owner"  owner
-              "--url"    url
-              "--format" "json"
-              "--jq"     ".id")}
-       (catch clojure.lang.ExceptionInfo e {:error (ex-message e)})))
 
 
 (defn set-field!
@@ -105,34 +90,3 @@
   refusal means."
   [pr-url]
   (shell/run "gh" "pr" "merge" pr-url "--auto" "--squash"))
-
-
-(def shared-operations
-  "The operations of the commands not yet converted to direct calls, by name; the plain functions above are what a
-  converted command calls. Goes away with the last of them."
-  {:head-branch     head-branch
-   :open-pr-url     open-pr-url
-   :read-pr         read-pr
-   :required-checks required-checks
-   :ready-workflow? ready-workflow?
-   :auto-merge!     auto-merge!
-   :issue-url       issue-url
-   :set-field!      set-field!})
-
-
-(def command-operations
-  "Each command's operations by the command, the shared ones under :shared."
-  {:shared shared-operations
-  })
-
-
-(def operations
-  "Every operation by name."
-  (apply merge (vals command-operations)))
-
-
-(defn real
-  "The GitHub of a real run: (github :op args…) calls the operation of that name."
-  [op & args]
-  (let [operation (or (operations op) (throw (ex-info (str "no GitHub operation " op) {:op op})))]
-    (apply operation args)))

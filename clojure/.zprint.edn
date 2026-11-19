@@ -182,7 +182,6 @@
  :fn-map  {;; A recipe (dev-kit's steps/run, ADR-0008): the facts on its first line, then a step's name and its
            ;; function per line, the functions aligned like the pairs of a cond.
            "steps/run"     [:guided {:guide [:element :element :indent 2 :newline :element-pair-*]}]
-           "steps/run-with-ctx" [:guided {:guide [:element :element :element :indent 2 :newline :element-pair-*]}]
            ;; Threading macros - keep short forms on one line
            "->"            :none
            "->>"           :none
