@@ -277,7 +277,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
   "kit checks as a recipe. GitHub is (:github ctx), the clock (:sleep ctx) and the lines printed while waiting (:out
   ctx); the result is data that checks! prints."
   [ctx input]
-  (steps/run ctx input
+  (steps/run-with-ctx ctx input
     :read-repo          read-repo
     :read-poll          read-poll
     :read-branch        read-branch

@@ -1,11 +1,12 @@
 (ns dev-kit.flow.github
-  "The GitHub (and git) that the flow commands talk to, as named operations over data (#139). A step calls
-  `((:github ctx) :op args…)`; the real operations below are today's gh and git calls, moved unchanged and in the same
-  order, since the selftest's fake gh checks them as strings. Tests hand an in-memory GitHub with the same
-  operations instead. An operation returns data and decides nothing: refusing is the step's.
+  "What several flow commands ask of GitHub and git, as plain functions a step calls directly (#139, step 7b): a
+  reader goes from the call to the code in one jump. The calls are today's gh and git calls, in the same order, since
+  the selftest's fake gh checks them as strings. A function returns data and decides nothing: refusing is the
+  step's. A call only one command needs sits in that command's file, above its step.
 
-  The operations are kept one map per command, plus the shared ones, so each command is rewritten on its own; no
-  name may appear in two maps."
+  The per-command operation maps below are for the commands not yet converted: a step calls
+  `((:github ctx) :op args…)` and tests hand an in-memory GitHub. A map goes away with its command; no name may
+  appear in two maps."
   (:require
    [cheshire.core :as json]
    [clojure.string :as str]
@@ -14,199 +15,30 @@
    [dev-kit.flow.wait :as wait]))
 
 
-(def items-query
-  "query($owner: String!, $number: Int!, $status: String!, $after: String) {
-      owner: repositoryOwner(login: $owner) {
-        ... on ProjectV2Owner {
-          projectV2(number: $number) {
-            items(first: 100, after: $after) {
-              pageInfo { hasNextPage endCursor }
-              nodes {
-                id
-                isArchived
-                status: fieldValueByName(name: $status) { ... on ProjectV2ItemFieldSingleSelectValue { name } }
-                content {
-                  __typename
-                  ... on Issue { number url title state }
-                  ... on PullRequest { number url title }
-                  ... on DraftIssue { title }
-                }
-              }
-            }
-          }
-        }
-      }
-    }")
+(defn issue-url
+  "gh issue view: {:exit :out :err}, the issue's URL on stdout. A missing issue is the step's to judge."
+  [repo number]
+  (shell/run "gh" "issue" "view" number
+    "-R"     repo
+    "--json" "url"
+    "--jq"   ".url"))
 
 
-(defn project-items
-  "The board's cards, not archived ones: they are out of the CLI's listing too, and reusing one would resurrect work
-  the owner had put away. Only the four fields a match needs are asked for: `gh project item-list` asks for every
-  field of every card, 203 points of the 5000 hourly GraphQL budget on a board this size."
-  [owner number status-field]
-  (loop [after nil
-         items []]
-    (let [out   (apply shell/gh! "api" "graphql"
-                  "-f" (str "query=" items-query)
-                  "-F" (str "owner=" owner)
-                  "-F" (str "number=" number)
-                  "-f" (str "status=" status-field)
-                  (when after
-                    ["-F" (str "after=" after)]))
-          conn  (get-in (json/parse-string out true) [:data :owner :projectV2 :items])
-          items (into items
-                      (for [{:keys [id isArchived status content]} (:nodes conn)
-                            :when (not isArchived)]
-                        {:id      id
-                         :title   (:title content "")
-                         :status  (:name status "")
-                         :content {:type   (:__typename content)
-                                   :number (:number content)
-                                   :url    (:url content)
-                                   :state  (:state content)}}))]
-      (if (get-in conn [:pageInfo :hasNextPage])
-        (recur (get-in conn [:pageInfo :endCursor]) items)
-        items))))
+(defn item-add!
+  "The issue's card on the board: {:id card-id}, or {:error message} when the board refuses."
+  [project-number owner url]
+  (try {:id (board/board-gh! "project" "item-add" project-number
+              "--owner"  owner
+              "--url"    url
+              "--format" "json"
+              "--jq"     ".id")}
+       (catch clojure.lang.ExceptionInfo e {:error (ex-message e)})))
 
 
-(def convert-mutation
-  "The schema (introspected, #12): input {itemId, repositoryId}, payload {item: ProjectV2Item}."
-  "mutation($itemId:ID!,$repositoryId:ID!){ convertProjectV2DraftIssueItemToIssue(input:{itemId:$itemId,repositoryId:$repositoryId}) { item { content { ... on Issue { number url } } } } }")
-
-
-(def start-operations
-  "kit start's operations. Arguments and results are plain data; a failing gh call that is not the step's to judge
-  ends the run inside shell/gh!, as before the pilot."
-  {:open-milestones
-   (fn [repo]
-     (str/split-lines (shell/gh! "api" (str "repos/" repo "/milestones?state=open") "--paginate" "--jq" ".[].title")))
-
-   :retro-missing
-   (fn [kit repo]
-     (shell/run "bb" kit "retro" "--missing" "--repo" repo))
-
-   :graphql-remaining
-   (fn []
-     (some-> (shell/gh-out "api" "rate_limit" "--jq" ".resources.graphql.remaining")
-             not-empty
-             parse-long))
-
-   :issue-url
-   (fn [repo number]
-     (shell/run "gh" "issue" "view" number
-       "-R"     repo
-       "--json" "url"
-       "--jq"   ".url"))
-
-   :project-items
-   project-items
-
-   :open-issues-titled
-   (fn [repo title]
-     (let [out (shell/gh-out "issue" "list"
-                 "-R"       repo
-                 "--state"  "open"
-                 "--search" (str title " in:title")
-                 "--limit"  "20"
-                 "--json"   "number,title,url")]
-       (json/parse-string (or out "[]") true)))
-
-   :repo-id
-   (fn [repo]
-     (shell/gh! "repo" "view" repo
-       "--json" "id"
-       "--jq"   ".id"))
-
-   :convert-draft!
-   (fn [item-id repo-id]
-     (let [out (shell/gh! "api" "graphql"
-                 "-f" (str "query=" convert-mutation)
-                 "-F" (str "itemId=" item-id)
-                 "-F" (str "repositoryId=" repo-id))]
-       (get-in (json/parse-string out true) [:data :convertProjectV2DraftIssueItemToIssue :item :content])))
-
-   :known-labels
-   (fn [repo]
-     (let [out (shell/gh-out "label" "list"
-                 "-R"      repo
-                 "--limit" "200"
-                 "--json"  "name")]
-       (try (set (map :name (json/parse-string out true)))
-            (catch Exception _ #{}))))
-
-   :create-label!
-   (fn [repo label]
-     (zero? (:exit (shell/run "gh" "label" "create" label "-R" repo))))
-
-   :file-issue!
-   (fn [repo title body-args label-args assignee-args]
-     (shell/last-line
-      (apply shell/gh! "issue" "create"
-        "-R"      repo
-        "--title" title
-        (concat body-args label-args assignee-args))))
-
-   :create-draft!
-   (fn [project-number owner title body]
-     (let [out (apply shell/gh! "project" "item-create" project-number
-                 "--owner"  owner
-                 "--title"  title
-                 "--format" "json"
-                 (when body
-                   ["--body" body]))]
-       (:id (json/parse-string out true))))
-
-   :item-add!
-   (fn [project-number owner url]
-     (try {:id (board/board-gh! "project" "item-add" project-number
-                 "--owner"  owner
-                 "--url"    url
-                 "--format" "json"
-                 "--jq"     ".id")}
-          (catch clojure.lang.ExceptionInfo e {:error (ex-message e)})))
-
-   :edit-issue!
-   (fn [repo number args]
-     (apply shell/gh! "issue" "edit" number "-R" repo args))
-
-   :set-field!
-   (fn [project-number owner url field option] (board/board-set-field project-number owner url field option))
-
-   :size-label!
-   (fn [repo number size]
-     (shell/run "gh" "label" "create" (str "size:" size)
-       "-R"            repo
-       "--color"       "BFD4F2"
-       "--description" "Task size (ADR-0002), mirrors the board field"
-       "--force")
-     (let [old  (some-> (shell/gh-out "issue" "view" number
-                          "-R"     repo
-                          "--json" "labels"
-                          "--jq"   ".labels[].name | select(startswith(\"size:\"))")
-                        str/split-lines)
-           gone (mapcat (fn [l] ["--remove-label" l]) (remove #(or (str/blank? %) (= % (str "size:" size))) old))]
-       (zero? (:exit (apply shell/run "gh" "issue" "edit" number
-                       "-R"          repo
-                       "--add-label" (str "size:" size)
-                       gone)))))
-
-   :linked-branch
-   (fn [repo number]
-     (some-> (shell/gh-out "issue" "develop"
-               "--list" number
-               "-R"     repo)
-             str/split-lines
-             first
-             (str/split #"\t")
-             first
-             not-empty))
-
-   :develop!
-   (fn [repo number develop-args]
-     (shell/last-line (apply shell/gh! "issue" "develop" number "-R" repo develop-args)))
-
-   :current-branch
-   (fn [] (some-> (shell/run "git" "branch" "--show-current") :out str/trim))})
+(defn set-field!
+  "A single-select field of the issue's card: nil, or why the board refused."
+  [project-number owner url field option]
+  (board/board-set-field project-number owner url field option))
 
 
 (def ready-workflow-path ".github/workflows/ready-when-green.yml")
@@ -240,34 +72,53 @@
            :else (fail (ready-workflow-failure repo base exit (str/trim (str out err))))))))
 
 
+(defn head-branch
+  "The branch checked out now, by git."
+  []
+  (shell/git-out "rev-parse" "--abbrev-ref" "HEAD"))
+
+
+(defn open-pr-url
+  "The URL of the branch's pull request in this state, nil when it has none."
+  [repo branch state]
+  (not-empty (shell/gh! "pr" "list"
+               "-R"      repo
+               "--head"  branch
+               "--state" state
+               "--json"  "url"
+               "--jq"    ".[0].url // empty")))
+
+
+(defn read-pr
+  "The pull request as data, see wait/read-pr; a failed read goes to `fail` with gh's message."
+  [pr repo fail]
+  (wait/read-pr pr repo fail))
+
+
+(defn required-checks
+  "The pull request's required checks, see wait/required-checks."
+  [pr repo fail]
+  (wait/required-checks pr repo fail))
+
+
+(defn auto-merge!
+  "Turns auto-merge on: {:exit :out :err}. finish, merge and release make this one call; each step decides what a
+  refusal means."
+  [pr-url]
+  (shell/run "gh" "pr" "merge" pr-url "--auto" "--squash"))
+
+
 (def shared-operations
-  "Operations more than one command uses, with the same gh or git call."
-  {:head-branch
-   (fn [] (shell/git-out "rev-parse" "--abbrev-ref" "HEAD"))
-
-   :open-pr-url
-   (fn [repo branch state]
-     (not-empty (shell/gh! "pr" "list"
-                  "-R"      repo
-                  "--head"  branch
-                  "--state" state
-                  "--json"  "url"
-                  "--jq"    ".[0].url // empty")))
-
-   :read-pr
-   (fn [pr repo fail] (wait/read-pr pr repo fail))
-
-   :required-checks
-   (fn [pr repo fail] (wait/required-checks pr repo fail))
-
-   :ready-workflow?
-   (fn
-     ([repo base] (ready-workflow? repo base))
-     ([repo base fail] (ready-workflow? repo base fail)))
-
-   ;; finish, merge and release turn auto-merge on with this one call; each step decides what a refusal means.
-   :auto-merge!
-   (fn [pr-url] (shell/run "gh" "pr" "merge" pr-url "--auto" "--squash"))})
+  "The operations of the commands not yet converted to direct calls, by name; the plain functions above are what a
+  converted command calls. Goes away with the last of them."
+  {:head-branch     head-branch
+   :open-pr-url     open-pr-url
+   :read-pr         read-pr
+   :required-checks required-checks
+   :ready-workflow? ready-workflow?
+   :auto-merge!     auto-merge!
+   :issue-url       issue-url
+   :set-field!      set-field!})
 
 
 (def finish-operations
@@ -349,14 +200,14 @@
      (:closingIssuesReferences (wait/gh-json fail "pr" "view" pr-url "--json" "closingIssuesReferences")))
 
    :issue-state
-   (fn [issue-url]
-     (shell/gh! "issue" "view" issue-url
+   (fn [url]
+     (shell/gh! "issue" "view" url
        "--json" "state"
        "--jq"   ".state"))
 
    :close-issue!
-   (fn [issue-url note]
-     (shell/run "gh" "issue" "close" issue-url
+   (fn [url note]
+     (shell/run "gh" "issue" "close" url
        "--reason"  "completed"
        "--comment" note))
 
@@ -539,7 +390,6 @@
 (def command-operations
   "Each command's operations by the command, the shared ones under :shared."
   {:shared  shared-operations
-   :start   start-operations
    :finish  finish-operations
    :merge   merge-operations
    :release release-operations

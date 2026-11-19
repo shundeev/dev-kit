@@ -316,7 +316,7 @@ Options:
 (defn finish
   "The recipe. Every step before :commit only reads, so a refusal there leaves nothing committed, pushed or opened."
   [ctx input]
-  (steps/run ctx input
+  (steps/run-with-ctx ctx input
     :pick-type          pick-type
     :resolve-repo       resolve-repo
     :check-branch       check-branch

@@ -5,6 +5,7 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [dev-kit.flow.fake-github :as fake]
+   [dev-kit.flow.shell :as shell]
    [dev-kit.flow.start :as start]
    [dev-kit.flow.steps :as steps]))
 
@@ -15,16 +16,18 @@
 
 
 (defn- kit-start
-  "Runs kit start with the command-line words against the world. Returns the result, with the warnings it gave
-  under :warnings."
+  "Runs kit start with the command-line words against the world, its output captured. Returns the result, with the
+  lines printed on stderr, the warnings, under :warnings."
   [world & args]
-  (let [warnings (atom [])
-        ctx      {:github       (fake/github world)
-                  :warn         (fn [& msg] (swap! warnings conj (str/join " " msg)))
-                  :kit          "bin/kit"
-                  :resolve-repo (fn [explicit] (or explicit "o/r"))}
-        input    (start/read-input (vec args) (fn [variable default] (get variables variable default)))]
-    (assoc (start/start ctx input) :warnings @warnings)))
+  (let [out    (java.io.StringWriter.)
+        err    (java.io.StringWriter.)
+        input  (assoc (start/read-input (vec args) (fn [variable default] (get variables variable default)))
+                      :kit
+                      "bin/kit")
+        result (binding [*out* out
+                         *err* err]
+                 (fake/with-github world #(start/start input)))]
+    (assoc result :warnings (str/split-lines (str err)))))
 
 
 (defn- nothing-exists?
@@ -232,3 +235,16 @@
     (is (= "1-add-landing-page" (:branch kept)) "--no-checkout answers with the branch it made")
     (is (= {1 "1-add-landing-page"} (fake/linked-branches keeping)) "it is linked to the issue")
     (is (= "main" (fake/checked-out keeping)) "but the working tree is where it was")))
+
+
+(deftest a-call-the-story-did-not-substitute-fails-it-naming-the-call
+  (let [world (fake/new-world {})]
+    (is (thrown-with-msg? AssertionError
+                          #"the story reached the real world: shell/gh! api rate_limit"
+                          (fake/with-github world #(shell/gh! "api" "rate_limit")))
+        "a primitive called directly is refused, with its arguments")
+    (is (thrown-with-msg? AssertionError
+                          #"the story reached the real world: shell/run bb bin/kit retro --missing --repo o/r"
+                          (with-redefs [fake/start-substitutes (fn [_world] {})]
+                            (kit-start world "--title" "Add landing page" "--priority" "High")))
+        "a command whose own call lacks its substitute stops at that call and does not touch GitHub")))

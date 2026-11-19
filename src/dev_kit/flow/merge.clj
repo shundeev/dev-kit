@@ -64,7 +64,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
   "kit merge as a recipe. GitHub is (:github ctx), the clock (:sleep ctx) and the lines printed while it waits (:out ctx).
   A board error is kept as a fact and raised by the last step, after the closeout: the merge is done by then."
   [ctx input]
-  (steps/run ctx input
+  (steps/run-with-ctx ctx input
     :resolve-repo        resolve-repo
     :check-branch        check-branch
     :read-poll           read-poll

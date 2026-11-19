@@ -1,6 +1,6 @@
 (ns dev-kit.flow.steps
-  "A command as a list of named steps (ADR-0008). A step is (fn [ctx facts]) and
-  returns the facts it adds. A step that cannot go on throws a problem with fail!, and the run stops there: the
+  "A command as a list of named steps (ADR-0008). A step is (fn [facts]) and
+  returns the facts it adds; what it needs from the outside it calls directly (step 7b of #139). A step that cannot go on throws a problem with fail!, and the run stops there: the
   result keeps every fact gathered before it and names the step. The run's own keys are namespaced (::status,
   ::done, ::stopped-at, ::problem), so no fact of a command can collide with them: kit start has a :status of its
   own, the board's Status.")
@@ -19,13 +19,13 @@
   "Runs the steps, given as name and function pairs, in order. The result holds the facts gathered and the
   names of the steps done (::done), with ::status :ok, or ::status :fail with the ::problem and the step it
   ::stopped-at."
-  [ctx facts & steps]
+  [facts & steps]
   (when (odd? (count steps))
     (throw (ex-info "steps/run takes a name and a function for each step" {:steps steps})))
   (reduce (fn [facts [step-name step]]
             (try
               (-> facts
-                  (merge (step ctx facts))
+                  (merge (step facts))
                   (update ::done conj step-name))
               (catch clojure.lang.ExceptionInfo e
                 (if (:problem (ex-data e))
@@ -33,6 +33,19 @@
                   (throw e)))))
           (assoc facts ::status :ok ::done [])
           (partition 2 steps)))
+
+
+(defn run-with-ctx
+  "`run` for a step that is (fn [ctx facts]), the old shape. It goes away when the last command is converted to
+  direct calls; use `run` in a converted command."
+  [ctx facts & steps]
+  (when (odd? (count steps))
+    (throw (ex-info "steps/run-with-ctx takes a name and a function for each step" {:steps steps})))
+  (apply run
+         facts
+         (mapcat (fn [[step-name step]]
+                   [step-name (fn [facts] (step ctx facts))])
+          (partition 2 steps))))
 
 
 (defn refusal

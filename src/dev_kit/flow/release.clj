@@ -127,7 +127,7 @@ Options:
 (defn release
   "The recipe of kit release. ctx: :github, :warn, :out (prints a line), :resolve-repo."
   [ctx input]
-  (steps/run ctx input
+  (steps/run-with-ctx ctx input
     :resolve-repo        resolve-repo
     :find-pr             find-pr
     :read-pr-state       read-pr-state

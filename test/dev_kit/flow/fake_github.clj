@@ -5,7 +5,10 @@
   and what happens while a command waits. A story reads the world afterwards instead of listing calls."
   (:require
    [clojure.string :as str]
+   [dev-kit.flow.board :as board]
    [dev-kit.flow.github :as github]
+   [dev-kit.flow.shell :as shell]
+   [dev-kit.flow.start :as start]
    [dev-kit.flow.wait :as wait]))
 
 
@@ -335,7 +338,19 @@
          (do (when (:merges-meanwhile found)
                (turn {:state "MERGED"}))
              {:exit 1 :out "" :err message})
-         (do (turn {:auto-merge true}) {:exit 0 :out "" :err ""}))))})
+         (do (turn {:auto-merge true}) {:exit 0 :out "" :err ""}))))
+
+   :issue-url
+   (fn [_repo number]
+     (if-let [issue (get-in @world [:issues (number-of number)])]
+       {:exit 0 :out (str (:url issue) "\n") :err ""}
+       {:exit 1 :out "" :err (str "Could not resolve to an issue with the number of " number ".")}))
+
+   :set-field!
+   (fn [_project-number _owner url field option]
+     (if (= field (:refuse-field @world))
+       (str "GraphQL: the fake board has no option '" option "' in " field)
+       (do (swap! world (fn [w] (assoc-in w [:cards (card-index w url) :fields field] option))) nil)))})
 
 
 (defn commits
@@ -592,24 +607,19 @@
           :threads        (vec (:threads found))})))})
 
 
-(defn- start-operations
+(defn start-substitutes
+  "What the world answers in place of kit start's own calls, by the var of each: the functions right above its steps."
   [world]
-  {:open-milestones
+  {#'start/open-milestones
    (fn [_repo] (:milestones @world))
 
-   :retro-missing
+   #'start/retro-missing
    (fn [_kit _repo] (:retro-missing @world))
 
-   :graphql-remaining
+   #'start/graphql-remaining
    (fn [] (:graphql @world))
 
-   :issue-url
-   (fn [_repo number]
-     (if-let [issue (get-in @world [:issues (number-of number)])]
-       {:exit 0 :out (str (:url issue) "\n") :err ""}
-       {:exit 1 :out "" :err (str "Could not resolve to an issue with the number of " number ".")}))
-
-   :project-items
+   #'start/project-items
    (fn [_owner _number _status-field]
      (let [w @world]
        (vec (for [card (:cards w)
@@ -623,16 +633,16 @@
                           {:type "Issue" :number (:number issue) :url (:url issue) :state (:state issue)}
                           {:type "DraftIssue" :number nil :url nil :state nil})}))))
 
-   :open-issues-titled
+   #'start/open-issues-titled
    (fn [_repo title]
      (vec (for [issue (issues world)
                 :when (and (= "OPEN" (:state issue)) (str/includes? (:title issue) title))]
             (select-keys issue [:number :title :url]))))
 
-   :repo-id
+   #'start/repo-id
    (fn [_repo] "R_1")
 
-   :convert-draft!
+   #'start/convert-draft!
    (fn [item-id _repo-id]
      (let [w     @world
            index (first (keep-indexed (fn [i c] (when (= item-id (:id c)) i)) (:cards w)))
@@ -644,16 +654,16 @@
                              (update-in [:cards index] #(-> % (dissoc :draft) (assoc :issue n)))))
            (select-keys (get-in @world [:issues n]) [:number :url])))))
 
-   :known-labels
+   #'start/repo-labels
    (fn [_repo] (:labels (swap! world update :label-reads inc)))
 
-   :create-label!
+   #'start/create-label!
    (fn [_repo label]
      (if (contains? (:uncreatable @world) label)
        false
        (do (swap! world #(-> % (update :labels conj label) (update :created-labels conj label))) true)))
 
-   :file-issue!
+   #'start/file-issue!
    (fn [repo title _body-args label-args assignee-args]
      (let [w (swap! world file-issue
                repo
@@ -662,30 +672,14 @@
                (flag-values "--assignee" assignee-args))]
        (:url (get-in w [:issues (dec (:next-number w))]))))
 
-   :create-draft!
+   #'start/create-draft!
    (fn [_project-number _owner title _body]
      (:id (last (:cards (swap! world new-card {:draft title})))))
 
-   :item-add!
-   (fn [_project-number _owner url]
-     (if (:refuse-board @world)
-       {:error "GraphQL: Could not resolve to a ProjectV2 (the fake board refuses)"}
-       (let [w (swap! world (fn [w]
-                              (if (card-index w url)
-                                w
-                                (new-card w {:issue (:number (issue-of-url w url))}))))]
-         {:id (:id (get (:cards w) (card-index w url)))})))
-
-   :edit-issue!
+   #'start/edit-issue!
    (fn [_repo number args] (swap! world edit-issue number args) "")
 
-   :set-field!
-   (fn [_project-number _owner url field option]
-     (if (= field (:refuse-field @world))
-       (str "GraphQL: the fake board has no option '" option "' in " field)
-       (do (swap! world (fn [w] (assoc-in w [:cards (card-index w url) :fields field] option))) nil)))
-
-   :size-label!
+   #'start/size-label!
    (fn [_repo number size]
      (let [label (str "size:" size)]
        (if (:refuse-size-label @world)
@@ -702,10 +696,10 @@
                                                     (mapcat vector (repeat "--remove-label") gone)))))))
            true))))
 
-   :linked-branch
+   #'start/linked-branch
    (fn [_repo number] (get-in @world [:linked (number-of number)]))
 
-   :develop!
+   #'start/develop!
    (fn [_repo number develop-args]
      (let [n      (number-of number)
            w      @world
@@ -716,7 +710,7 @@
                         (some #{"--checkout"} develop-args) (assoc :current-branch branch))))
        (str "https://github.com/o/r/tree/" branch)))
 
-   :current-branch
+   #'start/current-branch
    (fn [] (:current-branch @world))})
 
 
@@ -724,7 +718,6 @@
   "Each command's operations over the world, by the command, as `dev-kit.flow.github/command-operations` keeps them."
   [world]
   {:shared  (shared-operations world)
-   :start   (start-operations world)
    :finish  (finish-operations world)
    :merge   (merge-operations world)
    :release (release-operations world)
@@ -755,3 +748,88 @@
   (let [ops (operations-over world)]
     (fn [op & args]
       (apply (or (ops op) (throw (ex-info (str "no GitHub operation " op) {:op op}))) args))))
+
+
+;; ------------------------------------------------------------------ the world in place of the real one, by var
+
+
+(defn- item-add
+  "The board's answer to github/item-add!: the issue's card, or the board's refusal."
+  [world]
+  (fn [_project-number _owner url]
+    (if (:refuse-board @world)
+      {:error "GraphQL: Could not resolve to a ProjectV2 (the fake board refuses)"}
+      (let [w (swap! world (fn [w]
+                             (if (card-index w url)
+                               w
+                               (new-card w {:issue (:number (issue-of-url w url))}))))]
+        {:id (:id (get (:cards w) (card-index w url)))}))))
+
+
+(defn- shared-substitutes
+  "What the world answers in place of the functions several commands share, by the var of each."
+  [world]
+  (let [ops (shared-operations world)]
+    {#'github/head-branch     (:head-branch ops)
+     #'github/open-pr-url     (:open-pr-url ops)
+     #'github/read-pr         (:read-pr ops)
+     #'github/required-checks (:required-checks ops)
+     #'github/ready-workflow? (:ready-workflow? ops)
+     #'github/auto-merge!     (:auto-merge! ops)
+     #'github/issue-url       (:issue-url ops)
+     #'github/set-field!      (:set-field! ops)
+     #'github/item-add!       (item-add world)
+     #'shell/resolve-repo     (fn [explicit] (or explicit "o/r"))
+     #'wait/sleep!            (clock world)}))
+
+
+(defn finish-substitutes "What the world answers in place of kit finish's own calls, by var." [_world] {})
+
+
+(defn merge-substitutes "What the world answers in place of kit merge's own calls, by var." [_world] {})
+
+
+(defn release-substitutes "What the world answers in place of kit release's own calls, by var." [_world] {})
+
+
+(defn checks-substitutes "What the world answers in place of kit checks' own calls, by var." [_world] {})
+
+
+(defn review-substitutes "What the world answers in place of kit review's own calls, by var." [_world] {})
+
+
+(def ^:private real-world-primitives
+  "The calls that reach gh, git or a process, with the name a refusal gives."
+  [[#'shell/run "shell/run"]
+   [#'shell/shell "shell/shell"]
+   [#'shell/gh! "shell/gh!"]
+   [#'shell/gh-out "shell/gh-out"]
+   [#'shell/git-out "shell/git-out"]
+   [#'board/board-gh! "board/board-gh!"]])
+
+
+(defn- real-world-guards
+  "Each real-world primitive, replaced by a function that fails the story naming the call. An Error, not an
+  exception: a step's `catch Exception` must not hide that a substitute is missing."
+  []
+  (into {}
+        (for [[v label] real-world-primitives]
+          [v
+           (fn [& args]
+             (throw (AssertionError. (str "the story reached the real world: " label " " (str/join " " args)))))])))
+
+
+(defn with-github
+  "Runs `f` with the world in place of GitHub and git: the shared functions, the command's own, the clock, all by
+  var, over the world's atom. A call with no substitute reaches a guard that fails the story naming the call. The
+  substitution is global while `f` runs, so stories run one after another."
+  [world f]
+  (with-redefs-fn (merge (real-world-guards)
+                         (shared-substitutes world)
+                         (start-substitutes world)
+                         (finish-substitutes world)
+                         (merge-substitutes world)
+                         (release-substitutes world)
+                         (checks-substitutes world)
+                         (review-substitutes world))
+    f))

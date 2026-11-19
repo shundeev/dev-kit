@@ -7,8 +7,8 @@
 
 (defn- refused
   [& fail-args]
-  (steps/refusal (steps/run {} {}
-                   :check (fn [_ _] (apply steps/fail! fail-args)))))
+  (steps/refusal (steps/run {}
+                   :check (fn [_] (apply steps/fail! fail-args)))))
 
 
 (deftest a-refusal-prints-error-and-exits-1
@@ -21,11 +21,10 @@
 
 
 (deftest the-run-stops-at-the-first-refusal-and-keeps-what-it-gathered
-  (let [result (steps/run {}
-                {:args []}
-                 :read  (fn [_ _] {:branch "7-fix"})
-                 :check (fn [_ facts] (steps/fail! :x/bad (str "bad " (:branch facts))))
-                 :never (fn [_ _] {:never true}))]
+  (let [result (steps/run {:args []}
+                 :read  (fn [_] {:branch "7-fix"})
+                 :check (fn [facts] (steps/fail! :x/bad (str "bad " (:branch facts))))
+                 :never (fn [_] {:never true}))]
     (is (= :fail (::steps/status result)))
     (is (= [:read] (::steps/done result)))
     (is (= :check (::steps/stopped-at result)))

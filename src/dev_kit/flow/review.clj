@@ -172,7 +172,7 @@ Environment: GHWF_HUMAN, the owner's login (kit init or kit identity set it); GH
 (defn review
   "kit review as a recipe. GitHub is (:github ctx), the clock (:sleep ctx) and the waiting line (:out ctx)."
   [ctx input]
-  (steps/run ctx input
+  (steps/run-with-ctx ctx input
     :check-owner     check-owner
     :read-repo       checks/read-repo
     :read-poll       checks/read-poll
