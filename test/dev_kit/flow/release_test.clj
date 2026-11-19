@@ -15,17 +15,21 @@
 (defn- held-draft [& {:as more}] (merge {:branch "7-held" :draft true :labels ["hold"] :checks green} more))
 
 
+(defn- lines [writer] (vec (remove str/blank? (str/split-lines (str writer)))))
+
+
 (defn- kit-release
   "Runs kit release with the command-line words. Returns the result, the lines printed under :printed, the warnings
   under :warnings."
   [world & args]
-  (let [printed  (atom [])
-        warnings (atom [])
-        ctx      {:github       (fake/github world)
-                  :out          #(swap! printed conj %)
-                  :warn         (fn [& msg] (swap! warnings conj (str/join " " msg)))
-                  :resolve-repo (fn [explicit] (or explicit "o/r"))}]
-    (assoc (release/release ctx (release/read-input (vec args))) :printed @printed :warnings @warnings)))
+  (let [out    (java.io.StringWriter.)
+        err    (java.io.StringWriter.)
+        result (binding [*out* out
+                         *err* err]
+                 (fake/with-github world #(release/release (release/read-input (vec args)))))]
+    (assoc result
+           :printed  (lines out)
+           :warnings (lines err))))
 
 
 (defn- said [result] (get-in result [::steps/problem :message] ""))

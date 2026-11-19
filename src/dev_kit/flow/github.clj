@@ -8,7 +8,6 @@
   `((:github ctx) :op args…)` and tests hand an in-memory GitHub. A map goes away with its command; no name may
   appear in two maps."
   (:require
-   [cheshire.core :as json]
    [clojure.string :as str]
    [dev-kit.flow.board :as board]
    [dev-kit.flow.shell :as shell]
@@ -119,32 +118,6 @@
    :auto-merge!     auto-merge!
    :issue-url       issue-url
    :set-field!      set-field!})
-
-
-(def release-operations
-  "kit release's operations."
-  {:view-pr-for-release
-   (fn [pr repo]
-     (let [{:keys [state isDraft labels url]}
-           (json/parse-string (shell/gh! "pr" "view" pr
-                                "-R"     repo
-                                "--json" "state,isDraft,labels,url")
-                              true)]
-       {:state state
-        :draft isDraft
-        :hold  (boolean (some #(= "hold" (:name %)) labels))
-        :url   url}))
-
-   :remove-label!
-   (fn [pr repo label]
-     (shell/ok! (shell/shell "gh" "pr" "edit" pr
-                  "-R"             repo
-                  "--remove-label" label)))
-
-   :mark-ready!
-   (fn [pr repo]
-     (shell/ok! (shell/shell "gh" "pr" "ready" pr "-R" repo)))
-  })
 
 
 (def checks-operations
@@ -269,10 +242,9 @@
 
 (def command-operations
   "Each command's operations by the command, the shared ones under :shared."
-  {:shared  shared-operations
-   :release release-operations
-   :checks  checks-operations
-   :review  review-operations})
+  {:shared shared-operations
+   :checks checks-operations
+   :review review-operations})
 
 
 (def operations

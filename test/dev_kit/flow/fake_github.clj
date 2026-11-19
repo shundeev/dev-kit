@@ -9,6 +9,7 @@
    [dev-kit.flow.finish :as finish]
    [dev-kit.flow.github :as github]
    [dev-kit.flow.merge :as merge-cmd]
+   [dev-kit.flow.release :as release]
    [dev-kit.flow.shell :as shell]
    [dev-kit.flow.start :as start]
    [dev-kit.flow.wait :as wait]))
@@ -385,28 +386,6 @@
   (throw (ex-info (format "git would refuse: %s" message) {})))
 
 
-(defn- release-operations
-  "kit release's operations. A pull request that does not exist is an error, as gh's would end the run. A PR's
-  :refuse-auto-merge is the text GitHub answers when it does not allow auto-merge (the shared :auto-merge!)."
-  [world]
-  (let [pr-or-throw (fn [pr]
-                      (or (pr-of @world pr) (throw (ex-info (str "no pull request " pr) {:pr pr}))))
-        change-pr   (fn [pr change] (swap! world update-in [:prs (:number (pr-or-throw pr))] change))]
-    {:view-pr-for-release
-     (fn [pr _repo]
-       (let [found (pr-or-throw pr)]
-         {:state (:state found)
-          :draft (boolean (:draft found))
-          :hold  (boolean (some #{"hold"} (:labels found)))
-          :url   (:url found)}))
-
-     :remove-label!
-     (fn [pr _repo label] (change-pr pr #(update % :labels (fn [labels] (vec (remove #{label} labels))))))
-
-     :mark-ready!
-     (fn [pr _repo] (change-pr pr #(assoc % :draft false)))}))
-
-
 (defn- checks-operations
   "kit checks' operations. The world's options: :required-contexts, the checks the base requires (default none);
   :rules-unreadable, gh's output when reading the base's rules fails; :ready-runs, the ready workflow's runs
@@ -629,10 +608,9 @@
 (defn- command-operations
   "Each command's operations over the world, by the command, as `dev-kit.flow.github/command-operations` keeps them."
   [world]
-  {:shared  (shared-operations world)
-   :release (release-operations world)
-   :checks  (checks-operations world)
-   :review  (review-operations world)})
+  {:shared (shared-operations world)
+   :checks (checks-operations world)
+   :review (review-operations world)})
 
 
 (defn- operations-over
@@ -785,7 +763,27 @@
          {:exit 0 :out "" :err ""})))})
 
 
-(defn release-substitutes "What the world answers in place of kit release's own calls, by var." [_world] {})
+(defn release-substitutes
+  "What the world answers in place of kit release's own calls, by var. A pull request that does not exist is an error,
+  as gh's would end the run. A PR's :refuse-auto-merge is the text GitHub answers when it does not allow auto-merge
+  (the shared auto-merge!)."
+  [world]
+  (let [pr-or-throw (fn [pr]
+                      (or (pr-of @world pr) (throw (ex-info (str "no pull request " pr) {:pr pr}))))
+        change-pr   (fn [pr change] (swap! world update-in [:prs (:number (pr-or-throw pr))] change))]
+    {#'release/view-pr-for-release
+     (fn [pr _repo]
+       (let [found (pr-or-throw pr)]
+         {:state (:state found)
+          :draft (boolean (:draft found))
+          :hold  (boolean (some #{"hold"} (:labels found)))
+          :url   (:url found)}))
+
+     #'release/remove-label!
+     (fn [pr _repo label] (change-pr pr #(update % :labels (fn [labels] (vec (remove #{label} labels))))))
+
+     #'release/mark-ready!
+     (fn [pr _repo] (change-pr pr #(assoc % :draft false)))}))
 
 
 (defn checks-substitutes "What the world answers in place of kit checks' own calls, by var." [_world] {})
