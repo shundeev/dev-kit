@@ -751,7 +751,7 @@
 (def ^:private real-world-primitives
   "The calls that reach gh, git or a process, with the name a refusal gives."
   [[#'shell/run "shell/run"]
-   [#'shell/shell "shell/shell"]
+   [#'shell/run-on-terminal "shell/run-on-terminal"]
    [#'shell/gh! "shell/gh!"]
    [#'shell/gh-out "shell/gh-out"]
    [#'shell/git-out "shell/git-out"]

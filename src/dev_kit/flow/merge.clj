@@ -114,7 +114,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 (defn- update-branch!
   "gh pr update-branch: merges the base into the branch. The exit code, gh's own output on the terminal."
   [pr-url]
-  (shell/shell "gh" "pr" "update-branch" pr-url))
+  (shell/run-on-terminal "gh" "pr" "update-branch" pr-url))
 
 
 (defn- judge-pr
@@ -179,7 +179,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 (defn- squash-merge!
   "gh pr merge --squash: the exit code, gh's own output on the terminal."
   [pr-url]
-  (shell/shell "gh" "pr" "merge" pr-url "--squash"))
+  (shell/run-on-terminal "gh" "pr" "merge" pr-url "--squash"))
 
 
 (defn- turn-on-the-merge
@@ -254,7 +254,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 (defn- fetch-base!
   "git fetch of the base branch; git's own exit code ends the run when it fails."
   [base]
-  (shell/ok! (shell/shell "git" "fetch" "-q" "origin" base)))
+  (shell/run-on-terminal! "git" "fetch" "-q" "origin" base))
 
 
 (defn- worktree-branches
@@ -268,17 +268,17 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 
 (defn- detach-at-base!
   [base]
-  (shell/ok! (shell/shell "git" "switch" "-q" "--detach" (str "origin/" base))))
+  (shell/run-on-terminal! "git" "switch" "-q" "--detach" (str "origin/" base)))
 
 
 (defn- switch-to!
   [branch]
-  (shell/ok! (shell/shell "git" "switch" "-q" branch)))
+  (shell/run-on-terminal! "git" "switch" "-q" branch))
 
 
 (defn- pull-ff-only!
   []
-  (shell/ok! (shell/shell "git" "pull" "-q" "--ff-only")))
+  (shell/run-on-terminal! "git" "pull" "-q" "--ff-only"))
 
 
 (defn- leave-branch
@@ -295,7 +295,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 
 (defn- delete-local-branch!
   [branch]
-  (shell/ok! (shell/shell "git" "branch" "-D" branch)))
+  (shell/run-on-terminal! "git" "branch" "-D" branch))
 
 
 (defn- remote-branch?
@@ -305,7 +305,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 
 (defn- delete-remote-branch!
   [branch]
-  (shell/ok! (shell/shell "git" "push" "origin" "--delete" branch)))
+  (shell/run-on-terminal! "git" "push" "origin" "--delete" branch))
 
 
 (defn- delete-branches

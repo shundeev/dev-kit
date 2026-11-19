@@ -114,9 +114,10 @@ Options:
 (defn- remove-label!
   "gh pr edit --remove-label."
   [pr repo label]
-  (shell/ok! (shell/shell "gh" "pr" "edit" pr
-               "-R"             repo
-               "--remove-label" label)))
+  (shell/run-on-terminal! "gh"   "pr"
+                          "edit" pr
+                          "-R"   repo
+                          "--remove-label" label))
 
 
 (defn- remove-hold
@@ -131,7 +132,7 @@ Options:
 (defn- mark-ready!
   "gh pr ready."
   [pr repo]
-  (shell/ok! (shell/shell "gh" "pr" "ready" pr "-R" repo)))
+  (shell/run-on-terminal! "gh" "pr" "ready" pr "-R" repo))
 
 
 (defn- mark-ready

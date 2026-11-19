@@ -260,7 +260,7 @@ Options:
 (defn- stage!
   "git add: the paths, ending the run when git refuses."
   [paths]
-  (shell/ok! (apply shell/shell "git" "add" "--" paths)))
+  (apply shell/run-on-terminal! "git" "add" "--" paths))
 
 
 (defn- staged?
@@ -272,9 +272,9 @@ Options:
 (defn- commit!
   "git commit with the message file, else with the subject, ending the run when git refuses."
   [message-file subject]
-  (shell/ok! (if message-file
-               (shell/shell "git" "commit" "-F" message-file)
-               (shell/shell "git" "commit" "-m" subject))))
+  (if message-file
+    (shell/run-on-terminal! "git" "commit" "-F" message-file)
+    (shell/run-on-terminal! "git" "commit" "-m" subject)))
 
 
 (defn- commit
@@ -291,7 +291,7 @@ Options:
 (defn- push!
   "git push -u origin <branch>, ending the run when git refuses."
   [branch]
-  (shell/ok! (shell/shell "git" "push" "-u" "origin" branch)))
+  (shell/run-on-terminal! "git" "push" "-u" "origin" branch))
 
 
 (defn- push
