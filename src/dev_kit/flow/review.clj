@@ -112,7 +112,7 @@ Environment: GHWF_HUMAN, the owner's login (kit init or kit identity set it); GH
 (defn- read-reviews
   "The step that reads the pull request's reviews and threads."
   [{:keys [github]} {:keys [pr repo]}]
-  {:seen (github :read-reviews pr repo (checks/no-result "review"))})
+  {:seen (github :read-reviews pr repo checks/no-result)})
 
 
 (defn- announce-wait
@@ -172,17 +172,18 @@ Environment: GHWF_HUMAN, the owner's login (kit init or kit identity set it); GH
 (defn review
   "kit review as a recipe. GitHub is (:github ctx), the clock (:sleep ctx) and the waiting line (:out ctx)."
   [ctx input]
-  (steps/run-with-ctx ctx input
-    :check-owner     check-owner
-    :read-repo       checks/read-repo
-    :read-poll       checks/read-poll
-    :read-branch     checks/read-branch
-    :check-pr-option (checks/check-pr-option "review")
-    :find-pr         (checks/find-pr "review")
-    :read-reviews    read-reviews
-    :announce-wait   announce-wait
-    :wait-for-review wait-for-review
-    :find-the-review find-the-review))
+  (let [shared (fn [step] (fn [_ctx facts] (step facts)))]
+    (steps/run-with-ctx ctx (assoc input :command "review")
+      :check-owner     check-owner
+      :read-repo       (shared checks/read-repo)
+      :read-poll       (shared checks/read-poll)
+      :read-branch     (shared checks/read-branch)
+      :check-pr-option (shared checks/check-pr-option)
+      :find-pr         (shared checks/find-pr)
+      :read-reviews    read-reviews
+      :announce-wait   announce-wait
+      :wait-for-review wait-for-review
+      :find-the-review find-the-review)))
 
 
 (defn review!

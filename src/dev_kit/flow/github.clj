@@ -120,32 +120,6 @@
    :set-field!      set-field!})
 
 
-(def checks-operations
-  "kit checks' operations. A gh call that gives no answer goes to the step's `fail` with gh's message."
-  {:required-contexts
-   (fn [repo base fail]
-     (->> (wait/gh-json fail "api" (str "repos/" repo "/rules/branches/" base))
-          (filter #(= "required_status_checks" (:type %)))
-          (mapcat #(get-in % [:parameters :required_status_checks]))
-          (map :context)
-          distinct
-          vec))
-
-   :ready-runs
-   (fn [repo fail]
-     (wait/gh-json fail
-                   "run"        "list"
-                   "-R"         repo
-                   "--workflow" (last (str/split ready-workflow-path #"/"))
-                   "--event"    "workflow_run"
-                   "--limit"    "20"
-                   "--json"     "databaseId,status"))
-
-   :run-log
-   (fn [repo id]
-     (:out (shell/run "gh" "run" "view" (str id) "-R" repo "--log")))})
-
-
 (def reviews-query
   "A pull request's state, the head commit's date, its reviews and review threads (PullRequest.reviews, .reviewThreads
   and .commits, docs.github.com/en/graphql/reference/pulls), and who is asking (viewer). A thread's `line` is null once its code changed: `originalLine` then
@@ -243,7 +217,6 @@
 (def command-operations
   "Each command's operations by the command, the shared ones under :shared."
   {:shared shared-operations
-   :checks checks-operations
    :review review-operations})
 
 

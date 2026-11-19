@@ -6,6 +6,7 @@
   (:require
    [clojure.string :as str]
    [dev-kit.flow.board :as board]
+   [dev-kit.flow.checks :as checks]
    [dev-kit.flow.finish :as finish]
    [dev-kit.flow.github :as github]
    [dev-kit.flow.merge :as merge-cmd]
@@ -386,24 +387,6 @@
   (throw (ex-info (format "git would refuse: %s" message) {})))
 
 
-(defn- checks-operations
-  "kit checks' operations. The world's options: :required-contexts, the checks the base requires (default none);
-  :rules-unreadable, gh's output when reading the base's rules fails; :ready-runs, the ready workflow's runs
-  {:databaseId :status :log}, which an event of the script may change."
-  [world]
-  {:required-contexts
-   (fn [repo base fail]
-     (if-let [output (:rules-unreadable @world)]
-       (fail (wait/gh-failure-text (str "api repos/" repo "/rules/branches/" base) output))
-       (vec (distinct (:required-contexts @world)))))
-
-   :ready-runs
-   (fn [_repo _fail] (mapv #(select-keys % [:databaseId :status]) (:ready-runs @world)))
-
-   :run-log
-   (fn [_repo id] (some #(when (= id (:databaseId %)) (:log %)) (:ready-runs @world)))})
-
-
 (defn- review-operations
   "kit review's operations. The world's :viewer is who runs kit (default \"the-agent\"); a pull request's
   :committed is its head commit's date. A pull request's :reviews are {:author :state :at :body} and its :threads
@@ -609,7 +592,6 @@
   "Each command's operations over the world, by the command, as `dev-kit.flow.github/command-operations` keeps them."
   [world]
   {:shared (shared-operations world)
-   :checks (checks-operations world)
    :review (review-operations world)})
 
 
@@ -786,7 +768,22 @@
      (fn [pr _repo] (change-pr pr #(assoc % :draft false)))}))
 
 
-(defn checks-substitutes "What the world answers in place of kit checks' own calls, by var." [_world] {})
+(defn checks-substitutes
+  "What the world answers in place of kit checks' own calls, by var. The world's options: :required-contexts, the checks
+  the base requires (default none); :rules-unreadable, gh's output when reading the base's rules fails; :ready-runs,
+  the ready workflow's runs {:databaseId :status :log}, which an event of the script may change."
+  [world]
+  {#'checks/required-contexts
+   (fn [repo base fail]
+     (if-let [output (:rules-unreadable @world)]
+       (fail (wait/gh-failure-text (str "api repos/" repo "/rules/branches/" base) output))
+       (vec (distinct (:required-contexts @world)))))
+
+   #'checks/ready-runs
+   (fn [_repo _fail] (mapv #(select-keys % [:databaseId :status]) (:ready-runs @world)))
+
+   #'checks/run-log
+   (fn [_repo id] (some #(when (= id (:databaseId %)) (:log %)) (:ready-runs @world)))})
 
 
 (defn review-substitutes "What the world answers in place of kit review's own calls, by var." [_world] {})

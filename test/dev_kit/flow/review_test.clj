@@ -31,8 +31,8 @@
                  :resolve-repo (fn [explicit] (or explicit "o/r"))
                  :sleep        (fake/clock world)
                  :out          #(swap! printed conj %)}
-        result  (review/review ctx
-                               (review/read-input (vec args) (fn [variable default] (get variables variable default))))
+        input   (review/read-input (vec args) (fn [variable default] (get variables variable default)))
+        result  (fake/with-github world #(review/review ctx input))
         refusal (when (= :fail (::steps/status result))
                   (steps/refusal result))]
     {:printed (str/join "\n"

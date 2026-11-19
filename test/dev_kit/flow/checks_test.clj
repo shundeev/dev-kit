@@ -24,18 +24,17 @@
   "Runs kit checks with the command-line words against the world. Returns what the owner reads (:printed, in order,
   those during the wait and the end) and how it ended: :exit and :text of a refusal (0 and nil when it passed)."
   [world variables & args]
-  (let [printed (atom [])
-        out     #(swap! printed conj %)
-        ctx     {:github       (fake/github world)
-                 :resolve-repo (fn [explicit] (or explicit "o/r"))
-                 :sleep        (fake/clock world)
-                 :out          out}
-        result  (checks/checks ctx
-                               (checks/read-input (vec args) (fn [variable default] (get variables variable default))))
+  (let [out     (java.io.StringWriter.)
+        input   (checks/read-input (vec args) (fn [variable default] (get variables variable default)))
+        result  (binding [*out* out]
+                  (fake/with-github world
+                                    (fn []
+                                      (let [result (checks/checks input)]
+                                        (checks/print-result result)
+                                        result))))
         refusal (when (= :fail (::steps/status result))
                   (steps/refusal result))]
-    (checks/print-result out result)
-    {:printed (str/join "\n" @printed)
+    {:printed (str/trim-newline (str out))
      :exit    (get refusal :exit 0)
      :text    (:text refusal)}))
 
