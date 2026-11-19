@@ -302,10 +302,10 @@
    (fn [pr _repo fail]
      (let [found (pr-of @world pr)]
        (cond (nil? found)
-             (fail (wait/gh-failure-text
+             (fail (github/gh-failure-text
                     "pr view"
                     (str "GraphQL: Could not resolve to a PullRequest with the number of " pr ".")))
-             (:unreadable found) (fail (wait/gh-failure-text "pr view" (:unreadable found)))
+             (:unreadable found) (fail (github/gh-failure-text "pr view" (:unreadable found)))
              :else
              {:state       (:state found)
               :decision    (:decision found)
@@ -321,7 +321,7 @@
    (fn [pr _repo fail]
      (let [found (pr-of @world pr)]
        (if-let [output (:checks-unreadable found)]
-         (fail (wait/checks-failure-text pr output))
+         (fail (github/checks-failure-text pr output))
          (vec (:checks found)))))
 
    #'github/ready-workflow?
@@ -352,7 +352,7 @@
        {:exit 0 :out (str (:url issue) "\n") :err ""}
        {:exit 1 :out "" :err (str "Could not resolve to an issue with the number of " number ".")}))
 
-   #'github/set-field!
+   #'board/board-set-field
    (fn [_project-number _owner url field option]
      (if (= field (:refuse-field @world))
        (str "GraphQL: the fake board has no option '" option "' in " field)
@@ -720,7 +720,7 @@
   {#'checks/required-contexts
    (fn [repo base fail]
      (if-let [output (:rules-unreadable @world)]
-       (fail (wait/gh-failure-text (str "api repos/" repo "/rules/branches/" base) output))
+       (fail (github/gh-failure-text (str "api repos/" repo "/rules/branches/" base) output))
        (vec (distinct (:required-contexts @world)))))
 
    #'checks/ready-runs
@@ -740,7 +740,7 @@
    (fn [pr _repo fail]
      (let [found (pr-of @world pr)]
        (if-let [output (:reviews-unreadable found)]
-         (fail (wait/gh-failure-text "api graphql" output))
+         (fail (github/gh-failure-text "api graphql" output))
          {:state          (:state found)
           :viewer         (:viewer @world "the-agent")
           :head-committed (:committed found)

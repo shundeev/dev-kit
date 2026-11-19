@@ -4,10 +4,11 @@
   (COMMENTED), so a wait that watched any review fired on them: only the owner's login counts."
   (:require
    [clojure.string :as str]
-   [dev-kit.flow.checks :as checks]
+   [dev-kit.flow.github :as github]
    [dev-kit.flow.shell :as shell]
    [dev-kit.flow.steps :as steps]
-   [dev-kit.flow.wait :as wait]))
+   [dev-kit.flow.wait :as wait]
+   [dev-kit.flow.watched-pr :as watched-pr]))
 
 
 (def review-usage
@@ -165,7 +166,7 @@ Environment: GHWF_HUMAN, the owner's login (kit init or kit identity set it); GH
     (loop [reviews-after nil
            threads-after nil
            result        {:reviews [] :threads []}]
-      (let [response (apply wait/gh-json
+      (let [response (apply github/gh-json
                             fail
                             "api"
                             "graphql"
@@ -183,8 +184,8 @@ Environment: GHWF_HUMAN, the owner's login (kit init or kit identity set it); GH
                                       ["-f" (str "threadsAfter=" threads-after)])))
             request  (get-in response [:data :repository :pullRequest])]
         (when-not request
-          (fail (wait/gh-failure-text "api graphql"
-                                      (str (or (some-> response :errors first :message) "no such pull request")))))
+          (fail (github/gh-failure-text "api graphql"
+                                        (str (or (some-> response :errors first :message) "no such pull request")))))
         (let [{:keys [reviews reviewThreads]} request
               result (->
                       result
@@ -201,7 +202,7 @@ Environment: GHWF_HUMAN, the owner's login (kit init or kit identity set it); GH
 (defn- read-reviews
   "The step that reads the pull request's reviews and threads."
   [{:keys [pr repo]}]
-  {:seen (graphql-reviews pr repo checks/no-result)})
+  {:seen (graphql-reviews pr repo watched-pr/no-result)})
 
 
 (defn- announce-wait
@@ -263,11 +264,11 @@ Environment: GHWF_HUMAN, the owner's login (kit init or kit identity set it); GH
   [input]
   (steps/run (assoc input :command "review")
     :check-owner     check-owner
-    :read-repo       checks/read-repo
-    :read-poll       checks/read-poll
-    :read-branch     checks/read-branch
-    :check-pr-option checks/check-pr-option
-    :find-pr         checks/find-pr
+    :read-repo       watched-pr/read-repo
+    :read-poll       watched-pr/read-poll
+    :read-branch     watched-pr/read-branch
+    :check-pr-option watched-pr/check-pr-option
+    :find-pr         watched-pr/find-pr
     :read-reviews    read-reviews
     :announce-wait   announce-wait
     :wait-for-review wait-for-review

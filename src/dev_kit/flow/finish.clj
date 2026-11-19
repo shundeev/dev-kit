@@ -386,7 +386,7 @@ Options:
                 (str/trim out))]
       (if (str/blank? url)
         (shell/warn (format "Warning: issue #%s not found, Status not set" number))
-        (when-let [failure (github/set-field! project-number owner url status-field review-status)]
+        (when-let [failure (board/board-set-field project-number owner url status-field review-status)]
           (steps/fail!
            :finish/status-refused
            (format "The pull request is open: %s. But the board %s of #%s is not '%s': %s. Set it alone: %s"

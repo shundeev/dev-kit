@@ -47,38 +47,6 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
    "-h"            [:help :flag]})
 
 
-(declare resolve-repo
-         check-branch
-         read-poll
-         find-pr
-         wait-for-the-merge
-         mark-done-on-board
-         leave-branch
-         delete-branches
-         report-merged
-         close-linked-issues
-         report-board-error)
-
-
-(defn merge-pr
-  "kit merge as a recipe, from the command line's input (with the path of bin/kit as :kit). The lines printed while it
-  waits go to stdout, the warnings to stderr. A board error is kept as a fact and raised by the last step, after the
-  closeout: the merge is done by then."
-  [input]
-  (steps/run input
-    :resolve-repo        resolve-repo
-    :check-branch        check-branch
-    :read-poll           read-poll
-    :find-pr             find-pr
-    :wait-for-the-merge  wait-for-the-merge
-    :mark-done-on-board  mark-done-on-board
-    :leave-branch        leave-branch
-    :delete-branches     delete-branches
-    :report-merged       report-merged
-    :close-linked-issues close-linked-issues
-    :report-board-error  report-board-error))
-
-
 ;; ------------------------------------------------------------------ the branch and its pull request
 
 
@@ -273,7 +241,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
            (str/trim err))
          {:exit exit :plain true}))
       (let [url (str/trim out)]
-        (if-let [failure (github/set-field! project-number owner url status-field done-status)]
+        (if-let [failure (board/board-set-field project-number owner url status-field done-status)]
           {:board-error (format "The board %s of #%s is not '%s': %s. Set it alone: %s"
                                 status-field
                                 number
@@ -358,7 +326,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 (defn- closing-issues
   "The issues the pull request closes, {:number :url} each; an unreadable answer goes to `fail`."
   [pr-url fail]
-  (:closingIssuesReferences (wait/gh-json fail "pr" "view" pr-url "--json" "closingIssuesReferences")))
+  (:closingIssuesReferences (github/gh-json fail "pr" "view" pr-url "--json" "closingIssuesReferences")))
 
 
 (defn- issue-state
@@ -399,6 +367,25 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
   (when board-error
     (steps/fail! :merge/board-refused board-error))
   {})
+
+
+(defn merge-pr
+  "kit merge as a recipe, from the command line's input (with the path of bin/kit as :kit). The lines printed while it
+  waits go to stdout, the warnings to stderr. A board error is kept as a fact and raised by the last step, after the
+  closeout: the merge is done by then."
+  [input]
+  (steps/run input
+    :resolve-repo        resolve-repo
+    :check-branch        check-branch
+    :read-poll           read-poll
+    :find-pr             find-pr
+    :wait-for-the-merge  wait-for-the-merge
+    :mark-done-on-board  mark-done-on-board
+    :leave-branch        leave-branch
+    :delete-branches     delete-branches
+    :report-merged       report-merged
+    :close-linked-issues close-linked-issues
+    :report-board-error  report-board-error))
 
 
 ;; ------------------------------------------------------------------ the edges

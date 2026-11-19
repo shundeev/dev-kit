@@ -4,10 +4,9 @@
   the selftest's fake gh checks them as strings. A function returns data and decides nothing: refusing is the
   step's. A call only one command needs sits in that command's file, above its step."
   (:require
+   [cheshire.core :as json]
    [clojure.string :as str]
-   [dev-kit.flow.board :as board]
-   [dev-kit.flow.shell :as shell]
-   [dev-kit.flow.wait :as wait]))
+   [dev-kit.flow.shell :as shell]))
 
 
 (defn issue-url
@@ -17,12 +16,6 @@
     "-R"     repo
     "--json" "url"
     "--jq"   ".url"))
-
-
-(defn set-field!
-  "A single-select field of the issue's card: nil, or why the board refused."
-  [project-number owner url field option]
-  (board/board-set-field project-number owner url field option))
 
 
 (def ready-workflow-path ".github/workflows/ready-when-green.yml")
@@ -73,16 +66,77 @@
                "--jq"    ".[0].url // empty")))
 
 
+(defn- pr-args
+  "The pull request as gh takes it: a URL alone, a number with its repository."
+  [pr repo]
+  (if (re-matches #"\d+" (str pr))
+    [(str pr) "-R" repo]
+    [pr]))
+
+
+(defn gh-failure-text
+  "What a failed gh call says: the command's first two words and gh's output."
+  [command output]
+  (format
+   "gh %s failed: %s. Fix: run it by hand to see why; an unreachable GitHub and an expired token both show there."
+   command
+   (str/trim output)))
+
+
+(defn gh-json
+  "A gh call's JSON output. A call that fails goes to `fail` (die, or a stop with its own exit code) with gh's message."
+  [fail & args]
+  (let [{:keys [exit out err]} (apply shell/run "gh" args)]
+    (if (zero? exit)
+      (json/parse-string out true)
+      (fail (gh-failure-text (str/join " " (take 2 args)) (str out err))))))
+
+
 (defn read-pr
-  "The pull request as data, see wait/read-pr; a failed read goes to `fail` with gh's message."
+  "A pull request's JSON fields: :state, :decision (nil when there is no review decision), :merge-state, :head, :base,
+  :draft, :hold (it carries the label hold), :owners (who is asked for a review), :auto-merge."
   [pr repo fail]
-  (wait/read-pr pr repo fail))
+  (let
+    [j
+     (apply
+      gh-json
+      fail
+      "pr"
+      "view"
+      (concat
+       (pr-args pr repo)
+       ["--json"
+        "state,reviewDecision,mergeStateStatus,headRefOid,baseRefName,isDraft,labels,reviewRequests,autoMergeRequest"]))]
+    {:state       (:state j)
+     :decision    (not-empty (:reviewDecision j))
+     :merge-state (:mergeStateStatus j)
+     :head        (:headRefOid j)
+     :base        (:baseRefName j)
+     :draft       (:isDraft j)
+     :hold        (boolean (some #(= "hold" (:name %)) (:labels j)))
+     :owners      (map #(or (:login %) (:slug %)) (:reviewRequests j))
+     :auto-merge  (some? (:autoMergeRequest j))}))
+
+
+(defn checks-failure-text
+  "What a failed `gh pr checks` says: the pull request as gh took it and gh's output."
+  [pr output]
+  (format
+   "gh pr checks failed: %s. Fix: run `gh pr checks %s --required` by hand to see why; an unreachable GitHub and an expired token both show there."
+   (str/trim output)
+   pr))
 
 
 (defn required-checks
-  "The pull request's required checks, see wait/required-checks."
+  "The required checks registered on the pull request's head commit, as {:name :bucket :link}; [] when none is."
   [pr repo fail]
-  (wait/required-checks pr repo fail))
+  (let [{:keys [out err]}
+        (apply shell/run "gh" "pr" "checks" (concat (pr-args pr repo) ["--required" "--json" "name,bucket,link"]))
+        parsed (try (json/parse-string out true) (catch Exception _ nil))]
+    (cond (sequential? parsed) parsed
+          (re-find #"(?i)no (required )?checks reported" (str out err)) []
+          :else
+          (fail (checks-failure-text (first (pr-args pr repo)) (str out err))))))
 
 
 (defn auto-merge!

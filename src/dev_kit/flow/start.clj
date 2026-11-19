@@ -78,33 +78,6 @@ Options:
    "-h"               [:help :flag]})
 
 
-(declare check-input
-         check-milestone
-         check-retro
-         note-graphql-budget
-         find-or-file-issue
-         put-on-board
-         label-and-assign
-         set-board-fields
-         create-branch)
-
-
-(defn start
-  "kit start as a recipe, from the command line's input (with the path of bin/kit as :kit). Nothing is filed before
-  every check has passed; the result is data that start! prints."
-  [input]
-  (steps/run input
-    :check-input         check-input
-    :check-milestone     check-milestone
-    :check-retro         check-retro
-    :note-graphql-budget note-graphql-budget
-    :find-or-file-issue  find-or-file-issue
-    :put-on-board        put-on-board
-    :label-and-assign    label-and-assign
-    :set-board-fields    set-board-fields
-    :create-branch       create-branch))
-
-
 ;; ------------------------------------------------------------------ checks, before anything exists
 
 
@@ -522,7 +495,7 @@ Options:
            status-field status]}]
   (let [field! (fn [field option]
                  (when-not (str/blank? option)
-                   (when-let [e (github/set-field! project-number owner url field option)]
+                   (when-let [e (board/board-set-field project-number owner url field option)]
                      (steps/fail! :start/field-refused
                                   (str "#" number
                                        " is filed, but its " field
@@ -582,6 +555,22 @@ Options:
       {:branch (if no-checkout
                  (second (re-find #"/tree/(.*)$" (or out "")))
                  (current-branch))})))
+
+
+(defn start
+  "kit start as a recipe, from the command line's input (with the path of bin/kit as :kit). Nothing is filed before
+  every check has passed; the result is data that start! prints."
+  [input]
+  (steps/run input
+    :check-input         check-input
+    :check-milestone     check-milestone
+    :check-retro         check-retro
+    :note-graphql-budget note-graphql-budget
+    :find-or-file-issue  find-or-file-issue
+    :put-on-board        put-on-board
+    :label-and-assign    label-and-assign
+    :set-board-fields    set-board-fields
+    :create-branch       create-branch))
 
 
 ;; ------------------------------------------------------------------ the edges
