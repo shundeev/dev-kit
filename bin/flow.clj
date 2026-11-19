@@ -6,6 +6,7 @@
 ;;   kit release  a held pull request: removes the label hold, marks it ready, turns auto-merge on (ADR-0007)
 ;;   kit merge    after the owner's Approve: waits for the merge, sets the card Done, removes the branch
 ;;   kit checks   waits until the pull request's required checks exist and have finished, and says how they ended (#109)
+;;   kit review   the owner's latest review and the unresolved review threads; --wait until the owner reviews again
 ;;   kit board set <project-number> <owner> <issue-url> <field> <option>   one field of one card (#41)
 ;;   kit board show   the board of the folder's kit.edn as JSON
 ;;
@@ -17,6 +18,6 @@
 
 
 (defn main
-  "kit start | finish | release | merge | checks | board, with the path of bin/kit for the commands that call it back."
+  "kit start | finish | release | merge | checks | review | board, with the path of bin/kit for the commands that call it back."
   [cmd args kit]
   (main/main cmd args kit))

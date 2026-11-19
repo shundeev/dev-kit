@@ -131,7 +131,7 @@
 
 (defn- foreground-wait
   "A statement that waits for one event while the call is not in the background (#109): gh pr checks --watch,
-  gh run watch, kit merge, kit checks (also inside a loop), and a sleep that is not in a loop body. A sleep in a loop
+  gh run watch, kit merge, kit checks, kit review --wait (also inside a loop), and a sleep that is not in a loop body. A sleep in a loop
   is a poll loop, Monitor's normal use. The guard cannot tell a foreground `until …; do sleep 1; done` from a Monitor
   poll loop (a Monitor call arrives as a Bash call), so that one passes; the skill's rule in words covers it: a wait
   for one event runs as a background Bash command."
@@ -145,7 +145,9 @@
                (or (and (= (base head) "sleep") (not (:in-loop? described)))
                    (and (= (base head) "gh") (= sub "run") (= verb "watch"))
                    (and (= (base head) "gh") (= sub "pr") (= verb "checks") (some #{"--watch" "-w"} texts))
-                   (and (= (base (first kit)) "kit") (#{"merge" "checks"} (second kit)))))
+                   (and (= (base (first kit)) "kit")
+                        (or (#{"merge" "checks"} (second kit))
+                            (and (= "review" (second kit)) (some #{"--wait"} texts))))))
       (deny
        :foreground-wait
        "Refused: this command waits. Run it as a background command (run_in_background); you are woken when it exits (#109)."))))
