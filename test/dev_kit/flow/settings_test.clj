@@ -52,12 +52,9 @@
   "kit start run in dir, in a session with that environment, against an empty GitHub; the world afterwards."
   [dir session & args]
   (let [world (fake/new-world {})
-        ctx   {:github       (fake/github world)
-               :warn         (fn [& _])
-               :kit          "bin/kit"
-               :resolve-repo (fn [explicit] (or explicit "o/r"))}
-        input (start/read-input (vec args) (lookup-in dir session))
-        done  (start/start ctx input)]
+        input (assoc (start/read-input (vec args) (lookup-in dir session)) :kit "bin/kit")
+        done  (binding [*err* (java.io.StringWriter.)]
+                (fake/with-github world #(start/start input)))]
     {:world world :result done}))
 
 

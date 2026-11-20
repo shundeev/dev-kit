@@ -5,7 +5,15 @@
   and what happens while a command waits. A story reads the world afterwards instead of listing calls."
   (:require
    [clojure.string :as str]
+   [dev-kit.flow.board :as board]
+   [dev-kit.flow.checks :as checks]
+   [dev-kit.flow.finish :as finish]
    [dev-kit.flow.github :as github]
+   [dev-kit.flow.merge :as merge-cmd]
+   [dev-kit.flow.release :as release]
+   [dev-kit.flow.review :as review]
+   [dev-kit.flow.shell :as shell]
+   [dev-kit.flow.start :as start]
    [dev-kit.flow.wait :as wait]))
 
 
@@ -166,7 +174,7 @@
 
 
 (defn clock
-  "The clock of a story's ctx (:sleep): each pause runs the next event of the world's script."
+  "The clock a story substitutes for wait/sleep!: each pause runs the next event of the world's script."
   [world]
   (fn [seconds]
     (swap! world (fn [w]
@@ -280,23 +288,24 @@
     (some #(when (= pr (:url %)) %) (vals (:prs w)))))
 
 
-(defn- shared-operations
+(defn- shared-substitutes
+  "What the world answers in place of the functions several commands share, by the var of each."
   [world]
-  {:head-branch
+  {#'github/head-branch
    (fn [] (:current-branch @world))
 
-   :open-pr-url
+   #'github/open-pr-url
    (fn [_repo branch state]
      (some #(when (and (= branch (:branch %)) (= (str/upper-case state) (:state %))) (:url %)) (prs world)))
 
-   :read-pr
+   #'github/read-pr
    (fn [pr _repo fail]
      (let [found (pr-of @world pr)]
        (cond (nil? found)
-             (fail (wait/gh-failure-text
+             (fail (github/gh-failure-text
                     "pr view"
                     (str "GraphQL: Could not resolve to a PullRequest with the number of " pr ".")))
-             (:unreadable found) (fail (wait/gh-failure-text "pr view" (:unreadable found)))
+             (:unreadable found) (fail (github/gh-failure-text "pr view" (:unreadable found)))
              :else
              {:state       (:state found)
               :decision    (:decision found)
@@ -308,14 +317,14 @@
               :owners      (:owners found)
               :auto-merge  (boolean (:auto-merge found))})))
 
-   :required-checks
+   #'github/required-checks
    (fn [pr _repo fail]
      (let [found (pr-of @world pr)]
        (if-let [output (:checks-unreadable found)]
-         (fail (wait/checks-failure-text pr output))
+         (fail (github/checks-failure-text pr output))
          (vec (:checks found)))))
 
-   :ready-workflow?
+   #'github/ready-workflow?
    (fn
      ([_repo _base] (:ready-workflow @world))
      ([repo base fail]
@@ -323,7 +332,7 @@
         (fail (github/ready-workflow-failure repo base 1 message))
         (:ready-workflow @world))))
 
-   :auto-merge!
+   #'github/auto-merge!
    (fn [pr-url]
      (let [found (pr-of @world pr-url)
            turn  (fn [fields] (swap! world update-in [:prs (:number found)] merge fields))]
@@ -335,7 +344,25 @@
          (do (when (:merges-meanwhile found)
                (turn {:state "MERGED"}))
              {:exit 1 :out "" :err message})
-         (do (turn {:auto-merge true}) {:exit 0 :out "" :err ""}))))})
+         (do (turn {:auto-merge true}) {:exit 0 :out "" :err ""}))))
+
+   #'github/issue-url
+   (fn [_repo number]
+     (if-let [issue (get-in @world [:issues (number-of number)])]
+       {:exit 0 :out (str (:url issue) "\n") :err ""}
+       {:exit 1 :out "" :err (str "Could not resolve to an issue with the number of " number ".")}))
+
+   #'board/board-set-field
+   (fn [_project-number _owner url field option]
+     (if (= field (:refuse-field @world))
+       (str "GraphQL: the fake board has no option '" option "' in " field)
+       (do (swap! world (fn [w] (assoc-in w [:cards (card-index w url) :fields field] option))) nil)))
+
+   #'shell/resolve-repo
+   (fn [explicit] (or explicit "o/r"))
+
+   #'wait/sleep!
+   (clock world)})
 
 
 (defn commits
@@ -356,8 +383,223 @@
   (vec (:shape-checks @world)))
 
 
-(defn- finish-operations
-  "kit finish's operations. Options of the world they read, besides the ones new-world knows:
+(defn- update-pr
+  "The pull request a gh argument names, changed by `change`."
+  [world pr change]
+  (let [number (:number (pr-of @world pr))]
+    (swap! world update-in [:prs number] change)))
+
+
+(defn- git-refuses!
+  [message]
+  (throw (ex-info (format "git would refuse: %s" message) {})))
+
+
+(defn start-substitutes
+  "What the world answers in place of kit start's own calls, by the var of each: the functions right above its steps."
+  [world]
+  {#'start/item-add!
+   (fn [_project-number _owner url]
+     (if (:refuse-board @world)
+       {:error "GraphQL: Could not resolve to a ProjectV2 (the fake board refuses)"}
+       (let [w (swap! world (fn [w]
+                              (if (card-index w url)
+                                w
+                                (new-card w {:issue (:number (issue-of-url w url))}))))]
+         {:id (:id (get (:cards w) (card-index w url)))})))
+
+   #'start/open-milestones
+   (fn [_repo] (:milestones @world))
+
+   #'start/retro-missing
+   (fn [_kit _repo] (:retro-missing @world))
+
+   #'start/graphql-remaining
+   (fn [] (:graphql @world))
+
+   #'start/project-items
+   (fn [_owner _number _status-field]
+     (let [w @world]
+       (vec (for [card (:cards w)
+                  :let [issue (get-in w [:issues (:issue card)])]]
+              {:id      (:id card)
+               :title   (if issue
+                          (:title issue)
+                          (:draft card))
+               :status  (get-in card [:fields "Status"] "")
+               :content (if issue
+                          {:type "Issue" :number (:number issue) :url (:url issue) :state (:state issue)}
+                          {:type "DraftIssue" :number nil :url nil :state nil})}))))
+
+   #'start/open-issues-titled
+   (fn [_repo title]
+     (vec (for [issue (issues world)
+                :when (and (= "OPEN" (:state issue)) (str/includes? (:title issue) title))]
+            (select-keys issue [:number :title :url]))))
+
+   #'start/repo-id
+   (fn [_repo] "R_1")
+
+   #'start/convert-draft!
+   (fn [item-id _repo-id]
+     (let [w     @world
+           index (first (keep-indexed (fn [i c] (when (= item-id (:id c)) i)) (:cards w)))
+           card  (get (:cards w) index)]
+       (when (:draft card)
+         (let [w2 (file-issue w "o/r" (:draft card) [] [])
+               n  (:next-number w)]
+           (reset! world (-> w2
+                             (update-in [:cards index] #(-> % (dissoc :draft) (assoc :issue n)))))
+           (select-keys (get-in @world [:issues n]) [:number :url])))))
+
+   #'start/repo-labels
+   (fn [_repo] (:labels (swap! world update :label-reads inc)))
+
+   #'start/create-label!
+   (fn [_repo label]
+     (if (contains? (:uncreatable @world) label)
+       false
+       (do (swap! world #(-> % (update :labels conj label) (update :created-labels conj label))) true)))
+
+   #'start/file-issue!
+   (fn [repo title _body-args label-args assignee-args]
+     (let [w (swap! world file-issue
+               repo
+               title
+               (flag-values "--label" label-args)
+               (flag-values "--assignee" assignee-args))]
+       (:url (get-in w [:issues (dec (:next-number w))]))))
+
+   #'start/create-draft!
+   (fn [_project-number _owner title _body]
+     (:id (last (:cards (swap! world new-card {:draft title})))))
+
+   #'start/edit-issue!
+   (fn [_repo number args] (swap! world edit-issue number args) "")
+
+   #'start/size-label!
+   (fn [_repo number size]
+     (let [label (str "size:" size)]
+       (if (:refuse-size-label @world)
+         false
+         (do
+           (swap! world (fn [w]
+                          (let [n    (number-of number)
+                                gone (filter #(and (str/starts-with? % "size:") (not= % label))
+                                             (get-in w [:issues n :labels]))]
+                            (-> w
+                                (update :labels conj label)
+                                (edit-issue n
+                                            (concat ["--add-label" label]
+                                                    (mapcat vector (repeat "--remove-label") gone)))))))
+           true))))
+
+   #'start/linked-branch
+   (fn [_repo number] (get-in @world [:linked (number-of number)]))
+
+   #'start/develop!
+   (fn [_repo number develop-args]
+     (let [n      (number-of number)
+           w      @world
+           named  (first (flag-values "--name" develop-args))
+           branch (or named (get-in w [:linked n]) (str n "-" (slug (get-in w [:issues n :title]))))]
+       (swap! world (fn [w]
+                      (cond-> (assoc-in w [:linked n] branch)
+                        (some #{"--checkout"} develop-args) (assoc :current-branch branch))))
+       (str "https://github.com/o/r/tree/" branch)))
+
+   #'start/current-branch
+   (fn [] (:current-branch @world))})
+
+
+(defn merge-substitutes
+  "What the world answers in place of kit merge's own calls, by var. Besides the
+  world's pull requests, it reads these options of new-world:
+  :local-branches    the branches the clone has
+  :remote-branches   the branches GitHub has
+  :other-worktrees   the branches checked out in the clone's other worktrees
+  :unclosable        numbers of issues that GitHub refuses to close
+  and these of a pull request: :closes (numbers of the issues it closes), :refuse-update (gh refuses to update the
+  branch), :refuse-auto-merge (the message gh gives), :merges-meanwhile (GitHub merges it while it refuses auto-merge),
+  :refuse-squash. It keeps what was done to a pull request: :updates (how often its branch was updated), :squashed."
+  [world]
+  {#'merge-cmd/update-branch!
+   (fn [pr-url]
+     (if (:refuse-update (pr-of @world pr-url))
+       1
+       (do (update-pr world pr-url #(-> % (assoc :merge-state "CLEAN") (update :updates (fnil inc 0)))) 0)))
+
+   #'merge-cmd/squash-merge!
+   (fn [pr-url]
+     (if (:refuse-squash (pr-of @world pr-url))
+       1
+       (do (update-pr world pr-url #(assoc % :state "MERGED" :squashed true)) 0)))
+
+   #'merge-cmd/closing-issues
+   (fn [pr-url _fail]
+     (vec (for [number (:closes (pr-of @world pr-url))]
+            (select-keys (get-in @world [:issues number]) [:number :url]))))
+
+   #'merge-cmd/issue-state
+   (fn [issue-url] (:state (issue-of-url @world issue-url)))
+
+   #'merge-cmd/close-issue!
+   (fn [issue-url note]
+     (let [issue (issue-of-url @world issue-url)]
+       (if (contains? (set (:unclosable @world)) (:number issue))
+         {:exit 1 :out "" :err "GraphQL: the fake GitHub refuses to close it"}
+         (do (swap! world update-in [:issues (:number issue)] assoc :state "CLOSED" :closed-with note)
+             {:exit 0 :out "" :err ""}))))
+
+   #'merge-cmd/fetch-base!
+   (fn [_base] nil)
+
+   #'merge-cmd/worktree-branches
+   (fn []
+     (let [current @world]
+       (concat (:other-worktrees current)
+               (when-not (= "HEAD" (:current-branch current))
+                 [(:current-branch current)]))))
+
+   #'merge-cmd/detach-at-base!
+   (fn [_base] (swap! world assoc :current-branch "HEAD") nil)
+
+   #'merge-cmd/switch-to!
+   (fn [branch]
+     (when (some #{branch} (:other-worktrees @world))
+       (git-refuses! (format "'%s' is checked out in another worktree" branch)))
+     (swap! world assoc :current-branch branch)
+     nil)
+
+   #'merge-cmd/pull-ff-only!
+   (fn [] nil)
+
+   #'merge-cmd/delete-local-branch!
+   (fn [branch]
+     (when (= branch (:current-branch @world))
+       (git-refuses! (format "cannot delete the branch '%s' it is checked out" branch)))
+     (swap! world update :local-branches #(disj (set %) branch))
+     nil)
+
+   #'merge-cmd/remote-branch?
+   (fn [branch] (contains? (set (:remote-branches @world)) branch))
+
+   #'merge-cmd/delete-remote-branch!
+   (fn [branch] (swap! world update :remote-branches #(disj (set %) branch)) nil)})
+
+
+(defn label-reads
+  "How often the repository's labels were read."
+  [world]
+  (:label-reads @world))
+
+
+;; ------------------------------------------------------------------ the world in place of the real one, by var
+
+
+(defn finish-substitutes
+  "What the world answers in place of kit finish's own calls, by the var of each: the functions right above its
+  steps. Options of the world they read, besides the ones new-world knows:
   :commits           subjects of the commits on the branch, oldest first (what git log origin/main..HEAD shows)
   :staged            paths staged already
   :shape-refusal     the text CI's shape rules print when they refuse the title or the body
@@ -365,27 +607,27 @@
   :refuse-pr-edit    gh's message when it refuses to edit a pull request
   :no-auto-merge     true when the repository does not allow auto-merge
   The branch checked out is :current-branch; a push or a commit that git would refuse ends the real run inside the
-  operation, so the in-memory one has no such case."
+  call, so the in-memory one has no such case."
   [world]
-  {:branch-commit-types
+  {#'finish/branch-commit-types
    (fn [_base] (:commits @world []))
 
-   :issue-title
+   #'finish/issue-title
    (fn [_repo number]
      (or (get-in @world [:issues (number-of number) :title])
          (throw (ex-info (format "the fake GitHub has no issue %s: gh would end the run" number) {:number number}))))
 
-   :check-shape
+   #'finish/run-shape-check
    (fn [_kit branch title body-file]
      (swap! world update :shape-checks (fnil conj []) {:branch branch :title title :body-file body-file})
      (if-let [refusal (:shape-refusal @world)]
        {:exit 1 :out refusal :err ""}
        {:exit 0 :out "" :err ""}))
 
-   :pr-draft?
+   #'finish/pr-draft?
    (fn [pr-url] (boolean (:draft (pr-of @world pr-url))))
 
-   :create-hold-label!
+   #'finish/create-hold-label!
    (fn [_repo]
      (let [current @world]
        (cond (contains? (:labels current) "hold")
@@ -395,21 +637,21 @@
              :else (do (swap! world #(-> % (update :labels conj "hold") (update :created-labels conj "hold")))
                        {:exit 0 :out "" :err ""}))))
 
-   :stage!
+   #'finish/stage!
    (fn [paths] (swap! world update :staged #(vec (distinct (concat % paths)))) nil)
 
-   :staged?
+   #'finish/staged?
    (fn [] (boolean (seq (:staged @world))))
 
-   :commit!
+   #'finish/commit!
    (fn [_message-file subject]
      (swap! world #(-> % (update :commits (fnil conj []) subject) (assoc :staged [])))
      nil)
 
-   :push!
+   #'finish/push!
    (fn [branch] (swap! world update :remote-branches (fnil conj []) branch) nil)
 
-   :create-pr!
+   #'finish/create-pr!
    (fn [repo base branch flags title body]
      (let [current @world]
        (when-not (some #{branch} (:remote-branches current))
@@ -432,7 +674,7 @@
                            (update :next-number inc)))
          url)))
 
-   :edit-pr!
+   #'finish/edit-pr!
    (fn [pr-url args]
      (if-let [refusal (:refuse-pr-edit @world)]
        {:exit 1 :out "" :err refusal}
@@ -447,101 +689,15 @@
          {:exit 0 :out "" :err ""})))})
 
 
-(defn- update-pr
-  "The pull request a gh argument names, changed by `change`."
-  [world pr change]
-  (let [number (:number (pr-of @world pr))]
-    (swap! world update-in [:prs number] change)))
-
-
-(defn- git-refuses!
-  [message]
-  (throw (ex-info (format "git would refuse: %s" message) {})))
-
-
-(defn- merge-operations
-  "kit merge's operations. Besides the world's pull requests, it reads these options of new-world:
-  :local-branches    the branches the clone has
-  :remote-branches   the branches GitHub has
-  :other-worktrees   the branches checked out in the clone's other worktrees
-  :unclosable        numbers of issues that GitHub refuses to close
-  and these of a pull request: :closes (numbers of the issues it closes), :refuse-update (gh refuses to update the
-  branch), :refuse-auto-merge (the message gh gives), :merges-meanwhile (GitHub merges it while it refuses auto-merge),
-  :refuse-squash. It keeps what was done to a pull request: :updates (how often its branch was updated), :squashed."
-  [world]
-  {:update-branch!
-   (fn [pr-url]
-     (if (:refuse-update (pr-of @world pr-url))
-       1
-       (do (update-pr world pr-url #(-> % (assoc :merge-state "CLEAN") (update :updates (fnil inc 0)))) 0)))
-
-   :squash-merge!
-   (fn [pr-url]
-     (if (:refuse-squash (pr-of @world pr-url))
-       1
-       (do (update-pr world pr-url #(assoc % :state "MERGED" :squashed true)) 0)))
-
-   :closing-issues
-   (fn [pr-url _fail]
-     (vec (for [number (:closes (pr-of @world pr-url))]
-            (select-keys (get-in @world [:issues number]) [:number :url]))))
-
-   :issue-state
-   (fn [issue-url] (:state (issue-of-url @world issue-url)))
-
-   :close-issue!
-   (fn [issue-url note]
-     (let [issue (issue-of-url @world issue-url)]
-       (if (contains? (set (:unclosable @world)) (:number issue))
-         {:exit 1 :out "" :err "GraphQL: the fake GitHub refuses to close it"}
-         (do (swap! world update-in [:issues (:number issue)] assoc :state "CLOSED" :closed-with note)
-             {:exit 0 :out "" :err ""}))))
-
-   :fetch-base!
-   (fn [_base] nil)
-
-   :worktree-branches
-   (fn []
-     (let [current @world]
-       (concat (:other-worktrees current)
-               (when-not (= "HEAD" (:current-branch current))
-                 [(:current-branch current)]))))
-
-   :detach-at-base!
-   (fn [_base] (swap! world assoc :current-branch "HEAD") nil)
-
-   :switch-to!
-   (fn [branch]
-     (when (some #{branch} (:other-worktrees @world))
-       (git-refuses! (format "'%s' is checked out in another worktree" branch)))
-     (swap! world assoc :current-branch branch)
-     nil)
-
-   :pull-ff-only!
-   (fn [] nil)
-
-   :delete-local-branch!
-   (fn [branch]
-     (when (= branch (:current-branch @world))
-       (git-refuses! (format "cannot delete the branch '%s' it is checked out" branch)))
-     (swap! world update :local-branches #(disj (set %) branch))
-     nil)
-
-   :remote-branch?
-   (fn [branch] (contains? (set (:remote-branches @world)) branch))
-
-   :delete-remote-branch!
-   (fn [branch] (swap! world update :remote-branches #(disj (set %) branch)) nil)})
-
-
-(defn- release-operations
-  "kit release's operations. A pull request that does not exist is an error, as gh's would end the run. A PR's
-  :refuse-auto-merge is the text GitHub answers when it does not allow auto-merge (the shared :auto-merge!)."
+(defn release-substitutes
+  "What the world answers in place of kit release's own calls, by var. A pull request that does not exist is an error,
+  as gh's would end the run. A PR's :refuse-auto-merge is the text GitHub answers when it does not allow auto-merge
+  (the shared auto-merge!)."
   [world]
   (let [pr-or-throw (fn [pr]
                       (or (pr-of @world pr) (throw (ex-info (str "no pull request " pr) {:pr pr}))))
         change-pr   (fn [pr change] (swap! world update-in [:prs (:number (pr-or-throw pr))] change))]
-    {:view-pr-for-release
+    {#'release/view-pr-for-release
      (fn [pr _repo]
        (let [found (pr-or-throw pr)]
          {:state (:state found)
@@ -549,42 +705,42 @@
           :hold  (boolean (some #{"hold"} (:labels found)))
           :url   (:url found)}))
 
-     :remove-label!
+     #'release/remove-label!
      (fn [pr _repo label] (change-pr pr #(update % :labels (fn [labels] (vec (remove #{label} labels))))))
 
-     :mark-ready!
+     #'release/mark-ready!
      (fn [pr _repo] (change-pr pr #(assoc % :draft false)))}))
 
 
-(defn- checks-operations
-  "kit checks' operations. The world's options: :required-contexts, the checks the base requires (default none);
-  :rules-unreadable, gh's output when reading the base's rules fails; :ready-runs, the ready workflow's runs
-  {:databaseId :status :log}, which an event of the script may change."
+(defn checks-substitutes
+  "What the world answers in place of kit checks' own calls, by var. The world's options: :required-contexts, the checks
+  the base requires (default none); :rules-unreadable, gh's output when reading the base's rules fails; :ready-runs,
+  the ready workflow's runs {:databaseId :status :log}, which an event of the script may change."
   [world]
-  {:required-contexts
+  {#'checks/required-contexts
    (fn [repo base fail]
      (if-let [output (:rules-unreadable @world)]
-       (fail (wait/gh-failure-text (str "api repos/" repo "/rules/branches/" base) output))
+       (fail (github/gh-failure-text (str "api repos/" repo "/rules/branches/" base) output))
        (vec (distinct (:required-contexts @world)))))
 
-   :ready-runs
+   #'checks/ready-runs
    (fn [_repo _fail] (mapv #(select-keys % [:databaseId :status]) (:ready-runs @world)))
 
-   :run-log
+   #'checks/run-log
    (fn [_repo id] (some #(when (= id (:databaseId %)) (:log %)) (:ready-runs @world)))})
 
 
-(defn- review-operations
-  "kit review's operations. The world's :viewer is who runs kit (default \"the-agent\"); a pull request's
-  :committed is its head commit's date. A pull request's :reviews are {:author :state :at :body} and its :threads
-  {:resolved? :path :line :comments [{:author :body}]}, as the real read gives them; :reviews-unreadable is gh's
-  output when reading them fails."
+(defn review-substitutes
+  "What the world answers in place of kit review's own calls, by var. The world's :viewer is who runs kit (default
+  \"the-agent\"); a pull request's :committed is its head commit's date. A pull request's :reviews are {:author :state
+  :at :body} and its :threads {:resolved? :path :line :comments [{:author :body}]}, as the real read gives them;
+  :reviews-unreadable is gh's output when reading them fails."
   [world]
-  {:read-reviews
+  {#'review/graphql-reviews
    (fn [pr _repo fail]
      (let [found (pr-of @world pr)]
        (if-let [output (:reviews-unreadable found)]
-         (fail (wait/gh-failure-text "api graphql" output))
+         (fail (github/gh-failure-text "api graphql" output))
          {:state          (:state found)
           :viewer         (:viewer @world "the-agent")
           :head-committed (:committed found)
@@ -592,166 +748,38 @@
           :threads        (vec (:threads found))})))})
 
 
-(defn- start-operations
-  [world]
-  {:open-milestones
-   (fn [_repo] (:milestones @world))
-
-   :retro-missing
-   (fn [_kit _repo] (:retro-missing @world))
-
-   :graphql-remaining
-   (fn [] (:graphql @world))
-
-   :issue-url
-   (fn [_repo number]
-     (if-let [issue (get-in @world [:issues (number-of number)])]
-       {:exit 0 :out (str (:url issue) "\n") :err ""}
-       {:exit 1 :out "" :err (str "Could not resolve to an issue with the number of " number ".")}))
-
-   :project-items
-   (fn [_owner _number _status-field]
-     (let [w @world]
-       (vec (for [card (:cards w)
-                  :let [issue (get-in w [:issues (:issue card)])]]
-              {:id      (:id card)
-               :title   (if issue
-                          (:title issue)
-                          (:draft card))
-               :status  (get-in card [:fields "Status"] "")
-               :content (if issue
-                          {:type "Issue" :number (:number issue) :url (:url issue) :state (:state issue)}
-                          {:type "DraftIssue" :number nil :url nil :state nil})}))))
-
-   :open-issues-titled
-   (fn [_repo title]
-     (vec (for [issue (issues world)
-                :when (and (= "OPEN" (:state issue)) (str/includes? (:title issue) title))]
-            (select-keys issue [:number :title :url]))))
-
-   :repo-id
-   (fn [_repo] "R_1")
-
-   :convert-draft!
-   (fn [item-id _repo-id]
-     (let [w     @world
-           index (first (keep-indexed (fn [i c] (when (= item-id (:id c)) i)) (:cards w)))
-           card  (get (:cards w) index)]
-       (when (:draft card)
-         (let [w2 (file-issue w "o/r" (:draft card) [] [])
-               n  (:next-number w)]
-           (reset! world (-> w2
-                             (update-in [:cards index] #(-> % (dissoc :draft) (assoc :issue n)))))
-           (select-keys (get-in @world [:issues n]) [:number :url])))))
-
-   :known-labels
-   (fn [_repo] (:labels (swap! world update :label-reads inc)))
-
-   :create-label!
-   (fn [_repo label]
-     (if (contains? (:uncreatable @world) label)
-       false
-       (do (swap! world #(-> % (update :labels conj label) (update :created-labels conj label))) true)))
-
-   :file-issue!
-   (fn [repo title _body-args label-args assignee-args]
-     (let [w (swap! world file-issue
-               repo
-               title
-               (flag-values "--label" label-args)
-               (flag-values "--assignee" assignee-args))]
-       (:url (get-in w [:issues (dec (:next-number w))]))))
-
-   :create-draft!
-   (fn [_project-number _owner title _body]
-     (:id (last (:cards (swap! world new-card {:draft title})))))
-
-   :item-add!
-   (fn [_project-number _owner url]
-     (if (:refuse-board @world)
-       {:error "GraphQL: Could not resolve to a ProjectV2 (the fake board refuses)"}
-       (let [w (swap! world (fn [w]
-                              (if (card-index w url)
-                                w
-                                (new-card w {:issue (:number (issue-of-url w url))}))))]
-         {:id (:id (get (:cards w) (card-index w url)))})))
-
-   :edit-issue!
-   (fn [_repo number args] (swap! world edit-issue number args) "")
-
-   :set-field!
-   (fn [_project-number _owner url field option]
-     (if (= field (:refuse-field @world))
-       (str "GraphQL: the fake board has no option '" option "' in " field)
-       (do (swap! world (fn [w] (assoc-in w [:cards (card-index w url) :fields field] option))) nil)))
-
-   :size-label!
-   (fn [_repo number size]
-     (let [label (str "size:" size)]
-       (if (:refuse-size-label @world)
-         false
-         (do
-           (swap! world (fn [w]
-                          (let [n    (number-of number)
-                                gone (filter #(and (str/starts-with? % "size:") (not= % label))
-                                             (get-in w [:issues n :labels]))]
-                            (-> w
-                                (update :labels conj label)
-                                (edit-issue n
-                                            (concat ["--add-label" label]
-                                                    (mapcat vector (repeat "--remove-label") gone)))))))
-           true))))
-
-   :linked-branch
-   (fn [_repo number] (get-in @world [:linked (number-of number)]))
-
-   :develop!
-   (fn [_repo number develop-args]
-     (let [n      (number-of number)
-           w      @world
-           named  (first (flag-values "--name" develop-args))
-           branch (or named (get-in w [:linked n]) (str n "-" (slug (get-in w [:issues n :title]))))]
-       (swap! world (fn [w]
-                      (cond-> (assoc-in w [:linked n] branch)
-                        (some #{"--checkout"} develop-args) (assoc :current-branch branch))))
-       (str "https://github.com/o/r/tree/" branch)))
-
-   :current-branch
-   (fn [] (:current-branch @world))})
+(def ^:private real-world-primitives
+  "The calls that reach gh, git or a process, with the name a refusal gives."
+  [[#'shell/run "shell/run"]
+   [#'shell/run-on-terminal "shell/run-on-terminal"]
+   [#'shell/gh! "shell/gh!"]
+   [#'shell/gh-out "shell/gh-out"]
+   [#'shell/git-out "shell/git-out"]
+   [#'board/board-gh! "board/board-gh!"]])
 
 
-(defn- command-operations
-  "Each command's operations over the world, by the command, as `dev-kit.flow.github/command-operations` keeps them."
-  [world]
-  {:shared  (shared-operations world)
-   :start   (start-operations world)
-   :finish  (finish-operations world)
-   :merge   (merge-operations world)
-   :release (release-operations world)
-   :checks  (checks-operations world)
-   :review  (review-operations world)})
+(defn- real-world-guards
+  "Each real-world primitive, replaced by a function that fails the story naming the call. An Error, not an
+  exception: a step's `catch Exception` must not hide that a substitute is missing."
+  []
+  (into {}
+        (for [[v label] real-world-primitives]
+          [v
+           (fn [& args]
+             (throw (AssertionError. (str "the story reached the real world: " label " " (str/join " " args)))))])))
 
 
-(defn- operations-over
-  "Each operation of the real GitHub, as a function of the world's atom and the same arguments."
-  [world]
-  (apply merge (vals (command-operations world))))
-
-
-(def command-operation-names
-  "The operations this GitHub answers, by command; a story checks them against the real GitHub's."
-  (update-vals (command-operations (atom {})) (comp set keys)))
-
-
-(defn label-reads
-  "How often the repository's labels were read."
-  [world]
-  (:label-reads @world))
-
-
-(defn github
-  "The GitHub of the world, called as the real one: (github :op args…)."
-  [world]
-  (let [ops (operations-over world)]
-    (fn [op & args]
-      (apply (or (ops op) (throw (ex-info (str "no GitHub operation " op) {:op op}))) args))))
+(defn with-github
+  "Runs `f` with the world in place of GitHub and git: the shared functions, the command's own, the clock, all by
+  var, over the world's atom. A call with no substitute reaches a guard that fails the story naming the call. The
+  substitution is global while `f` runs, so stories run one after another."
+  [world f]
+  (with-redefs-fn (merge (real-world-guards)
+                         (shared-substitutes world)
+                         (start-substitutes world)
+                         (finish-substitutes world)
+                         (merge-substitutes world)
+                         (release-substitutes world)
+                         (checks-substitutes world)
+                         (review-substitutes world))
+    f))

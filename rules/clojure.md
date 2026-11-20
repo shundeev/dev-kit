@@ -10,6 +10,10 @@
 - A command whose output is parsed runs in a `let`; the parsing reads the bound value.
 - Conditional arguments: `cond->` with `:always` for the unconditional part, never `true`.
 - `apply` starts its own line under the call it feeds.
+- A test substitutes a function by its var: `with-redefs-fn` over a table keyed `#'ns/name`, so
+  "find references" shows the call and its substitute. While a story runs, the real gh and git
+  throw an `AssertionError` naming the call: a missing substitute fails the story, and no
+  `catch Exception` on the way can swallow it.
 - A message built from text and values is a `format` with its template on one line; never a
   `str` broken over lines.
 - One flat `cond` where a nested one says the same: combine the tests instead of a branch that is
@@ -22,6 +26,14 @@
 - Before opening a PR that changes Clojure, run the `smell-reviewer` agent on the branch diff.
 
 ## Clojure design
+
+- Locality: to understand a fragment, a reader needs only the code next to it. A call to the
+  outside world that one step needs sits right above that step, in the same file; a helper sits
+  above its only caller; what several commands share lives in one namespace named for what it is
+  and is called directly, so "go to definition" lands on the code. No functions passed in a map,
+  no calls by keyword, no factories that return a step, no keyword built at run time (#139).
+- A pattern that will be repeated is reviewed for navigation too: from any call to its code in
+  one jump, and "find references" lists only the real calls.
 
 Before adding a function or a map key, run LSP `findReferences` / `incomingCalls` on what it
 wraps or carries and answer: who creates the value, who reads it. If one place creates it and

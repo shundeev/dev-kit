@@ -30,15 +30,12 @@
   "Runs kit finish with the command-line words against the world and the variables of the owner's machine. Returns the
   result with the warnings under :warnings and what was printed under :printed."
   [world env & args]
-  (let [warnings (atom [])
-        ctx      {:github       (fake/github world)
-                  :warn         (fn [& msg] (swap! warnings conj (str/join " " msg)))
-                  :kit          "bin/kit"
-                  :resolve-repo (fn [explicit] (or explicit "o/r"))}
-        input    (finish/read-input (vec args) (fn [variable default] (get env variable default)))
-        result   (finish/finish ctx input)]
+  (let [err    (java.io.StringWriter.)
+        input  (assoc (finish/read-input (vec args) (fn [variable default] (get env variable default))) :kit "bin/kit")
+        result (binding [*err* err]
+                 (fake/with-github world #(finish/finish input)))]
     (assoc result
-           :warnings @warnings
+           :warnings (vec (remove str/blank? (str/split-lines (str err))))
            :printed  (when (= :ok (::steps/status result))
                        (with-out-str (finish/print-result result))))))
 

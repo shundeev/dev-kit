@@ -29,8 +29,9 @@
   (some-> (apply run "git" args) :out str/trim))
 
 
-(defn shell
-  "A command whose output goes to ours, as in a terminal; its exit code."
+(defn run-on-terminal
+  "A command whose output goes to the terminal, as the person would see it: git's progress, its hooks' messages.
+  Returns its exit code, for the caller to judge."
   [& args]
   (:exit @(apply p/process {:inherit true} args)))
 
@@ -50,11 +51,18 @@
   (System/exit exit))
 
 
-(defn ok!
-  "Ends the run with a failed command's own exit code, as the scripts did under `set -e`."
+(defn- end-on-failure!
+  "Ends kit with a failed command's own exit code, as the scripts did under `set -e`."
   [exit]
   (when-not (zero? exit)
     (System/exit exit)))
+
+
+(defn run-on-terminal!
+  "run-on-terminal, and a failure ends kit with the command's own exit code: for a call whose failure no step
+  judges, such as git push."
+  [& args]
+  (end-on-failure! (apply run-on-terminal args)))
 
 
 (defn gh!
@@ -71,7 +79,7 @@
                  " failed with exit code " exit
                  " and printed no message. "
                  "Run the same call by hand to see why.")))
-    (ok! exit)
+    (end-on-failure! exit)
     (str/trim out)))
 
 

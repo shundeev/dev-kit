@@ -1,23 +1,10 @@
 (ns dev-kit.flow.github-test
-  "The in-memory GitHub against the real one (#139): the same operations in the same maps, and a story's clock that
-  plays the script of what happens while a command waits."
+  "The in-memory GitHub (#139): the shared functions answer from the world as the real ones answer from GitHub, and a
+  story's clock plays the script of what happens while a command waits."
   (:require
    [clojure.test :refer [deftest is testing]]
    [dev-kit.flow.fake-github :as fake]
-   [dev-kit.flow.github :as real-github]))
-
-
-(deftest the-in-memory-github-answers-every-operation-the-real-one-has
-  (is
-   (= (update-vals real-github/command-operations (comp set keys)) fake/command-operation-names)
-   "a story never meets an operation the fake lacks, nor the fake one the real GitHub lacks, and each sits in its
-      command's map"))
-
-
-(deftest no-operation-is-named-twice
-  (let [names (mapcat keys (vals real-github/command-operations))]
-    (is (= (count names) (count (set names)))
-        "two commands' maps never define the same operation: the one merged last would hide the other")))
+   [dev-kit.flow.github :as github]))
 
 
 (deftest a-pause-runs-the-next-event-of-the-script
@@ -39,14 +26,14 @@
 
 
 (deftest a-pull-request-reads-as-the-real-one-does
-  (let [world  (fake/new-world {:issues [{:title "Fix"}]
-                                :prs    [{:branch "1-fix" :head "abc" :labels ["hold"] :owners ["u473t8"]}
-                                         {:branch "9-old" :unreadable "HTTP 502"}]})
-        github (fake/github world)
-        fail   #(throw (ex-info % {}))]
-    (is (= "https://github.com/o/r/pull/2" (github :open-pr-url "o/r" "1-fix" "open"))
+  (let [world (fake/new-world {:issues [{:title "Fix"}]
+                               :prs    [{:branch "1-fix" :head "abc" :labels ["hold"] :owners ["u473t8"]}
+                                        {:branch "9-old" :unreadable "HTTP 502"}]})
+        fail  #(throw (ex-info % {}))
+        ask   #(fake/with-github world %)]
+    (is (= "https://github.com/o/r/pull/2" (ask #(github/open-pr-url "o/r" "1-fix" "open")))
         "pull requests are numbered after the issues")
-    (is (nil? (github :open-pr-url "o/r" "1-fix" "merged")))
+    (is (nil? (ask #(github/open-pr-url "o/r" "1-fix" "merged"))))
     (is (= {:state       "OPEN"
             :decision    nil
             :merge-state nil
@@ -56,14 +43,14 @@
             :hold        true
             :owners      ["u473t8"]
             :auto-merge  false}
-           (github :read-pr "2" "o/r" fail)))
-    (is (= (github :read-pr "2" "o/r" fail) (github :read-pr "https://github.com/o/r/pull/2" "o/r" fail))
+           (ask #(github/read-pr "2" "o/r" fail))))
+    (is (= (ask #(github/read-pr "2" "o/r" fail)) (ask #(github/read-pr "https://github.com/o/r/pull/2" "o/r" fail)))
         "by number or by URL")
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
                           #"^gh pr view failed: HTTP 502\. Fix: run it by hand"
-                          (github :read-pr "3" "o/r" fail))
+                          (ask #(github/read-pr "3" "o/r" fail)))
         "a failed read goes to the step's fail with gh's message, as the real one")
-    (is (= [] (github :required-checks "2" "o/r" fail)))))
+    (is (= [] (ask #(github/required-checks "2" "o/r" fail))))))
 
 
 (deftest a-command-keeps-its-own-things-in-the-world

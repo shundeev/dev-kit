@@ -4,11 +4,11 @@
   (COMMENTED), so a wait that watched any review fired on them: only the owner's login counts."
   (:require
    [clojure.string :as str]
-   [dev-kit.flow.checks :as checks]
    [dev-kit.flow.github :as github]
    [dev-kit.flow.shell :as shell]
    [dev-kit.flow.steps :as steps]
-   [dev-kit.flow.wait :as wait]))
+   [dev-kit.flow.wait :as wait]
+   [dev-kit.flow.watched-pr :as watched-pr]))
 
 
 (def review-usage
@@ -55,7 +55,8 @@ Environment: GHWF_HUMAN, the owner's login (kit init or kit identity set it); GH
 
 
 (defn- check-owner
-  [_ctx {:keys [human]}]
+  "Refuses a run that does not know the owner's login."
+  [{:keys [human]}]
   (when (str/blank? human)
     (steps/fail!
      :review/no-owner
@@ -109,40 +110,129 @@ Environment: GHWF_HUMAN, the owner's login (kit init or kit identity set it); GH
                  (format "The pull request is %s, so no review is coming: %s" (str/lower-case state) pr))))
 
 
+(def ^:private reviews-query
+  "A pull request's state, the head commit's date, its reviews and review threads (PullRequest.reviews, .reviewThreads
+  and .commits, docs.github.com/en/graphql/reference/pulls), and who is asking (viewer). A thread's `line` is null once its code changed: `originalLine` then
+  tells where it was."
+  "query($owner: String!, $name: String!, $number: Int!, $reviewsAfter: String, $threadsAfter: String) {
+      viewer { login }
+      repository(owner: $owner, name: $name) {
+        pullRequest(number: $number) {
+          state
+          commits(last: 1) { nodes { commit { committedDate } } }
+          reviews(first: 100, after: $reviewsAfter) {
+            pageInfo { hasNextPage endCursor }
+            nodes { author { login } state submittedAt body }
+          }
+          reviewThreads(first: 100, after: $threadsAfter) {
+            pageInfo { hasNextPage endCursor }
+            nodes { isResolved path line originalLine comments(first: 100) { nodes { author { login } body } } }
+          }
+        }
+      }
+    }")
+
+
+(defn- pr-coordinates
+  "owner, name and number of a pull request given as a URL, or as a number with its repository."
+  [pr repo]
+  (if-let [[_ owner repo-name number] (re-find #"github\.com/([^/]+)/([^/]+)/pull/(\d+)" (str pr))]
+    [owner repo-name number]
+    (conj (str/split repo #"/" 2) (str pr))))
+
+
+(defn- review-of
+  [{:keys [author state submittedAt body]}]
+  {:author (:login author) :state state :at submittedAt :body body})
+
+
+(defn- thread-of
+  [{:keys [isResolved path line originalLine comments]}]
+  {:resolved? isResolved
+   :path      path
+   :line      (or line originalLine)
+   :comments  (mapv (fn [{:keys [author body]}]
+                      {:author (:login author) :body body})
+                    (:nodes comments))})
+
+
+(defn- graphql-reviews
+  "gh api graphql: the pull request's {:state :viewer (the login of whoever runs kit) :head-committed (the head commit's date)
+  :reviews :threads}, every page of both lists, one query for a page. A review is
+  {:author :state :at :body} (a pending one, not submitted, is left out), a thread {:resolved? :path :line :comments}
+  with its comments {:author :body}. The cursors of a list that has ended stay, and ask for the page after its last."
+  [pr repo fail]
+  (let [[owner repo-name number] (pr-coordinates pr repo)]
+    (loop [reviews-after nil
+           threads-after nil
+           result        {:reviews [] :threads []}]
+      (let [response (apply github/gh-json
+                            fail
+                            "api"
+                            "graphql"
+                            "-f"
+                            (str "query=" reviews-query)
+                            "-f"
+                            (str "owner=" owner)
+                            "-f"
+                            (str "name=" repo-name)
+                            "-F"
+                            (str "number=" number)
+                            (concat (when reviews-after
+                                      ["-f" (str "reviewsAfter=" reviews-after)])
+                                    (when threads-after
+                                      ["-f" (str "threadsAfter=" threads-after)])))
+            request  (get-in response [:data :repository :pullRequest])]
+        (when-not request
+          (fail (github/gh-failure-text "api graphql"
+                                        (str (or (some-> response :errors first :message) "no such pull request")))))
+        (let [{:keys [reviews reviewThreads]} request
+              result (->
+                      result
+                      (assoc :state  (:state request)
+                             :viewer (get-in response [:data :viewer :login])
+                             :head-committed (get-in request [:commits :nodes 0 :commit :committedDate]))
+                      (update :reviews into (comp (remove #(nil? (:submittedAt %))) (map review-of)) (:nodes reviews))
+                      (update :threads into (map thread-of) (:nodes reviewThreads)))]
+          (if (or (get-in reviews [:pageInfo :hasNextPage]) (get-in reviewThreads [:pageInfo :hasNextPage]))
+            (recur (get-in reviews [:pageInfo :endCursor]) (get-in reviewThreads [:pageInfo :endCursor]) result)
+            result))))))
+
+
 (defn- read-reviews
   "The step that reads the pull request's reviews and threads."
-  [{:keys [github]} {:keys [pr repo]}]
-  {:seen (github :read-reviews pr repo (checks/no-result "review"))})
+  [{:keys [pr repo]}]
+  {:seen (graphql-reviews pr repo watched-pr/no-result)})
 
 
 (defn- announce-wait
   "With --wait, and no review of the owner's after the hand-back yet: what is awaited."
-  [{:keys [out]} {waiting? :wait :keys [human pr seen]}]
+  [{waiting? :wait :keys [human pr seen]}]
   (when (and waiting? (not (awaited-review seen human)))
     (let [since (handed-back-at seen human)
           from  (if since
                   (format " since %s" since)
                   "")]
-      (out (format "Waiting for a review by %s on %s%s." human pr from)))
+      (println (format "Waiting for a review by %s on %s%s." human pr from)))
     {}))
 
 
 (defn- wait-for-review
   "With --wait, looks every poll period until the owner has a review after the hand-back, or the pull request is no
   longer open; the first look is the one read-reviews made."
-  [{:keys [sleep] :as ctx} {waiting? :wait :keys [human poll] :as facts}]
+  [{waiting? :wait :keys [human poll] :as facts}]
   (when waiting?
     (loop [seen (:seen facts)]
       (if (awaited-review seen human)
         {:seen seen}
         (do (end-if-over! facts seen)
-            (sleep poll)
-            (recur (:seen (read-reviews ctx facts))))))))
+            (wait/sleep! poll)
+            (recur (:seen (read-reviews facts))))))))
 
 
 (defn- find-the-review
   "What is printed: the owner's latest review (the awaited one, after a wait) and the threads still open."
-  [_ctx {:keys [human seen]}]
+  [{:keys [human seen]}]
   {:review  (latest (reviews-by human (:reviews seen)))
    :threads (vec (remove :resolved? (:threads seen)))})
 
@@ -170,15 +260,15 @@ Environment: GHWF_HUMAN, the owner's login (kit init or kit identity set it); GH
 
 
 (defn review
-  "kit review as a recipe. GitHub is (:github ctx), the clock (:sleep ctx) and the waiting line (:out ctx)."
-  [ctx input]
-  (steps/run ctx input
+  "kit review as a recipe; the result is data that review! prints."
+  [input]
+  (steps/run (assoc input :command "review")
     :check-owner     check-owner
-    :read-repo       checks/read-repo
-    :read-poll       checks/read-poll
-    :read-branch     checks/read-branch
-    :check-pr-option (checks/check-pr-option "review")
-    :find-pr         (checks/find-pr "review")
+    :read-repo       watched-pr/read-repo
+    :read-poll       watched-pr/read-poll
+    :read-branch     watched-pr/read-branch
+    :check-pr-option watched-pr/check-pr-option
+    :find-pr         watched-pr/find-pr
     :read-reviews    read-reviews
     :announce-wait   announce-wait
     :wait-for-review wait-for-review
@@ -191,8 +281,7 @@ Environment: GHWF_HUMAN, the owner's login (kit init or kit identity set it); GH
     (when (:help input)
       (println review-usage)
       (System/exit 0))
-    (let [ctx    {:github github/real :resolve-repo shell/resolve-repo :sleep wait/sleep! :out println}
-          result (review ctx input)]
+    (let [result (review input)]
       (when (= :fail (::steps/status result))
         (shell/exit-with! (steps/refusal result)))
       (run! println (report-lines result)))))

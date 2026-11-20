@@ -1,13 +1,13 @@
 (ns dev-kit.flow.checks
-  "kit checks: waits until the pull request's required checks have finished and says how they ended (#109). The file
-  also holds the steps kit review shares with it (reading the repository, the poll period and the branch, and finding
-  the pull request); each takes the command's name for its refusals' problem keywords and texts."
+  "kit checks: waits until the pull request's required checks have finished and says how they ended (#109). The steps
+  it shares with kit review are in dev-kit.flow.watched-pr."
   (:require
    [clojure.string :as str]
    [dev-kit.flow.github :as github]
    [dev-kit.flow.shell :as shell]
    [dev-kit.flow.steps :as steps]
-   [dev-kit.flow.wait :as wait]))
+   [dev-kit.flow.wait :as wait]
+   [dev-kit.flow.watched-pr :as watched-pr]))
 
 
 ;; ------------------------------------------------------------------ kit checks
@@ -53,15 +53,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
              :default-base (env "GHWF_DEFAULT_BASE" "main")))))
 
 
-;; ------------------------------------------------------------------ steps kit checks and kit review share
-
-
-(defn no-result
-  "The `fail` of a read of GitHub that gave no answer, for the command named (\"checks\", \"review\"): gh's message as
-  it is, exit 2."
-  [command]
-  (fn [message]
-    (steps/fail! (keyword command "no-result") message {:exit 2 :plain true})))
+;; ------------------------------------------------------------------ kit checks' steps
 
 
 (defn- sha7
@@ -70,89 +62,76 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
     (subs text 0 (min 7 (count text)))))
 
 
-(defn read-repo
-  "The repository the run works in, named before anything else is asked of GitHub."
-  [{:keys [resolve-repo]} input]
-  {:repo (resolve-repo (:repo input))})
-
-
-(defn read-poll
-  "The pause between two looks, in seconds."
-  [_ctx {:keys [poll-text]}]
-  {:poll (wait/poll-seconds poll-text)})
-
-
-(defn read-branch
-  "The branch checked out now."
-  [{:keys [github]} _facts]
-  {:branch (github :head-branch)})
-
-
-(defn check-pr-option
-  "A step: --pr names the pull request by its number."
-  [command]
-  (fn [_ctx {:keys [pr]}]
-    (when (and pr (not (re-matches #"\d+" pr)))
-      (steps/fail! (keyword command "bad-pr") (format "--pr is '%s': give the pull request's number" pr)))))
-
-
-(defn find-pr
-  "A step: the pull request named by --pr, else the open one of the issue branch. The command's name goes into the
-  refusals that say what to run instead (kit checks, kit review)."
-  [command]
-  (fn [{:keys [github]} {:keys [pr repo branch default-base]}]
-    {:pr (or
-          pr
-          (do (when (#{default-base "HEAD"} branch)
-                (steps/fail! (keyword command "not-on-issue-branch")
-                             (format
-                              "Run from the issue branch, not '%s', or name the pull request: kit %s --pr <number>"
-                              branch
-                              command)))
-              (github :open-pr-url repo branch "open"))
-          (steps/fail!
-           (keyword command "no-open-pr")
-           (format
-            "No open pull request for branch '%s' in %s. Fix: open it with kit finish, or name it: kit %s --pr <number>"
-            branch
-            repo
-            command)))}))
-
-
 (defn- read-pr
-  [{:keys [github]} {:keys [pr repo]}]
-  (select-keys (github :read-pr pr repo (no-result "checks")) [:head :base]))
+  "The pull request's head and base."
+  [{:keys [pr repo]}]
+  (select-keys (github/read-pr pr repo watched-pr/no-result) [:head :base]))
 
 
 (defn- read-base-workflow
   "Whether the base holds the ready workflow; asked once, before any wait."
-  [{:keys [github]} {:keys [repo base]}]
-  {:ready? (github :ready-workflow? repo base)})
+  [{:keys [repo base]}]
+  {:ready? (github/ready-workflow? repo base)})
+
+
+(defn- required-contexts
+  "The checks the base's rulesets require, by name. A gh call that gives no answer goes to `fail` with gh's message."
+  [repo base fail]
+  (->> (github/gh-json fail "api" (str "repos/" repo "/rules/branches/" base))
+       (filter #(= "required_status_checks" (:type %)))
+       (mapcat #(get-in % [:parameters :required_status_checks]))
+       (map :context)
+       distinct
+       vec))
 
 
 (defn- read-wanted
   "What the base requires, once: a check that is not registered yet is told from one the base never asks for."
-  [{:keys [github]} {:keys [repo base]}]
-  {:wanted (github :required-contexts repo base (no-result "checks"))})
+  [{:keys [repo base]}]
+  {:wanted (required-contexts repo base watched-pr/no-result)})
 
 
 (defn- report-nothing-required
-  [_ctx {:keys [wanted base pr]}]
+  "Ends the run at once, with the line to print, when the base requires no check."
+  [{:keys [wanted base pr]}]
   (when (empty? wanted)
     {:report [(format "No required checks on %s; nothing to wait for: %s" (str base) pr)]}))
 
 
-;; ------------------------------------------------------------------ kit checks' own steps
+(defn- announce
+  "Says what is awaited, once, before the first look."
+  [{:keys [wanted head pr]}]
+  (when (seq wanted)
+    (println (format "Waiting for %s on %s (%s)." (str/join ", " wanted) (sha7 head) pr))
+    {}))
+
+
+(defn- ready-runs
+  "The ready workflow's recent runs, {:databaseId :status}. A gh call that gives no answer goes to `fail`."
+  [repo fail]
+  (github/gh-json fail
+                  "run"        "list"
+                  "-R"         repo
+                  "--workflow" (last (str/split github/ready-workflow-path #"/"))
+                  "--event"    "workflow_run"
+                  "--limit"    "20"
+                  "--json"     "databaseId,status"))
+
+
+(defn- run-log
+  "gh run view --log: the run's log text."
+  [repo id]
+  (:out (shell/run "gh" "run" "view" (str id) "-R" repo "--log")))
 
 
 (defn- read-ready-runs
   "The ready workflow's completed runs not read before, each with its log. Its run for the head is found by the log
   line `CI run id: …, … at <head>`: a workflow_run run carries the default branch's sha, not the PR's, so only the log
   names the head."
-  [github repo ruled]
-  (->> (github :ready-runs repo (no-result "checks"))
+  [repo fail ruled]
+  (->> (ready-runs repo fail)
        (filter #(and (= "completed" (:status %)) (not (ruled (:databaseId %)))))
-       (mapv #(assoc % :log (github :run-log repo (:databaseId %))))))
+       (mapv #(assoc % :log (run-log repo (:databaseId %))))))
 
 
 (defn- workflow-decision
@@ -184,9 +163,10 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
   only the workflow's first step (it then asks the owners and turns auto-merge on), so only its completed run, or the
   label hold, ends the wait. Returns the checks and the PR read, the runs read, the line to say while waiting (nil when
   every check finished and the workflow decided) and the workflow's decision."
-  [github {:keys [pr repo head wanted ready?]} ruled]
-  (let [checks    (github :required-checks pr repo (no-result "checks"))
-        now       (github :read-pr pr repo (no-result "checks"))
+  [{:keys [pr repo head wanted ready?]} ruled]
+  (let [fail      watched-pr/no-result
+        checks    (github/required-checks pr repo fail)
+        now       (github/read-pr pr repo fail)
         missing   (remove (set (map :name checks)) wanted)
         pending   (filter #(= "pending" (:bucket %)) checks)
         failed    (wait/failed-checks checks)
@@ -197,10 +177,10 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
                                               (str/join ", " (map :name pending))))
         settled   (and ready? (nil? status) (empty? failed) (= head (:head now)))
         runs      (when (and settled (not (:hold now)))
-                    (read-ready-runs github repo ruled))
+                    (read-ready-runs repo fail ruled))
         hit       (first (filter #(str/includes? (str (:log %)) (str " at " head)) runs))
         after-run (if hit
-                    (github :read-pr pr repo (no-result "checks"))
+                    (github/read-pr pr repo fail)
                     now)
         done      (when (and settled (or hit (:hold now)))
                     (workflow-decision pr head after-run hit))]
@@ -248,41 +228,33 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
                         (wait/failed-text failed (str "on " (sha7 head))))))))
 
 
-(defn- announce
-  [{:keys [out]} {:keys [wanted head pr]}]
-  (when (seq wanted)
-    (out (format "Waiting for %s on %s (%s)." (str/join ", " wanted) (sha7 head) pr))
-    {}))
-
-
 (defn- wait-for-checks
   "Looks every poll period until the checks passed (and, where the base has the ready workflow, it decided) or the wait
   cannot end well. A status line is printed when it differs from the last one."
-  [{:keys [github sleep out]} {:keys [wanted pr head poll] :as facts}]
+  [{:keys [wanted pr head poll] :as facts}]
   (when (seq wanted)
     (loop [shown nil
            ruled #{}]
-      (let [seen (read-checks-and-runs github facts ruled)]
+      (let [seen (read-checks-and-runs facts ruled)]
         (stop-if-over! facts seen)
         (if-let [status (:status seen)]
           (do (when (not= status shown)
-                (out status))
-              (sleep poll)
+                (println status))
+              (wait/sleep! poll)
               (recur status (into ruled (map :databaseId (:runs seen)))))
           {:report (cond-> [(format "All %d required checks passed on %s: %s" (count (:checks seen)) (sha7 head) pr)]
                      (:done seen) (conj (:done seen)))})))))
 
 
 (defn checks
-  "kit checks as a recipe. GitHub is (:github ctx), the clock (:sleep ctx) and the lines printed while waiting (:out
-  ctx); the result is data that checks! prints."
-  [ctx input]
-  (steps/run ctx input
-    :read-repo          read-repo
-    :read-poll          read-poll
-    :read-branch        read-branch
-    :check-pr-option    (check-pr-option "checks")
-    :find-pr            (find-pr "checks")
+  "kit checks as a recipe; the result is data that checks! prints."
+  [input]
+  (steps/run (assoc input :command "checks")
+    :read-repo          watched-pr/read-repo
+    :read-poll          watched-pr/read-poll
+    :read-branch        watched-pr/read-branch
+    :check-pr-option    watched-pr/check-pr-option
+    :find-pr            watched-pr/find-pr
     :read-pr            read-pr
     :read-base-workflow read-base-workflow
     :read-wanted        read-wanted
@@ -293,8 +265,8 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 
 (defn print-result
   "What the run ends with, on stdout."
-  [out {:keys [report]}]
-  (run! out report))
+  [{:keys [report]}]
+  (run! println report))
 
 
 (defn checks!
@@ -303,8 +275,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
     (when (:help input)
       (println checks-usage)
       (System/exit 0))
-    (let [ctx    {:github github/real :resolve-repo shell/resolve-repo :sleep wait/sleep! :out println}
-          result (checks ctx input)]
+    (let [result (checks input)]
       (when (= :fail (::steps/status result))
         (shell/exit-with! (steps/refusal result)))
-      (print-result println result))))
+      (print-result result))))

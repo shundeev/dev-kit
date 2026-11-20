@@ -34,22 +34,22 @@
 
 
 (defn- kit-merge
-  "Runs kit merge with the command-line words and the variables against the world. Returns the result, with what it
-  said under :lines and :warnings, and what it printed last under :closing."
+  "Runs kit merge with the command-line words and the variables against the world. Returns the result, with the lines
+  it printed under :lines and the warnings under :warnings; what it printed last comes after the recipe, as in a run."
   [world env & args]
-  (let [lines    (atom [])
-        warnings (atom [])
-        ctx      {:github       (fake/github world)
-                  :warn         (fn [& msg] (swap! warnings conj (str/join " " msg)))
-                  :out          #(swap! lines conj %)
-                  :kit          "bin/kit"
-                  :resolve-repo (fn [explicit] (or explicit "o/r"))
-                  :sleep        (fake/clock world)}
-        input    (merge-cmd/read-input (vec args) (fn [variable default] (get (merge variables env) variable default)))
-        result   (merge-cmd/merge-pr ctx input)]
-    (when (= :ok (::steps/status result))
-      (merge-cmd/print-result #(swap! lines conj %) result))
-    (assoc result :lines @lines :warnings @warnings)))
+  (let [out    (java.io.StringWriter.)
+        err    (java.io.StringWriter.)
+        input  (assoc (merge-cmd/read-input (vec args)
+                                            (fn [variable default] (get (merge variables env) variable default)))
+                      :kit
+                      "bin/kit")
+        result (binding [*out* out
+                         *err* err]
+                 (let [result (fake/with-github world #(merge-cmd/merge-pr input))]
+                   (when (= :ok (::steps/status result))
+                     (merge-cmd/print-result result))
+                   result))]
+    (assoc result :lines (str/split-lines (str out)) :warnings (remove empty? (str/split-lines (str err))))))
 
 
 (defn- said
