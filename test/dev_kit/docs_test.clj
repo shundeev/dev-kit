@@ -78,6 +78,10 @@
   {"stage 9 asks for the background alarm, the hold, the release and the Approve once ready (ADR-0007)"
    ["kit checks" "in the background" "kit finish --hold" "kit release"
     "Ask the owner for the Approve once the PR is ready"]
+   "stage 4: a repeated pattern is shown by one real step followed with go to definition"
+   ["go to definition" "the locality rule"]
+   "a brief to a subagent asks for no report on a wake-up where nothing changed"
+   ["no report on a wake-up where nothing changed"]
    "stage 9: a pass means ready unless held, and a stuck draft is released" ["unless the PR is held"
                                                                              "still a draft without `hold`"]})
 
