@@ -33,6 +33,11 @@
    :requires    ([bench])
    :task        (apply bench/-main *command-line-args*)}
 
+  vendor-check
+  {:doc      "vendor/cc-safety-net against the npm release pinned in its PIN (needs the network)"
+   :requires ([dev-kit.vendor-check :as vendor-check])
+   :task     (vendor-check/-main)}
+
   selftest
   {:doc  "the end-to-end check on a throwaway project, about 3 minutes"
    :task (shell "test/selftest.sh")}

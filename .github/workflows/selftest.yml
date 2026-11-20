@@ -48,6 +48,23 @@ jobs:
       - name: Selftest
         run: bb selftest
 
+      # The vendored copy against npm needs the network, so an ordinary pull request does not wait on npm:
+      # it runs when the pull request's diff touches vendor/, and always on a push to main. The checkout
+      # is the pull request's merge commit at depth 1; the base commit is fetched to diff against it.
+      - name: Vendored safety-net against npm
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            git fetch --no-tags --depth=1 origin "$BASE_SHA"
+            if [ -z "$(git diff --name-only "$BASE_SHA" HEAD -- vendor/)" ]; then
+              echo "vendor/ is not in this pull request's diff, so the check against npm is skipped"
+              exit 0
+            fi
+          fi
+          bb vendor-check
+
       - name: Pull request gate (ADR-0002, #26, #21)
         if: github.event_name == 'pull_request'
         env:

@@ -780,19 +780,6 @@ out="$(PATH="$noisy:$PATH" call Bash '{"command":"git status"}' 2>/dev/null)"; c
 [ "$code" -eq 0 ] && [ -z "$out" ] && ok "a warning from Node on stderr does not reach the hook's answer" || bad "noisy Node (exit $code)" "$out"
 expect_exit 1 "doctor names a Node older than 22" env PATH="$oldnode:$PATH" bb $kit doctor
 contains "  with the fix" "nvm install 22" "$LAST"
-V="$KIT/vendor/cc-safety-net"; version="$(sed -n 's/^version=//p' "$V/PIN")"; integrity="$(sed -n 's/^integrity=//p' "$V/PIN")"
-if curl -fsSL -o "$WORK/ccsn.tgz" "https://registry.npmjs.org/cc-safety-net/-/cc-safety-net-$version.tgz" 2>/dev/null; then
-  [ "sha512-$(openssl dgst -sha512 -binary "$WORK/ccsn.tgz" | openssl base64 -A)" = "$integrity" ] \
-    && ok "the npm release $version has the pinned sha512" || bad "the release's sha512 differs from PIN"
-  mkdir -p "$WORK/ccsn-pkg" && tar -xzf "$WORK/ccsn.tgz" -C "$WORK/ccsn-pkg"
-  differ="$(cd "$V" && find . -type f ! -name PIN ! -name README.md | while read -r f; do cmp -s "$f" "$WORK/ccsn-pkg/package/$f" || echo "$f"; done)"
-  [ -z "$differ" ] && ok "the vendored files are the release's, byte for byte" || bad "vendored files differ from the release" "$differ"
-elif [ -n "${CI:-}" ]; then
-  bad "the npm release cc-safety-net $version could not be downloaded, so the vendored copy is unchecked"
-else
-  echo "  skip  vendored copy against the npm release (offline)"
-fi
-
 echo "- flow scripts, offline guards"
 export GHWF_OWNER=u473t8 GHWF_PROJECT_NUMBER=3 GHWF_REPO=u473t8/kit-selftest
 expect_exit 1 "start refuses an issue without priority" bb .shared/bin/kit start --title x
