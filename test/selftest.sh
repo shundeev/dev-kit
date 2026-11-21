@@ -711,21 +711,15 @@ expect_exit 1 "doctor names a Node older than 22" env PATH="$oldnode:$PATH" bb $
 contains "  with the fix" "nvm install 22" "$LAST"
 echo "- flow scripts, offline guards"
 export GHWF_OWNER=u473t8 GHWF_PROJECT_NUMBER=3 GHWF_REPO=u473t8/kit-selftest
+# The refusals, the options and the exit codes of each command are stories in test/dev_kit/flow/*_test.clj; here the real
+# entry, bin/kit, is run once for a refusal and once for a help.
 expect_exit 1 "start refuses an issue without priority" bb .shared/bin/kit start --title x
 contains "start names the scale" "Urgent|High|Medium|Low" "$LAST"
-expect_exit 1 "start refuses an off-scale priority" bb .shared/bin/kit start --title x --priority Critical
-expect_exit 1 "finish refuses a non-conventional type" bb .shared/bin/kit finish --type update
-expect_exit 1 "finish has no merge mode" bb .shared/bin/kit finish --merge
-contains "finish rejects --merge" "Unknown argument: --merge" "$LAST"
-expect_exit 1 "merge refuses to run on main" bb .shared/bin/kit merge
-contains "merge explains" "Run from the issue branch" "$LAST"
 expect_exit 0 "merge has help" bb .shared/bin/kit merge --help
-expect_exit 0 "start: --help before an unknown option shows the help" bb .shared/bin/kit start --help --bogus
-contains "  the usage" "Usage: kit start" "$LAST"
-expect_exit 1 "finish refuses to run on main" bb .shared/bin/kit finish
-contains "finish explains" "On the base branch" "$LAST"
 
 echo "- finish and merge scripts (fake gh)"
+# One path through the real entry on the fake gh: finish (opens the PR), finish --hold, release, merge, merge's closeout,
+# checks, start. What each command does in the cases around it is a story in test/dev_kit/flow/*_test.clj.
 FAKE="$WORK/fake"; mkdir -p "$FAKE"
 export FAKE_GH_DIR="$FAKE" FAKE_GH_LOG="$FAKE/log"
 REMOTE="$WORK/remote.git"; git init -q --bare -b main "$REMOTE"
@@ -737,18 +731,13 @@ head_now() { git rev-parse HEAD; }
 
 : > "$FAKE/pr-list"; echo "Add Landing page" > "$FAKE/issue-title"
 echo change >> f; git add f; before=$(head_now)
-expect_exit 1 "finish: missing body file stops before the commit" flow finish --pr-body-file "$WORK/none.md"
-[ "$(head_now)" = "$before" ] && ok "  nothing committed" || bad "  committed anyway"
+# The gate's own verdicts on the title and the body are the gate's (their stories arrive with its own PR); these stay
+# for the call finish makes to the real gate.
 printf 'text\nADR: \n' > "$WORK/empty-adr.md"
 expect_exit 1 "finish: empty ADR line stops before the commit" flow finish --pr-body-file "$WORK/empty-adr.md"
 [ "$(head_now)" = "$before" ] && ok "  nothing committed" || bad "  committed anyway"
-expect_exit 1 "finish: no open PR and no body file stops before the commit" flow finish
 printf 'did it\n' > "$WORK/bad-msg.txt"
 expect_exit 1 "finish: commit message without type(GH-n) refused" flow finish --commit-message-file "$WORK/bad-msg.txt" --pr-body-file "$WORK/empty-adr.md"
-
-git switch -q -c hotfix; expect_exit 1 "finish: a branch without an issue number stops before the commit" flow finish --pr-body-file "$WORK/empty-adr.md"
-contains "  names the way out" "kit start" "$LAST"
-git switch -q 12-landing; git branch -q -D hotfix
 printf '## Review\n<!-- hint -->\n\n## User-level test\nRan it.\n\nADR: none\n' > "$WORK/no-review.md"
 expect_exit 1 "finish: a Review section with only the hint stops before the commit (#21)" flow finish --pr-body-file "$WORK/no-review.md"
 contains "  with the same words as CI" "fill in ## Review" "$LAST"
@@ -758,8 +747,9 @@ printf '## What changed\n- x\n\n## Review\nLooked at it.\n\n## User-level test\n
 expect_exit 1 "finish: a type outside Conventional Commits stops before the commit" flow finish --type update --pr-body-file "$WORK/body.md"
 contains "  names the way out" "pass --type" "$LAST"
 [ "$(head_now)" = "$before" ] && ok "  nothing committed" || bad "  committed anyway"
+flow_rh() { GHWF_REVIEWERS=shundeev/owners GHWF_HUMAN=the-human flow "$@"; }
 : > "$FAKE_GH_LOG"
-expect_exit 0 "finish: a closed PR does not count; a new one is opened" flow finish --pr-body-file "$WORK/body.md"
+expect_exit 0 "finish: a new PR with the owners and the person behind the agent" flow_rh finish --pr-body-file "$WORK/body.md"
 grep -q '^pr create' "$FAKE_GH_LOG" && ok "  gh pr create called" || bad "  no pr create" "$(cat "$FAKE_GH_LOG")"
 cmp -s "$FAKE/pr-body" <(printf 'Closes #12\n\n%s' "$(cat "$WORK/body.md")") \
   && ok "  the body as written, no trailing newline" || bad "  the body" "$(od -c "$FAKE/pr-body" | tail -3)"
@@ -767,81 +757,27 @@ contains "  gh's own lines reach the terminal" "Creating pull request" "$LAST"
 grep -q 'pr list .*--state open' "$FAKE_GH_LOG" && ok "  only open PRs looked up" || bad "  lookup not limited to open PRs"
 grep -q '^pr merge https://github.com/u473t8/fake/pull/99 --auto --squash' "$FAKE_GH_LOG" \
   && ok "  auto-merge turned on: the owner's Approve merges it" || bad "  auto-merge not turned on" "$(cat "$FAKE_GH_LOG")"
-grep -q '^pr create .*--draft' "$FAKE_GH_LOG" && bad "  a repository without the ready workflow gets a draft" || ok "  no ready workflow on the base: the PR opens ready (ADR-0007)"
+grep -qx 'pr edit https://github.com/u473t8/fake/pull/99 --add-reviewer shundeev/owners --add-assignee the-human' "$FAKE_GH_LOG" \
+  && ok "  asks the owners for a review and assigns the person" || bad "  no review request or assignee" "$(grep '^pr edit' "$FAKE_GH_LOG")"
 grep -q 'contents/.github/workflows/ready-when-green.yml?ref=main' "$FAKE_GH_LOG" \
   && ok "  asked the base branch for the workflow" || bad "  never looked for the workflow" "$(cat "$FAKE_GH_LOG")"
 contains "  subject from the issue title, first letter lowered" "Subject: feat(GH-12): add Landing page" "$LAST"
 [ "$(git log -1 --format=%s)" = "feat(GH-12): add Landing page" ] && ok "  commit carries the subject" || bad "  commit subject"
 [ "$(git rev-parse origin/12-landing 2>/dev/null)" = "$(head_now)" ] && ok "  branch pushed" || bad "  branch not pushed"
-
-echo "https://github.com/u473t8/fake/pull/99" > "$FAKE/pr-list"; : > "$FAKE_GH_LOG"
-echo more >> f; git add f
-printf 'fix(GH-12): handle more\n\nbody\n' > "$WORK/msg.txt"
-expect_exit 0 "finish: an open PR needs no body file" flow finish --type fix --commit-message-file "$WORK/msg.txt"
-grep -q '^pr create' "$FAKE_GH_LOG" && bad "  opened a second PR" || ok "  no second PR"
-contains "  subject from the commit message file" "Subject: fix(GH-12): handle more" "$LAST"
-
-: > "$FAKE/pr-list"; : > "$FAKE_GH_LOG"; echo more >> f; git add f
-printf 'fix(GH-12): handle even more\n' > "$WORK/msg2.txt"
-flow_rh() { GHWF_REVIEWERS=shundeev/owners GHWF_HUMAN=the-human flow "$@"; }
-flow_r() { GHWF_REVIEWERS=shundeev/owners flow "$@"; }
-expect_exit 0 "finish: a new PR with reviewers and the person behind the agent" \
-  flow_rh finish --commit-message-file "$WORK/msg2.txt" --pr-body-file "$WORK/body.md"
-grep -qx 'pr edit https://github.com/u473t8/fake/pull/99 --add-reviewer shundeev/owners --add-assignee the-human' "$FAKE_GH_LOG" \
-  && ok "  asks the owners for a review and assigns the person" || bad "  no review request or assignee" "$(grep '^pr edit' "$FAKE_GH_LOG")"
-: > "$FAKE_GH_LOG"; echo again >> f; git add f
-printf 'fix(GH-12): handle once more\n' > "$WORK/msg3.txt"
-expect_exit 0 "finish: without GHWF_HUMAN" flow_r finish --commit-message-file "$WORK/msg3.txt" --pr-body-file "$WORK/body.md"
-contains "  warns and names the fix" "kit init" "$LAST"
 echo "https://github.com/u473t8/fake/pull/99" > "$FAKE/pr-list"
 
 echo "- ready workflow: draft, hold, release (ADR-0007)"
 PR99=https://github.com/u473t8/fake/pull/99
 stage() { echo "$1" >> f; git add f; printf 'fix(GH-12): %s\n' "$1" > "$WORK/msg.txt"; : > "$FAKE_GH_LOG"; } # a change to finish, the log cleared
 calls() { grep -E '^pr (edit|ready|merge)' "$FAKE_GH_LOG" | sed -E 's/ https:[^ ]*//; s/ -R [^ ]*//' | tr '\n' ','; }
-stopped() { # stopped <needle>: nothing was committed, and the message says needle
-  contains "  says $1" "$1" "$LAST"
-  [ "$(head_now)" = "$before" ] && ok "  nothing committed" || bad "  committed anyway"
-}
 touch "$FAKE/ready-workflow"; : > "$FAKE/pr-list"
-stage draft
-expect_exit 0 "finish: the base holds the ready workflow, so the PR opens as a draft" flow_rh finish --commit-message-file "$WORK/msg.txt" --pr-body-file "$WORK/body.md"
-grep -q '^pr create .*--draft' "$FAKE_GH_LOG" && ok "  gh pr create --draft" || bad "  not a draft" "$(cat "$FAKE_GH_LOG")"
-[ -z "$(calls | grep merge)" ] && ok "  no auto-merge: the workflow turns it on after marking the PR ready" || bad "  auto-merge turned on a draft"
-grep -q -- '--add-label hold' "$FAKE_GH_LOG" && bad "  held without --hold" || ok "  no hold unless asked"
-grep -qx "pr edit $PR99 --add-assignee the-human" "$FAKE_GH_LOG" \
-  && ok "  the owners are not asked on a draft, the assignee is set" || bad "  review requested on a draft" "$(grep '^pr edit' "$FAKE_GH_LOG")"
-contains "  says when the owners are asked" "asked once its required checks pass" "$LAST"
-
-stage held; : > "$FAKE/pr-list"
+stage held
 expect_exit 0 "finish --hold: the PR carries the label hold" flow_rh finish --hold --commit-message-file "$WORK/msg.txt" --pr-body-file "$WORK/body.md"
 grep -q '^label create hold -R u473t8/fake' "$FAKE_GH_LOG" && ok "  the label is created when the repository has none" || bad "  no label create" "$(cat "$FAKE_GH_LOG")"
+grep -q '^pr create .*--draft' "$FAKE_GH_LOG" && ok "  gh pr create --draft" || bad "  not a draft" "$(cat "$FAKE_GH_LOG")"
 grep -q '^pr create .*--label hold' "$FAKE_GH_LOG" && ok "  the PR is created with the label, so the workflow never sees it unheld" || bad "  no --label hold" "$(cat "$FAKE_GH_LOG")"
-echo "$PR99" > "$FAKE/pr-list"; stage again; echo true > "$FAKE/pr-draft"
-expect_exit 0 "finish --hold: an open PR gets the label too" flow_rh finish --hold --commit-message-file "$WORK/msg.txt"
-grep -qx "pr edit $PR99 --add-label hold" "$FAKE_GH_LOG" && ok "  gh pr edit --add-label hold" || bad "  no hold label" "$(grep '^pr edit' "$FAKE_GH_LOG")"
-grep -q '^pr create' "$FAKE_GH_LOG" && bad "  opened a second PR" || ok "  no second PR"
-grep -qE -- '--add-reviewer|^pr merge' "$FAKE_GH_LOG" && bad "  asked the owners or turned on auto-merge on an open draft" "$(grep -E '^pr (edit|merge)' "$FAKE_GH_LOG")" \
-  || ok "  an open draft asks nobody and has no auto-merge: its own state decides, not the base's"
-contains "  says it waits for kit release" "kit release" "$LAST"
-echo false > "$FAKE/pr-draft"; stage ready
-expect_exit 0 "finish: an open PR that is ready gets the review request and auto-merge, as before" flow_rh finish --commit-message-file "$WORK/msg.txt"
-grep -qx "pr edit $PR99 --add-reviewer shundeev/owners --add-assignee the-human" "$FAKE_GH_LOG" \
-  && ok "  the owners are asked" || bad "  no review request" "$(grep '^pr edit' "$FAKE_GH_LOG")"
-grep -q "^pr merge $PR99 --auto --squash" "$FAKE_GH_LOG" && ok "  auto-merge on" || bad "  no auto-merge" "$(cat "$FAKE_GH_LOG")"
-stage again2; before=$(head_now)
-expect_exit 1 "finish --hold: an open PR that is ready is refused before the commit" flow_rh finish --hold --commit-message-file "$WORK/msg.txt"
-stopped "only reads drafts"; contains "  and what to do" "gh pr ready" "$LAST"
-git reset -q --hard HEAD; rm -f "$FAKE/pr-draft"
-
-stage more; : > "$FAKE/pr-list"; rm "$FAKE/ready-workflow"; before=$(head_now)
-expect_exit 1 "finish --hold: without the workflow on the base it stops before the commit" flow_rh finish --hold --commit-message-file "$WORK/msg.txt" --pr-body-file "$WORK/body.md"
-stopped "run kit finish without --hold"
-touch "$FAKE/gh-fails"
-expect_exit 1 "finish: a base branch that cannot be read stops before the commit" flow_rh finish --commit-message-file "$WORK/msg.txt" --pr-body-file "$WORK/body.md"
-stopped "run it again"
-rm "$FAKE/gh-fails"; git reset -q --hard HEAD
-
+[ -z "$(calls | grep merge)" ] && ok "  no auto-merge: the workflow turns it on after marking the PR ready" || bad "  auto-merge turned on a draft"
+rm "$FAKE/ready-workflow"
 echo "$PR99" > "$FAKE/pr-list"
 release_with() { echo "{\"state\":\"$1\",\"isDraft\":$2,\"labels\":$3,\"url\":\"$PR99\"}" > "$FAKE/pr-release"; : > "$FAKE_GH_LOG"; }
 echo '[{"name":"checks","bucket":"pass"}]' > "$FAKE/pr-checks.json"
@@ -849,48 +785,7 @@ release_with OPEN true '[{"name":"hold"}]'
 expect_exit 0 "release: a held draft with green required checks" flow release
 [ "$(calls)" = "pr edit --remove-label hold,pr ready,pr merge --auto --squash," ] \
   && ok "  removes hold, marks it ready, turns auto-merge on" || bad "  the calls" "$(calls)"
-release_with OPEN false '[]'
-expect_exit 0 "release: a PR that is ready already only gets auto-merge" flow release
-[ "$(calls)" = "pr merge --auto --squash," ] && ok "  no label to remove, no ready" || bad "  the calls" "$(calls)"
-expect_exit 0 "release --help: covers a draft that was never held" flow release --help
-contains "  says so" "never held" "$LAST"
-refuses() { # refuses <name> <needle>...: release is refused and every needle is said; the PR is left as it was
-  local name="$1"; shift; : > "$FAKE_GH_LOG"
-  expect_exit 1 "release: $name" flow release
-  for n in "$@"; do contains "  says $n" "$n" "$LAST"; done
-  grep -qE '^pr (edit|ready|merge)' "$FAKE_GH_LOG" && bad "  changed the PR anyway" "$(cat "$FAKE_GH_LOG")" || ok "  the PR is left as it was"
-}
-release_with OPEN true '[{"name":"hold"}]'
-echo '[{"name":"checks","bucket":"pending"},{"name":"lint","bucket":"fail"},{"name":"docs","bucket":"pass"}]' > "$FAKE/pr-checks.json"; echo 8 > "$FAKE/pr-checks.exit"
-refuses "a required check that is not green" "checks (pending)" "lint (fail)" "run kit release again"
-echo '[]' > "$FAKE/pr-checks.json"; echo 1 > "$FAKE/pr-checks.exit"
-refuses "no required check reported is not green" "no required check"
-release_with MERGED false '[]'
-refuses "a PR that is not open" "is MERGED"
-: > "$FAKE/pr-list"
-refuses "a branch without an open PR" "--pr"
-echo "$PR99" > "$FAKE/pr-list"
 
-git switch -q -c 13-typo main
-echo typo >> f; git commit -qam "fix(GH-13): correct the typo"
-: > "$FAKE/pr-list"; : > "$FAKE_GH_LOG"
-expect_exit 0 "finish --no-commit without --type" flow finish --no-commit --summary "correct a typo" --pr-body-file "$WORK/body.md"
-contains "  the PR type comes from the branch's first commit" "Subject: fix(GH-13): correct a typo" "$LAST"
-expect_exit 0 "finish --no-commit with --type" flow finish --no-commit --type docs --summary "correct a typo" --pr-body-file "$WORK/body.md"
-contains "  an explicit --type wins" "Subject: docs(GH-13): correct a typo" "$LAST"
-# #117: a leading docs commit does not set the type of a branch that also changes something else
-for t in "14-mixed|docs(GH-14): explain it,refactor(GH-14): reshape it|refactor(GH-14)" "15-docs|docs(GH-15): explain it,docs(GH-15): more|docs(GH-15)"; do
-  IFS='|' read -r b msgs want <<<"$t"; git switch -q -c "$b" main
-  IFS=, read -ra ms <<<"$msgs"; for m in "${ms[@]}"; do echo "$m" >> f; git commit -qam "$m"; done
-  expect_exit 0 "finish: type of $b" flow finish --no-commit --summary "x" --pr-body-file "$WORK/body.md"
-  contains "  the first commit that is not docs, else the first: $want" "Subject: $want: x" "$LAST"
-done
-: > "$FAKE_GH_LOG"
-expect_exit 0 "finish: --owner \"\" leaves the board alone" flow finish --no-commit --summary "x" --owner "" --pr-body-file "$WORK/body.md"
-grep -q '^project' "$FAKE_GH_LOG" && bad "  the board was touched" "$(grep '^project' "$FAKE_GH_LOG")" || ok "  no board call"
-git remote set-url origin "$WORK/nowhere.git"
-expect_exit 128 "finish: a failed push ends with git's exit code" flow finish --no-commit --summary "x" --pr-body-file "$WORK/body.md"
-git remote set-url origin "$REMOTE"
 git switch -q 12-landing
 echo "https://github.com/u473t8/fake/pull/99" > "$FAKE/pr-list"
 
@@ -907,43 +802,6 @@ unscript() { rm -f "$FAKE/pr-view.seq" "$FAKE/pr-checks.seq"; }
 echo '[]' > "$FAKE/pr-checks.json" # a look at a blocked PR reads its checks: none yet unless a case scripts them
 chk() { jq -nc --arg n "$1" --arg b "$2" '{name: $n, bucket: $b, link: ("https://example.invalid/job/" + $n), state: $b}'; }
 
-script_views "OPEN REVIEW_REQUIRED BLOCKED"; : > "$FAKE_GH_LOG"
-expect_exit 1 "merge: refuses without the owner's Approve" flow merge
-contains "  says what it waits for" "Waiting for the owner's Approve" "$LAST"
-if grep -q '^pr merge' "$FAKE_GH_LOG"; then bad "  tried to merge"; else ok "  no merge attempted"; fi
-script_views "OPEN - BLOCKED"
-expect_exit 1 "merge: a PR with no review decision says so (#98)" flow merge
-contains "  review: none" "review: none" "$LAST"
-unscript
-touch "$FAKE/no-auto-merge"; : > "$FAKE_GH_LOG"
-script_views "OPEN APPROVED CLEAN" "OPEN APPROVED CLEAN" "CLOSED APPROVED CLEAN"
-expect_exit 1 "merge: without auto-merge in the repository" flow merge
-calls="$(grep -E '^pr merge' "$FAKE_GH_LOG" | sed -E 's/ https:[^ ]*//; s/ -R [^ ]*//' | tr '\n' ',')"
-[ "$calls" = "pr merge --auto --squash,pr merge --squash," ] && ok "  falls back to a plain squash merge" || bad "  no fallback" "$calls"
-rm "$FAKE/no-auto-merge"; unscript
-
-# #109: kit merge waits until the PR is merged, or until merging became impossible, and says which.
-# Each case scripts every look: the first before auto-merge is turned on, the rest while it waits.
-stops() { # stops <name> <needle> <look>...: the merge ends with exit 1 and the reason; the branch and the card stay
-  local name="$1" needle="$2"; shift 2
-  script_views "$@"; : > "$FAKE_GH_LOG"
-  expect_exit 1 "merge: $name" flow merge
-  contains "  names the reason" "$needle" "$LAST"
-  grep -q "^project item-add" "$FAKE_GH_LOG" && bad "  moved the card" || ok "  no closeout"
-  git rev-parse -q --verify refs/heads/"$(git rev-parse --abbrev-ref HEAD)" >/dev/null && ok "  branch kept" || bad "  branch deleted"
-}
-stops "a PR closed while waiting" "was closed" "OPEN APPROVED BLOCKED" "CLOSED APPROVED BLOCKED"
-contains "  and what to do" "Fix:" "$LAST"
-contains "  a status line shows the wait is alive" "GitHub reports OPEN, BLOCKED" "$LAST"
-stops "the approval gone while waiting" "approval is gone" "OPEN APPROVED BLOCKED" "OPEN REVIEW_REQUIRED BLOCKED"
-stops "a conflict that appears while waiting" "merge origin/main" "OPEN APPROVED BLOCKED" "OPEN APPROVED DIRTY"
-script_checks "[$(chk selftest pending)]" "[$(chk selftest fail),$(chk lint pass)]"
-stops "a required check that failed while waiting" "selftest" "OPEN APPROVED BLOCKED" "OPEN APPROVED BLOCKED"
-contains "  names the check's link" "https://example.invalid/job/selftest" "$LAST"
-contains "  and says it failed" "failed" "$LAST"
-unscript
-git rev-parse -q --verify refs/heads/12-landing >/dev/null && ok "  branch kept" || bad "  branch deleted"
-
 W="$WORK/main-wt"; git worktree add -q "$W" main
 script_views "OPEN APPROVED BEHIND" "OPEN APPROVED BEHIND" "MERGED APPROVED CLEAN"; : > "$FAKE_GH_LOG"
 expect_exit 0 "merge: works while main is checked out in another worktree" flow merge
@@ -954,47 +812,7 @@ git rev-parse -q --verify refs/heads/12-landing >/dev/null && bad "  local branc
 git ls-remote --exit-code --heads origin 12-landing >/dev/null 2>&1 && bad "  remote branch left" || ok "  remote branch deleted"
 [ "$(git rev-parse --abbrev-ref HEAD)" = HEAD ] && ok "  this worktree detached on the base" || bad "  not detached"
 unscript
-
-# #72: a branch that falls behind while the script waits is updated, then merges.
-git switch -q -c 15-wait origin/main && git push -q -u origin 15-wait
-echo "https://github.com/u473t8/fake/pull/97" > "$FAKE/pr-list";
-script_views "OPEN APPROVED BLOCKED" "OPEN APPROVED BEHIND" "OPEN APPROVED BEHIND" "OPEN APPROVED BLOCKED" "MERGED APPROVED CLEAN"; : > "$FAKE_GH_LOG"
-expect_exit 0 "merge: a branch that falls behind while waiting is updated and merges" flow merge
-calls="$(grep -E '^pr (update-branch|merge)' "$FAKE_GH_LOG" | cut -d' ' -f1,2 | tr '\n' ',')"
-[ "$calls" = "pr merge,pr update-branch," ] && ok "  auto-merge, then an update when it fell behind" || bad "  calls" "$calls"
-unscript; : > "$FAKE/pr-list"; git switch -q --detach origin/main
-
-# #99: a PR GitHub merged between two looks goes to the closeout; its branch is gone, so no update is tried.
-git switch -q -c 16-race origin/main && git push -q -u origin 16-race
-echo "https://github.com/u473t8/fake/pull/96" > "$FAKE/pr-list"
-script_views "OPEN APPROVED BEHIND" "MERGED APPROVED CLEAN"; : > "$FAKE_GH_LOG"
-expect_exit 0 "merge: a PR merged while the branch was to be updated goes to the closeout (#99)" flow merge
-grep -q '^pr update-branch' "$FAKE_GH_LOG" && bad "  tried to update a merged PR's branch" || ok "  no update of the merged PR's branch"
-grep -q '^pr merge' "$FAKE_GH_LOG" && bad "  tried to merge a merged PR" || ok "  no second merge"
-contains "  closed out" "Merged: " "$LAST"
-git rev-parse -q --verify refs/heads/16-race >/dev/null && bad "  local branch left" || ok "  local branch deleted"
-unscript; : > "$FAKE/pr-list"; git switch -q --detach origin/main
-
-# A refused update-branch is no end: the wait looks again (here the PR has merged by then).
-git switch -q -c 17-refused origin/main && git push -q -u origin 17-refused
-echo "https://github.com/u473t8/fake/pull/95" > "$FAKE/pr-list"; touch "$FAKE/update-fails"; script_views "OPEN APPROVED BLOCKED" "OPEN APPROVED BEHIND" "OPEN APPROVED BEHIND" "MERGED APPROVED CLEAN"
-expect_exit 0 "merge: an update-branch that is refused does not end the wait" flow merge
-contains "  says the update was refused" "update was refused" "$LAST"
-rm "$FAKE/update-fails"; unscript; : > "$FAKE/pr-list"; git switch -q --detach origin/main
-
-# While GitHub recomputes a PR (mergeStateStatus UNKNOWN, the review decision empty for a moment) no stop reason is
-# judged: the approval is "gone" only on a settled state. Seen live: update-branch, then an UNKNOWN look (#109).
-git switch -q -c 18-unknown origin/main && git push -q -u origin 18-unknown
-echo "https://github.com/u473t8/fake/pull/94" > "$FAKE/pr-list"
-script_views "OPEN - UNKNOWN" "OPEN APPROVED CLEAN" "MERGED APPROVED CLEAN"
-expect_exit 0 "merge: an UNKNOWN look with no review decision is looked at again, not read as a lost approval" flow merge
-contains "  reaches the closeout" "Merged: " "$LAST"
-unscript; : > "$FAKE/pr-list"; git switch -q --detach origin/main
-git switch -q -c 19-unknown origin/main && git push -q -u origin 19-unknown
-echo "https://github.com/u473t8/fake/pull/93" > "$FAKE/pr-list"
-script_views "OPEN APPROVED BLOCKED" "OPEN - UNKNOWN" "OPEN APPROVED BLOCKED" "MERGED APPROVED CLEAN"
-expect_exit 0 "merge: the same while waiting after auto-merge is on" flow merge
-unscript; : > "$FAKE/pr-list"; git switch -q --detach origin/main
+git switch -q --detach origin/main
 
 # #137: in dev-kit itself, a branch whose bin/flow.clj is older than the base's runs the base's kit merge, and says so;
 # a project (the kit at .shared, no kit-defaults.edn at its root) runs its own. The marker is printed by the base's version.
@@ -1039,98 +857,15 @@ if grep -q '^pr merge' "$FAKE_GH_LOG"; then bad "  merged again"; else ok "  no 
 grep -q '^project item-add' "$FAKE_GH_LOG" && ok "  the card is moved to Done" || bad "  no board update"
 git rev-parse -q --verify refs/heads/14-auto >/dev/null && bad "  local branch left" || ok "  local branch deleted"
 
-# #97: the edge cases the retrospectives met.
-git switch -q -c 41-merged origin/main && git push -q -u origin 41-merged
-echo "https://github.com/u473t8/fake/pull/90" > "$FAKE/pr-list"; : > "$FAKE/pr-list-merged"
-script_views "OPEN APPROVED CLEAN" "MERGED APPROVED CLEAN" "MERGED APPROVED CLEAN"; touch "$FAKE/no-auto-merge"; : > "$FAKE_GH_LOG"
-expect_exit 0 "merge: a PR GitHub merged while auto-merge was refused goes to the closeout (site#18)" flow merge
-grep -q "Auto-merge not available" <<<"$LAST" && bad "  warned that auto-merge is not available" || ok "  no 'Auto-merge not available' line"
-grep -q '^pr merge [^ ]* --squash$' "$FAKE_GH_LOG" && bad "  tried a plain merge" || ok "  no second merge"
-grep -q '^issue close' "$FAKE_GH_LOG" && bad "  closed an issue the PR does not close" || ok "  a PR with no closing reference closes no issue"
-rm "$FAKE/no-auto-merge"; unscript
-git switch -q -c 42-dirty origin/main && git push -q -u origin 42-dirty
-script_views "OPEN APPROVED DIRTY"; : > "$FAKE_GH_LOG"
-expect_exit 1 "merge: a conflict with the base stops at once (#27)" flow merge
-contains "  says to merge the base in" "merge origin/main" "$LAST"; contains "  and that the push dismisses the approval" "dismisses" "$LAST"
-grep -q '^pr merge' "$FAKE_GH_LOG" && bad "  tried to merge" || ok "  no merge attempted"
-git rev-parse -q --verify refs/heads/42-dirty >/dev/null && ok "  branch kept" || bad "  branch deleted"
-unscript
 
-
-# #109: kit checks waits until the checks the base requires (selftest and lint in the fake) are registered on the head
-# commit and have finished, then says how they ended. One row per case: the looks at the PR, the checks seen at each
-# look (name:bucket, "-" is none registered yet), the exit code, and what the output says (";" between phrases).
-echo "https://github.com/u473t8/fake/pull/90" > "$FAKE/pr-list"
-checks_case() { # checks_case <name> <exit> <says> <views> <checks>
-  local name="$1" code="$2" v looks one phrase scripted=() IFS
-  IFS=';' read -ra v <<<"$4"; script_views "${v[@]}"
-  IFS=';' read -ra looks <<<"$5"
-  for one in "${looks[@]}"; do
-    local items=() seen; IFS=' ' read -ra seen <<<"$one"
-    for phrase in "${seen[@]}"; do [ "$phrase" = - ] || items+=("$(chk "${phrase%%:*}" "${phrase##*:}")"); done
-    scripted+=("[$(IFS=,; echo "${items[*]:-}")]")
-  done
-  script_checks "${scripted[@]}"
-  expect_exit "$code" "checks: $name" flow checks
-  IFS=';' read -ra v <<<"$3"
-  for phrase in "${v[@]}"; do contains "  says: $phrase" "$phrase" "$LAST"; done
-  unscript
-}
-while IFS='|' read -r name code says views checks; do checks_case "$name" "$code" "$says" "$views" "$checks"; done <<'TABLE'
-waits for checks not registered yet, then for their result|0|Not registered yet: selftest, lint;have not finished;passed|OPEN - BLOCKED;OPEN - BLOCKED;OPEN - BLOCKED;OPEN - BLOCKED|-;selftest:pending lint:pending;selftest:pass lint:pass
-one registered check that passed is not all of them|0|Not registered yet: lint;passed|OPEN - BLOCKED;OPEN - BLOCKED;OPEN - BLOCKED|selftest:pass;selftest:pass lint:pass
-checks that have passed end it at once|0|All 2 required checks passed|OPEN - CLEAN;OPEN - CLEAN|selftest:pass lint:pass
-a failed check ends it with its link, at once|1|job/selftest|OPEN - BLOCKED;OPEN - BLOCKED|selftest:fail lint:pending
-the head moves|2|aaa111 to bbb222;kit checks again|OPEN - BLOCKED aaa111;OPEN - BLOCKED aaa111;OPEN - BLOCKED bbb222|-;selftest:pending
-the PR closes|2|is closed|OPEN - BLOCKED;CLOSED - BLOCKED|selftest:pending
-the PR merges|2|merged, so there is nothing to wait for|OPEN - BLOCKED;MERGED - CLEAN|selftest:pending
-gh cannot be read (here: no answer left)|2|has no more answers|OPEN - BLOCKED;OPEN - BLOCKED|-
-TABLE
-# Where the base has the ready workflow, kit checks also waits for its decision and reports the PR's state. The workflow's run
-# for the head is found by its log line (the fake: run 501, completed, when a log is given). One row per case: the looks
-# at the PR (the fifth word is its state, see view), the run's log, what the output says.
-touch "$FAKE/ready-workflow"
-while IFS='|' read -r name views log says; do
-  echo '[{"databaseId":501,"status":"completed"}]' > "$FAKE/ready-runs.json"; printf "$log" > "$FAKE/run-log-501"
-  script_checks "[$(chk selftest pass),$(chk lint pass)]" "[$(chk selftest pass),$(chk lint pass)]" "[$(chk selftest pass),$(chk lint pass)]"
-  IFS=';' read -ra v <<<"$views"; script_views "${v[@]}"
-  expect_exit 0 "checks, ready workflow: $name" flow checks
-  IFS=';' read -ra ph <<<"$says"; for phrase in "${ph[@]}"; do contains "  says: $phrase" "$phrase" "$LAST"; done
-done <<'TABLE'
-a PR the workflow marked ready|OPEN - CLEAN aaa111;OPEN - CLEAN aaa111;OPEN - CLEAN aaa111|ready\tMark\t2026-11-14T10:00:00Z CI run id: 400, success on 1-x at aaa111\n|Ready;owners;auto-merge on
-a held draft|OPEN - CLEAN aaa111;OPEN - CLEAN aaa111 draft,hold||Held;kit release
-a draft the run left alone, with its decision line|OPEN - CLEAN aaa111;OPEN - CLEAN aaa111 draft;OPEN - CLEAN aaa111 draft|ready\tMark\t2026-11-14T10:00:00Z CI run id: 400, success on 1-x at aaa111\nready\tMark\t2026-11-14T10:00:01Z decision: #9 carries the label hold, left a draft\n|Still a draft;carries the label hold, left a draft
-TABLE
-# The race on site#25: the PR leaves draft before its review request and auto-merge appear (view word "readying": not a
-# draft, nobody asked, auto-merge off). Leaving draft ends nothing; the report waits for the run, then reads the PR.
-echo '[]' > "$FAKE/ready-runs.json.seq"; echo '[{"databaseId":501,"status":"completed"}]' >> "$FAKE/ready-runs.json.seq"
-printf 'ready\tMark\t2026-11-14T10:00:00Z CI run id: 400, success on 1-x at aaa111\n' > "$FAKE/run-log-501"
-script_checks "[$(chk selftest pass),$(chk lint pass)]" "[$(chk selftest pass),$(chk lint pass)]"
-script_views "OPEN - CLEAN aaa111 readying" "OPEN - CLEAN aaa111 readying" "OPEN - CLEAN aaa111 readying" "OPEN - CLEAN aaa111"
-expect_exit 0 "checks, ready workflow: the PR leaves draft before the run completes" flow checks
-for phrase in "Waiting for the ready workflow" "Ready" "owners asked: owners; auto-merge on"; do contains "  says: $phrase" "$phrase" "$LAST"; done
-rm -f "$FAKE/ready-runs.json.seq"
-rm -f "$FAKE/ready-runs.json" "$FAKE/run-log-501" "$FAKE/ready-workflow"; unscript
 script_views "OPEN - CLEAN" "OPEN - CLEAN"; script_checks "[$(chk selftest pass),$(chk lint pass)]"; : > "$FAKE_GH_LOG"
 expect_exit 0 "checks: --pr names the pull request" flow checks --pr 77
 grep -q '^pr view 77' "$FAKE_GH_LOG" && grep -q '^pr checks 77' "$FAKE_GH_LOG" && ok "  every call names #77" || bad "  calls" "$(cat "$FAKE_GH_LOG")"
 unscript
-echo '[{"type":"pull_request"}]' > "$FAKE/rules-branch.json"; script_views "OPEN - CLEAN"
-expect_exit 0 "checks: a base that requires no checks ends it at once" flow checks
-contains "  says there is nothing to wait for" "nothing to wait for" "$LAST"
-rm "$FAKE/rules-branch.json"; unscript
-expect_exit 0 "checks has help" flow checks --help
-
-git switch -q -c 43-silent origin/main
-echo "https://github.com/u473t8/fake/pull/91" > "$FAKE/pr-list"
-
-# A gh call that fails with no message names itself and its exit code (#95).
-touch "$FAKE/silent-fail"
-expect_exit 3 "finish: a silent gh failure keeps gh's exit code" flow finish --no-commit --summary x --pr-body-file "$WORK/body.md"
-contains "  names the command" "gh pr list" "$LAST"; contains "  and the exit code" "exit code 3" "$LAST"
-rm "$FAKE/silent-fail"; git switch -q --detach origin/main
 
 echo "- start script and board updates (#12, #41, fake gh)"
+# The cases of kit start (reuse, labels, bodies, statuses, the board's refusals) are stories; here the real entry files one issue,
+# converts one draft through its GraphQL mutation, and sets the status alone as printed.
 B="$WORK/board"; mkdir -p "$B"
 export FAKE_GH_DIR="$B" FAKE_GH_LOG="$B/log"
 echo '{"data":{"search":{"nodes":[]}}}' > "$B/missing.json"
@@ -1146,58 +881,11 @@ board "$(node Recurring Issue 5 CLOSED Done)" "$(node Recurring Issue 6 OPEN Don
 expect_exit 0 "start: a title of closed or Done work files a new issue" start --title Recurring
 contains "  the new one" "Issue Number: 77" "$LAST"
 grep -q -- 'issue list .*--state open' "$FAKE_GH_LOG" && ok "  title search looks at open issues only" || bad "  issue search" "$(grep 'issue list' "$FAKE_GH_LOG")"
-board "$(node Recurring Issue 8 OPEN 'In progress')"
-expect_exit 0 "start: open work with the title is reused" start --title Recurring
-contains "  that issue" "Issue Number: 8" "$LAST"
 board "$(node 'Draft task' DraftIssue 0 '' Backlog)"
 echo '{"data":{"convertProjectV2DraftIssueItemToIssue":{"item":{"content":{"number":78,"url":"https://github.com/u473t8/fake/issues/78"}}}}}' > "$B/convert.json"
 expect_exit 0 "start: a same-title draft is converted" start --title "Draft task"
 contains "  into an issue" "Issue Number: 78" "$LAST"
 grep -q 'itemId=PVTI_Draft task' "$FAKE_GH_LOG" && ok "  through itemId, as the schema has it" || bad "  mutation input" "$(grep convert "$FAKE_GH_LOG")"
-board "$(node Recurring Issue 8 OPEN 'In progress')"
-expect_exit 0 "start: --issue wins over a same-title item" start --title Recurring --issue 9
-contains "  issue 9" "Issue Number: 9" "$LAST"
-expect_exit 0 "start: --issue with --no-reuse-existing files nothing new" start --title Recurring --issue 9 --no-reuse-existing
-grep -q '^issue create' "$FAKE_GH_LOG" && bad "  filed a duplicate" || ok "  no duplicate"
-touch "$B/issue-missing"; expect_exit 1 "start: --issue of no issue is refused" start --title x --issue 404
-contains "  naming the number" "#404" "$LAST"; rm "$B/issue-missing"
-board
-expect_exit 0 "start: without a body the issue is still filed" start --title "No body"
-grep -q '^issue create .*--body' "$FAKE_GH_LOG" && ok "  gh gets an empty --body" || bad "  no --body" "$(grep 'issue create' "$FAKE_GH_LOG")"
-expect_exit 0 "start: a missing label is created" start --title "Labelled" --labels fresh-label
-grep -q '^label create fresh-label' "$FAKE_GH_LOG" && grep -q 'issue create .*--label fresh-label' "$FAKE_GH_LOG" \
-  && ok "  and put on the issue" || bad "  labels" "$(grep -E 'label|issue create' "$FAKE_GH_LOG")"
-[ "$(grep -c '^label create fresh-label' "$FAKE_GH_LOG")" -eq 1 ] && ok "  created once" \
-  || bad "  created $(grep -c '^label create fresh-label' "$FAKE_GH_LOG") times"
-printf 'Drafted body\n\n' > "$WORK/draft-body.md"
-expect_exit 0 "start: a draft gets its body file" start --title "Drafted" --mode draft-convert --body-file "$WORK/draft-body.md"
-cmp -s "$B/draft-body" <(printf 'Drafted body') && ok "  without its trailing newlines" || bad "  the body" "$(od -c "$B/draft-body")"
-expect_exit 0 "start: a draft with an empty --body" start --title "Bare draft" --mode draft-convert --body ""
-grep '^project item-create' "$FAKE_GH_LOG" | grep -q -- '--body' && bad "  gets --body" "$(grep '^project item-create' "$FAKE_GH_LOG")" || ok "  gets none"
-bignodes=(); for i in $(seq 1 1500); do bignodes+=("$(node "Old task number $i with a title long enough to fill the board quickly" Issue $((1000+i)) OPEN Done)"); done
-board "${bignodes[@]}"
-expect_exit 0 "start: a board of 1500 items is read" start --title "On a big board"
-grep -q "Argument list too long" <<<"$LAST" && bad "  argument limit" || ok "  with no argument limit"
-board
-echo 'GraphQL: Your token has not been granted the required scopes to execute this query. (INSUFFICIENT_SCOPES)' > "$B/board-fails"
-expect_exit 1 "start: a failed board update stops it (#41)" start --title "Scoped" --showcase Site
-contains "  names the issue" "#77" "$LAST"; contains "  the field and value" "Showcase" "$LAST"
-contains "  GitHub's reason" "INSUFFICIENT_SCOPES" "$LAST"; contains "  and the fix" "gh auth refresh" "$LAST"
-echo 'GraphQL: Could not resolve to a ProjectV2 with the number 3. (NOT_FOUND)' > "$B/board-fails"
-expect_exit 1 "start: no access to the board" start --title "No board"
-contains "  says so" "no access to the board" "$LAST"
-rm -f "$B/board-fails"; start --title "Steady" >/dev/null 2>&1; edits="$(grep -c '^project item-edit' "$FAKE_GH_LOG")"
-printf 'HTTP 502: Bad Gateway\nok\n' > "$B/board-fails.seq"
-expect_exit 0 "start: a passing GitHub error is retried once" start --title "Flaky"
-[ "$(grep -c '^project item-edit' "$FAKE_GH_LOG")" -eq $((edits + 1)) ] && ok "  one call more, and it goes on" \
-  || bad "  edits" "$(grep -c '^project item-edit' "$FAKE_GH_LOG") against $edits"
-rm -f "$B/board-fails.seq"
-opt() { grep '^project item-edit' "$FAKE_GH_LOG" | grep -o 'option-id o[0-9]' | head -1; }
-start --title "Fresh" >/dev/null 2>&1; [ "$(opt)" = "option-id o1" ] && ok "start: a new issue starts in Backlog" || bad "  default status" "$(opt)"
-start --title "Known" --issue 9 >/dev/null 2>&1; [ "$(opt)" = "option-id o2" ] && ok "start: --issue sets In progress (#27)" || bad "  status of --issue" "$(opt)"
-start --title "Known" --issue 9 --status Done >/dev/null 2>&1; [ "$(opt)" = "option-id o4" ] && ok "start: --status wins over --issue" || bad "  --status" "$(opt)"
-expect_exit 1 "start: an option the board lacks names the ones it has" start --title "Odd size" --size XXL
-contains "  the options" "its options: S, M" "$LAST"
 
 cd "$T" || exit 1; git switch -q -c 31-board origin/main; echo b >> f; git add f
 echo 'GraphQL: Your token has not been granted the required scopes to execute this query. (INSUFFICIENT_SCOPES)' > "$B/board-fails"
@@ -1207,13 +895,7 @@ contains "  says the PR is open" "is open" "$LAST"; contains "  with the command
 rm -f "$B/board-fails"; cmd="${LAST##*set it alone: }"
 expect_exit 0 "  and that command, run as printed, sets it" env PATH="$KIT/test/fake-gh:$PATH" bash -c "$cmd"
 contains "  to In review" "Status: In review" "$LAST"
-echo 'GraphQL: Your token has not been granted the required scopes to execute this query. (INSUFFICIENT_SCOPES)' > "$B/board-fails"
 git switch -q --detach origin/main
-git switch -q -c 32-board origin/main && git push -q -u origin 32-board
-: > "$B/pr-list"; echo "https://github.com/u473t8/fake/pull/98" > "$B/pr-list-merged"
-expect_exit 1 "merge: a failed Done update stops it, after the merge" flow merge
-contains "  with the command for the status alone" "kit board set" "$LAST"
-rm -f "$B/board-fails" "$B/pr-list-merged"; git switch -q --detach origin/main
 export FAKE_GH_DIR="$FAKE" FAKE_GH_LOG="$FAKE/log"
 echo "- the repository of the folder, not the session's (#81)"
 # A session opened in one project (GHWF_REPO=u473t8/fake, set by flow) works in another repository's
