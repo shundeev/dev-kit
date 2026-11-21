@@ -378,14 +378,24 @@
     (is (= :gh-api-write (:rule (decision "gh api -X POST x; gh issue create -t x" {}))))))
 
 
+(deftest every-refusal-ends-with-the-rule-that-made-it
+  (doseq [[line changes] [["gh issue create --title x" {}]
+                          ["sleep 5" {:background? false}]
+                          ["DELIVERY_GUARD=off ls" {}]]]
+    (let [made (decision line changes)]
+      (is (str/ends-with? (get-in (json/parse-string (rules/decision-json made))
+                                  ["hookSpecificOutput" "permissionDecisionReason"])
+                          (str "\n\nRule: " (name (:rule made))))))))
+
+
 (deftest the-hook-prints-the-json-claude-code-and-the-kit-read
   (is (= (str "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\","
-              "\"permissionDecisionReason\":\"no \\\"x\\\"\"}}")
+              "\"permissionDecisionReason\":\"no \\\"x\\\"\\n\\nRule: foreground-wait\"}}")
          (rules/decision-json {:decision :deny :rule :foreground-wait :reason "no \"x\""}))
       "the text managed/pretooluse.sh greps for stays contiguous")
   (is (= {"hookSpecificOutput" {"hookEventName"      "PreToolUse"
                                 "permissionDecision" "ask"
-                                "permissionDecisionReason" "r"}}
+                                "permissionDecisionReason" "r\n\nRule: guard-off"}}
          (json/parse-string (rules/decision-json {:decision :ask :rule :guard-off :reason "r"})))))
 
 
