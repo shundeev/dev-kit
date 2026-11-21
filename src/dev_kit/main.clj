@@ -36,6 +36,7 @@
       "--title"     (recur (rest more) (assoc opts :title (first more)))
       "--body-file" (recur (rest more) (assoc opts :body-file (first more)))
       "--now"       (recur (rest more) (assoc opts :now (first more)))
+      "--days"      (recur (rest more) (assoc opts :days (first more)))
       "--messages"  (recur more (assoc opts :messages true))
       "--check"     (recur (rest more) (assoc opts :check (first more)))
       "--yes"       (recur more (assoc opts :yes true))
@@ -252,38 +253,41 @@
 
 
 (defn retro!
-  "kit retro N … and kit retro --missing …: the code lives in bin/retro.clj, loaded only for this command."
+  "kit retro N … and kit retro --missing …: the code lives in bin/retro.clj, loaded only for this command. The exit
+  code of the command, nil when all is well."
   [[n & more]]
   (when-not (and n (or (= n "--missing") (re-matches #"\d+" n)))
     (problem/fail! :retro/no-issue
                    "retro: name the issue"
-                   {:usage true :fix "kit retro 55, or kit retro --missing"}))
+                   {:usage true :fix "e.g. kit retro 55, or kit retro --missing"}))
   (load-file (str (fs/path base/kit-dir "bin" "retro.clj")))
   (let [opts (parse-args more)
         opts (assoc opts :repo (gate/gate-repo opts (gate/gate-config)) :gh base/gh!)]
-    (try (if (= n "--missing")
-           ((resolve 'retro/run-missing) opts)
-           ((resolve 'retro/run)
-            (assoc opts :issue (parse-long n) :agent (get-in (config/read-defaults) [:agent :login]))))
-         (catch clojure.lang.ExceptionInfo e
-           (if (= :retro/bad-time (:problem (ex-data e)))
-             (do (binding [*out* *err*]
-                   (println (str "kit: retro: " (ex-message e)))
-                   (flush))
-                 (System/exit 1))
-             (throw e))))))
+    (if (= n "--missing")
+      ((resolve 'retro/run-missing) opts)
+      ((resolve 'retro/run)
+       (assoc opts :issue (parse-long n) :agent (get-in (config/read-defaults) [:agent :login]))))))
 
 
 (defn report-problem
-  "Prints a problem as its message and, when it has one, what to do next. A usage error goes to stderr as \"kit: ...\",
-  every other problem to stdout as \"  FAIL  ...\"."
-  [{:keys [message fix] usage-error :usage}]
+  "Prints a problem as its message and, when it has one, what to do next. A :plain problem is an answer, not an error:
+  stdout, the text as it is, the fix on the next line. A usage error, or any problem marked :stderr, goes to stderr
+  as \"kit: ...\"; every other problem to stdout as \"  FAIL  ...\"."
+  [{:keys [message fix plain stderr] usage-error :usage}]
   (let [text (cond-> message
                fix (str "  →  " fix))]
-    (if usage-error
+    (cond
+      plain
+      (println (str message
+                    (when fix
+                      (str "\n" fix))))
+
+      (or usage-error stderr)
       (binding [*out* *err*]
         (println (str "kit: " text))
         (flush))
+
+      :else
       (println (str "  FAIL  " text)))))
 
 

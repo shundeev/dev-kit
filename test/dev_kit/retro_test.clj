@@ -1,0 +1,175 @@
+(ns dev-kit.retro-test
+  "kit retro, told as stories (#139, step 4): the report a task's retrospective starts from, read off a friction log
+  fixture, and the gate that asks for a retrospective before new work. The fixture is test/fixtures/retro/friction:
+  one session on a task, 55-count-friction, and another's."
+  (:require
+   [cheshire.core :as json]
+   [clojure.string :as str]
+   [clojure.test :refer [deftest is testing]]
+   [dev-kit.fake-project :as fake]
+   [dev-kit.main :as main]
+   [dev-kit.retro.log :as log]
+   [dev-kit.retro.missing :as missing]
+   [dev-kit.retro.report :as report]))
+
+
+(def ^:private now "2026-11-12T17:00:00Z")
+
+
+(defn- report-of
+  "The friction part of the report for an issue, read off the fixture log as lines."
+  [issue fixture-dir]
+  (with-redefs-fn {#'log/log-dir (fn [] fixture-dir)}
+    #(vec (report/log-lines {:repo "u473t8/fake" :issue issue :now (log/parse-time "--now" now)}))))
+
+
+(deftest the-report-of-a-task-counts-its-friction-from-the-log
+  (let [lines (report-of 55 "test/fixtures/retro/friction")]
+    (is (= (str "Friction log on this machine: 25 events of the task, 2026-11-12 10:00 → 2026-11-12 15:00 UTC. "
+                "The 14-day column counts every task and project on this machine.")
+           (first lines)))
+    (testing "a row says what happened, how often in this task and in 14 days on the machine"
+      (is (some #{"| Confirmation: yes | ask rule: Bash(gh api *) | 4 | 7 |"} lines))
+      (is (some #{"| Refused by a hook | gh issue create | 1 | 1 |"} lines)))
+    (testing "each refusal of the task is listed, for the retrospective's verdict"
+      (is (some #{"- 2026-11-12 11:01 Refused by a hook · gh issue create"} lines))
+      (is (some #{"- 2026-11-12 11:02 Refused by the classifier · git push — git_destructive"} lines)))
+    (testing "where the time went, and the owner's marks"
+      (is (some #{"- waiting on the owner: 7 confirmation windows, 5m; 2 questions, 24m"} lines))
+      (is (some #{"- 2026-11-12 11:30 трение: ссылка открылась в двух браузерах"} lines)))))
+
+
+(deftest a-task-the-log-never-saw-has-no-events
+  (is (= "Friction log on this machine: no events of this task."
+         (first (report-of 999 "test/fixtures/retro/friction")))))
+
+
+(deftest a-machine-without-a-log-says-so
+  (is (= ["Friction log: not available — the recorder (dev-kit #55) has written nothing on this machine yet."]
+         (report-of 55 "test/fixtures/retro/no-such-log"))))
+
+
+(defn- graphql-answer
+  "What GitHub says to the retrospective gate's query: issues with the comments they carry and whether a pull
+  request merged for them."
+  [issues]
+  (fn [& _]
+    (json/generate-string
+     {"data" {"search" {"nodes" (for [[n title note merged] issues]
+                                  {"number"   n
+                                   "title"    title
+                                   "comments" {"nodes" (if note
+                                                         [{"body" note}]
+                                                         [])}
+                                   "closedByPullRequestsReferences" {"nodes" (if merged
+                                                                               [{"mergedAt" "2026-11-11T10:00:00Z"}]
+                                                                               [])}})}}})))
+
+
+(defn- at-the-edge
+  "f as kit runs it: {:out what it printed :err what it printed to stderr :code its exit code}, a problem it throws
+  printed by kit's edge."
+  [f]
+  (let [{:keys [result out err]} (fake/captured (fn []
+                                                  (try (f)
+                                                       (catch clojure.lang.ExceptionInfo e
+                                                         (main/report-problem (ex-data e))
+                                                         (or (:exit (ex-data e)) 1)))))]
+    {:out out :err err :code result}))
+
+
+(defn- run-missing
+  "run-missing against the fake gh, at the edge."
+  [gh]
+  (at-the-edge #(missing/run-missing {:repo "u473t8/fake" :gh gh :now now})))
+
+
+(deftest new-work-waits-for-the-retrospective-of-a-merged-task
+  (let [{:keys [out err code]} (run-missing (graphql-answer [[31 "Has its retro" "## Retrospective\n\nx" true]
+                                                             [32 "Lacks its retro" "done" true]
+                                                             [33 "Never merged" nil false]]))]
+    (is (= 1 code))
+    (is (= "" err))
+    (is
+     (=
+      (str
+       "Merged in the last 14 days without a `## Retrospective` comment: #32 Lacks its retro.\n"
+       "Post each one's retrospective before new work (repo-task-delivery, stage 11); its data comes from kit retro <n>, "
+       "e.g. kit retro 32.\n"
+       "Only the owner can waive this: the same start command with --skip-retro asks the owner first.\n")
+      out)
+     "the list and the fix go to stdout, where kit start and the session read them")))
+
+
+(deftest every-merged-task-with-its-retrospective-is-silence
+  (let [{:keys [out err code]} (run-missing (graphql-answer [[31 "Has its retro" "## Retrospective\n\nx" true]]))]
+    (is (nil? code))
+    (is (= "" out))
+    (is (= "" err))))
+
+
+(deftest when-github-cannot-be-asked-there-is-no-verdict-and-the-exit-code-says-so
+  (let [{:keys [out err code]} (run-missing (fn [& _] (throw (ex-info "no network" {}))))]
+    (is (= 2 code))
+    (is (= "" out))
+    (is (= (str "kit: retro: GitHub not available: no network  →  "
+                "check gh auth status and the network, then run kit retro --missing again\n")
+           err))))
+
+
+(deftest a-now-that-is-not-a-time-names-the-format
+  (let [{:keys [code err]} (at-the-edge #(missing/run-missing
+                                          {:repo "u473t8/fake" :gh (fn [& _] "") :now "yesterday"}))]
+    (is (= 1 code))
+    (is (str/starts-with? err "kit: retro: --now yesterday : not a time  →  write it as 2026-11-12T10:00:00Z"))))
+
+
+(defn- rule-block
+  "The refusals-by-rule block of the report for issue 55, read off the rules fixture, for a window of `days` days."
+  [days]
+  (let [lines (with-redefs-fn {#'log/log-dir (fn [] "test/fixtures/retro-rules/friction")}
+                #(vec (report/log-lines {:repo "u473t8/fake" :issue 55 :days days :now (log/parse-time "--now" now)})))]
+    (->> lines
+         (drop-while #(not (str/starts-with? % "| Rule |")))
+         (take-while #(str/starts-with? % "|"))
+         vec)))
+
+
+(deftest a-rule-that-refused-three-times-is-counted-three-times
+  (testing "the task's count and the count of every task on this machine in the last 14 days, most refusals first"
+    (is (= ["| Rule | This task | 14 days |"
+            "|---|---|---|"
+            "| git.reset-hard | 2 | 3 |"
+            "| foreground-wait | 1 | 2 |"
+            "| gate.design-approval | 1 | 1 |"]
+           (rule-block nil)))
+    (is (= "| git.reset-hard | 2 | 3 |" (nth (rule-block 14) 2))
+        "the refusals of 20 October are outside 14 days"))
+  (testing "--days widens the window; the task's own count does not depend on it"
+    (is (= ["| Rule | This task | 30 days |"
+            "|---|---|---|"
+            "| git.reset-hard | 2 | 5 |"
+            "| foreground-wait | 1 | 2 |"
+            "| gate.design-approval | 1 | 1 |"]
+           (rule-block 30)))))
+
+
+(deftest a-refusal-that-names-no-rule-is-listed-but-not-counted-by-rule
+  (let [lines (with-redefs-fn {#'log/log-dir (fn [] "test/fixtures/retro-rules/friction")}
+                #(vec (report/log-lines {:repo "u473t8/fake" :issue 55 :now (log/parse-time "--now" now)})))]
+    (is (some #{"- 2026-11-12 10:05 Refused by a hook · gh issue create"} lines) "it is one of the task's refusals")
+    (is (= 3 (count (filter #(re-matches #"\| (git|gate|foreground)\S* \| \d+ \| \d+ \|" %) lines)))
+        "the task had five refusals; the table has a row for each of the three rules and none for this one")))
+
+
+(deftest a-task-with-no-rule-refusals-says-so
+  (let [lines (with-redefs-fn {#'log/log-dir (fn [] "test/fixtures/retro/friction")}
+                #(vec (report/log-lines {:repo "u473t8/fake" :issue 55 :now (log/parse-time "--now" now)})))]
+    (is (some #{"Refusals by rule: none named its rule, in this task or in the last 14 days."} lines))))
+
+
+(deftest a-days-that-is-not-a-number-names-the-fix
+  (let [{:keys [code err]} (at-the-edge #(report/run
+                                          {:repo "u473t8/fake" :issue 55 :days "many" :now now :gh (fn [& _] "")}))]
+    (is (= 1 code))
+    (is (= "kit: retro: --days many : not a number of days  →  write a whole number above 0, e.g. --days 30\n" err))))

@@ -25,7 +25,17 @@
   (testing "kit hook with no command"
     (let [{:keys [result err]} (fake/captured #(main/run ["hook"]))]
       (is (= 1 result))
-      (is (str/includes? err "kit hook '<command>'")))))
+      (is (str/includes? err "kit hook '<command>'"))))
+  (testing "kit retro with no issue"
+    (let [{:keys [result out err]} (fake/captured #(main/run ["retro"]))]
+      (is (= 1 result))
+      (is (= "" out))
+      (is (= "kit: retro: name the issue  →  e.g. kit retro 55, or kit retro --missing\n" err))))
+  (testing "kit gate with no pull request"
+    (let [{:keys [result out err]} (fake/captured #(main/run ["gate" "--repo" "u473t8/fake" "--branch" "26-x"]))]
+      (is (= 1 result))
+      (is (= "" out))
+      (is (str/starts-with? err "kit: gate: pass --pr  →  name the pull request")))))
 
 
 (deftest a-problem-that-is-not-a-usage-error-prints-fail-on-stdout-with-its-code

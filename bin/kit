@@ -18,8 +18,9 @@
 ;;                            | --shape --branch B --title T [--body-file F]   its shape rules, offline
 ;;   .shared/bin/kit hook     '<command>'   what the project's entry hook says to one Bash command, in Claude Code's input
 ;;                            shape, without running it: allowed (exit 0), refused (2) or asks (3), with the reason (#98)
-;;   .shared/bin/kit retro    N [--repo R] [--messages]   friction data of merged issue N for its
-;;                            retrospective: the friction log the hooks keep on this machine, and GitHub (#55)
+;;   .shared/bin/kit retro    N [--repo R] [--messages] [--days D]   friction data of merged issue N for its
+;;                            retrospective: the friction log the hooks keep on this machine, and GitHub (#55);
+;;                            with the refusals counted per rule, in the task and in the last D days (14)
 ;;   .shared/bin/kit retro    --missing [--repo R]   merged issues of the last 14 days without a retrospective;
 ;;                            exit 1 when there are some (#56)
 ;;
