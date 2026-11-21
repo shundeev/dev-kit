@@ -402,3 +402,12 @@
                                 :branch-of (fn [_] (throw (ex-info "never read" {})))
                                 :review-of (fn [_ _] (throw (ex-info "never read" {}))))))
       "a command with no use for them never calls them"))
+
+
+(deftest the-hook-gives-a-decision-or-nothing-and-leaves-the-exit-to-its-entry
+  (let [input #(json/parse-string (json/generate-string {:tool_name "Bash" :tool_input {:command %}}))]
+    (is (nil? (rules/answer (input "git status"))) "a command with no rule against it: nothing")
+    (is (= "deny"
+           (get-in (json/parse-string (rules/answer (input "gh issue create --title x")))
+                   ["hookSpecificOutput" "permissionDecision"]))
+        "a refusal: the JSON Claude Code reads")))

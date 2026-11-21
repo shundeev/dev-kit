@@ -530,6 +530,8 @@ contains "denies raw gh issue create" '"permissionDecision":"deny"' "$(guard 'gh
 contains "denies gh pr create from main, the branch read by git" '"permissionDecision":"deny"' "$(guard 'gh pr create --fill')"
 contains "asks on DELIVERY_GUARD=off" '"permissionDecision":"ask"' "$(guard 'DELIVERY_GUARD=off gh issue create -t x')"
 [ -z "$(guard 'git status')" ] && ok "ignores unrelated commands" || bad "unrelated command judged"
+expect_exit 2 "input that is no JSON is held back (exit 2)" bash -c "echo 'not json' | bb .shared/claude/hooks/guard.clj"
+contains "  and says the guard failed" "the delivery guard failed, so the command is held back" "$LAST"
 # #38: a forced push may rewrite only an issue branch (<number>-<slug>); the branch of HEAD is read by git in the folder.
 FB="$WORK/force"; git init -q -b 42-some-task "$FB"; git init -q -b main "$WORK/force-main"
 out="$(guard "cd $FB && git push --force-with-lease")"
