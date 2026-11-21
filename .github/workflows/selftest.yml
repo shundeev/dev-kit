@@ -49,8 +49,11 @@ jobs:
         run: bb selftest
 
       # The vendored copy against npm needs the network, so an ordinary pull request does not wait on npm:
-      # it runs when the pull request's diff touches vendor/, and always on a push to main. The checkout
-      # is the pull request's merge commit at depth 1; the base commit is fetched to diff against it.
+      # it runs when the pull request's diff touches vendor/. A push to main runs it too, but main moves by
+      # auto-merge, which starts no workflow (events made with the Actions token start none,
+      # https://docs.github.com/en/actions/using-workflows/triggering-a-workflow#triggering-a-workflow-from-a-workflow);
+      # .github/workflows/vendor-check.yml runs it weekly on main. The checkout is the pull request's merge commit at
+      # depth 1; the base commit is fetched to diff against it.
       - name: Vendored safety-net against npm
         env:
           EVENT: ${{ github.event_name }}

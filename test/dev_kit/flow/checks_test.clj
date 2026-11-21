@@ -120,8 +120,8 @@
 
 (deftest github-that-cannot-be-read-ends-it-with-gh's-message
   (doseq [[what pr text]
-          [["the pull request" {:unreadable "HTTP 502"} "gh pr view failed: HTTP 502. Fix: run it by hand"]
-           ["its checks" {:checks-unreadable "HTTP 502"} "gh pr checks failed: HTTP 502. Fix: run `gh pr checks"]]]
+          [["the pull request" {:unreadable "HTTP 403"} "gh pr view failed: HTTP 403. Fix: run it by hand"]
+           ["its checks" {:checks-unreadable "HTTP 403"} "gh pr checks failed: HTTP 403. Fix: run `gh pr checks"]]]
     (let [result (kit-checks (on-the-issue-branch pr) {})]
       (is (= 2 (:exit result)) (str "reading " what " failed"))
       (is (str/starts-with? (:text result) text)))))
@@ -223,3 +223,47 @@
     (let [result (apply kit-checks world variables args)]
       (is (= 1 (:exit result)) what)
       (is (= text (:text result)) what))))
+
+
+;; a passing GitHub error in the middle of a wait (#139, step 8)
+
+
+(def ^:private waiting-line (format "Waiting for selftest, lint on aaa1111 (%s)." pr-url))
+
+
+(deftest a-passing-github-error-in-a-checks-wait-is-asked-again-and-the-wait-ends-with-the-verdict
+  (let [world  (on-the-issue-branch {:checks [(check "selftest" "pending") (check "lint" "pass")]}
+                                    :script
+                                    [(fake/github-fails "gh: No server is currently available (HTTP 503)")
+                                     fake/github-recovers
+                                     (fn [w] (assoc-in w [:prs 1 :checks] (passed "selftest" "lint")))])
+        result (kit-checks world {"GHWF_MERGE_POLL" "20"})]
+    (is (= 0 (:exit result)))
+    (is (= [20 20 20] (fake/slept world)))
+    (is (= [waiting-line
+            "1 of 2 required checks have not finished: selftest"
+            "GitHub answered HTTP 503; asking again in 20 s"
+            (format "All 2 required checks passed on aaa1111: %s" pr-url)]
+           (str/split-lines (:printed result))))))
+
+
+(deftest three-passing-github-errors-in-a-row-end-a-checks-wait-with-what-to-do
+  (let [world  (on-the-issue-branch {:checks [(check "selftest" "pending") (check "lint" "pass")]}
+                                    :script
+                                    [(fake/github-fails "HTTP 503") fake/nothing-happens fake/nothing-happens])
+        result (kit-checks world {})]
+    (is (= 2 (:exit result)))
+    (is (= (str "GitHub answered with an error 3 times in a row; the last: gh pr checks failed: HTTP 503. "
+                "Fix: check https://www.githubstatus.com, then run the same command again")
+           (:text result)))
+    (is (= 2 (count (filter #(str/starts-with? % "GitHub answered HTTP 503") (str/split-lines (:printed result))))))))
+
+
+(deftest an-error-that-does-not-pass-ends-a-checks-wait-at-once
+  (let [world  (on-the-issue-branch {:checks [(check "selftest" "pending") (check "lint" "pass")]}
+                                    :script
+                                    [(fake/github-fails "HTTP 404: Not Found") fake/nothing-happens])
+        result (kit-checks world {})]
+    (is (= 2 (:exit result)))
+    (is (str/starts-with? (:text result) "gh pr checks failed: HTTP 404"))
+    (is (= [10] (fake/slept world)) "it did not ask again")))

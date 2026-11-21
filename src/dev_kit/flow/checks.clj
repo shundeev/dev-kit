@@ -228,18 +228,30 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 
 (defn- wait-for-checks
   "Looks every poll period until the checks passed (and, where the base has the ready workflow, it decided) or the wait
-  cannot end well. A status line is printed when it differs from the last one."
+  cannot end well. A status line is printed when it differs from the last one. A passing GitHub error is no answer
+  this time: it asks again after the next pause (wait/look!)."
   [{:keys [wanted pr head poll] :as facts}]
   (when (seq wanted)
-    (loop [shown nil
-           ruled #{}]
-      (let [seen (read-checks-and-runs facts ruled)]
-        (stop-if-over! facts seen)
-        (if-let [status (:status seen)]
+    (loop [shown  nil
+           ruled  #{}
+           errors 0]
+      (let [look   (wait/look! errors poll #(read-checks-and-runs facts ruled))
+            seen   (:answer look)
+            status (:status seen)]
+        (when seen
+          (stop-if-over! facts seen))
+        (cond
+          (nil? seen)
+          (do (wait/sleep! poll)
+              (recur shown ruled (:errors look)))
+
+          status
           (do (when (not= status shown)
                 (println status))
               (wait/sleep! poll)
-              (recur status (into ruled (map :databaseId (:runs seen)))))
+              (recur status (into ruled (map :databaseId (:runs seen))) 0))
+
+          :else
           {:report (cond-> [(format "All %d required checks passed on %s: %s" (count (:checks seen)) (sha7 head) pr)]
                      (:done seen) (conj (:done seen)))})))))
 
