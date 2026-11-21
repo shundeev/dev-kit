@@ -199,6 +199,43 @@ Options:
     {}))
 
 
+(defn- changed-files
+  "The files this finish makes the branch change against the base, in the shape of GitHub's pull request files: what
+  the branch has committed, what is staged, and the --add paths as they are now. Empty when git cannot say."
+  [base add no-commit]
+  (let [base-commit (shell/git-out "merge-base" (str "origin/" base) "HEAD")
+        branch-diff (when-not (str/blank? base-commit)
+                      (if no-commit
+                        (shell/git-out "diff" "--name-status" "-M" base-commit "HEAD")
+                        (shell/git-out "diff" "--name-status" "-M" "--cached" base-commit)))
+        added-diff  (when (and (seq add) (not no-commit) (not (str/blank? base-commit)))
+                      (apply shell/git-out "diff" "--name-status" "-M" base-commit "--" add))]
+    (vec (distinct (gate/name-status-files (str branch-diff "\n" added-diff))))))
+
+
+(defn- check-ci-rules
+  "The pull request gate's rules on the files and the size (adr-problems and size-problems), checked before the commit
+  with what git and GitHub say now. The files are checked on every finish; the size line only when the PR is opened
+  with a body, and a size GitHub cannot say is left to CI."
+  [{:keys [repo base number add no-commit pr-url body-file]}]
+  (let [files    (changed-files base add no-commit)
+        size     (when-not pr-url
+                   (github/issue-size-read repo number))
+        verdicts (concat (gate/adr-problems files)
+                         (when size
+                           (gate/size-problems (:size size) (shell/file-text body-file))))]
+    (when (and (not pr-url) (nil? size))
+      (shell/warn
+       (format "Warning: GitHub did not say the size of #%s, so the Size line is not checked here; CI checks it."
+               number)))
+    (when (seq verdicts)
+      (problem/fail! :finish/ci-rules
+                     (format "The pull request would fail CI's gate; nothing was committed or pushed:\n%s"
+                             (str/join "\n" (map gate/verdict-line verdicts)))
+                     {:fix "change the files or the body as the lines above say, then run kit finish again"}))
+    {}))
+
+
 (defn- pr-draft?
   "gh pr view: whether the pull request is a draft."
   [pr-url]
@@ -434,6 +471,7 @@ Options:
     :check-body-file    check-body-file
     :make-subject       make-subject
     :check-shape        check-shape
+    :check-ci-rules     check-ci-rules
     :decide-draft       decide-draft
     :check-hold         check-hold
     :make-hold-label    make-hold-label

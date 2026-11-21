@@ -373,6 +373,11 @@
    (fn [_repo number]
      (some #(second (re-matches #"size:(.+)" %)) (get-in @world [:issues (number-of number) :labels])))
 
+   #'github/issue-size-read
+   (fn [_repo number]
+     (when-not (:size-unreadable @world)
+       {:size (some #(second (re-matches #"size:(.+)" %)) (get-in @world [:issues (number-of number) :labels]))}))
+
    #'github/issue-url
    (fn [_repo number]
      (if-let [issue (get-in @world [:issues (number-of number)])]
@@ -635,6 +640,9 @@
   steps. Options of the world they read, besides the ones new-world knows:
   :commits           subjects of the commits on the branch, oldest first (what git log origin/main..HEAD shows)
   :staged            paths staged already
+  :changed-files     the files the branch changes against its base, as GitHub's pull request files:
+                     {\"filename\" \"status\" \"previous_filename\"}
+  :size-unreadable   true when GitHub cannot say the issue's size
   :workflow-unreadable  gh's message when GitHub cannot say whether the base holds the ready workflow
   :refuse-pr-edit    gh's message when it refuses to edit a pull request
   :no-auto-merge     true when the repository does not allow auto-merge
@@ -661,6 +669,9 @@
              {:exit 1 :out "" :err "HTTP 403: the fake GitHub does not let this token create labels"}
              :else (do (swap! world #(-> % (update :labels conj "hold") (update :created-labels conj "hold")))
                        {:exit 0 :out "" :err ""}))))
+
+   #'finish/changed-files
+   (fn [_base _add _no-commit] (vec (:changed-files @world)))
 
    #'finish/stage!
    (fn [paths] (swap! world update :staged #(vec (distinct (concat % paths)))) nil)

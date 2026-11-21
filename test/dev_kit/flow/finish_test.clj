@@ -12,9 +12,10 @@
 
 
 (defn- shaped
-  "A pull request body that passes CI's shape rules, starting with the text."
+  "A pull request body that passes CI's rules, starting with the text."
   [text]
-  (str text "\n\n## Review\nChecked.\n\n## User-level test\nRan it.\n\nADR: none"))
+  (str text
+       "\n\nSize: 20 → 18 lines after simplify\n\n## Review\nChecked.\n\n## User-level test\nRan it.\n\nADR: none"))
 
 
 (def ^:private passing-body (shaped "What changed."))
@@ -459,3 +460,75 @@
     (is (true? (:draft (the-pr world))) "the PR is a draft")
     (is (empty? (:labels (the-pr world))) "it is not held unless asked")
     (is (= ["the-human"] (:assignees (the-pr world))) "the person behind the agent is the assignee")))
+
+
+;; What CI's gate would refuse is refused before the commit (#139, step 8)
+
+
+(defn- finish-with
+  "Runs kit finish for issue #1 with these world options and the body text; returns the world and the result."
+  [options body-text]
+  (let [world  (on-branch-1 (merge {:staged ["page.html"]} options))
+        result (kit-finish world variables "--pr-body-file" (file-with body-text))]
+    {:world world :result result}))
+
+
+(def ^:private body-without-size (str/replace passing-body #"Size: [^\n]*\n\n" ""))
+
+
+(deftest an-accepted-adr-the-branch-changes-stops-the-finish-before-the-commit
+  (doseq [[story file] {"modifies" {"filename" "adr/0008-x.md" "status" "modified"}
+                        "removes"  {"filename" "adr/0008-x.md" "status" "removed"}
+                        "renames"  {"filename" "adr/0008-y.md" "status" "renamed" "previous_filename" "adr/0008-x.md"}}]
+    (let [{:keys [world result]} (finish-with {:changed-files [file]} passing-body)]
+      (is (= :finish/ci-rules (problem result)) (str "a branch that " story " an accepted ADR is refused"))
+      (is (str/includes? (said result) "  FAIL  adr/0008-x.md was") story)
+      (is (str/includes? (said result) "Fix: revert it") story)
+      (is (nothing-committed-or-pushed? world []) story))))
+
+
+(deftest a-new-adr-passes
+  (let [{:keys [world result]} (finish-with {:changed-files [{"filename" "adr/0009-new.md" "status" "added"}]}
+                                            passing-body)]
+    (is (= :ok (::steps/status result)))
+    (is (= 1 (count (fake/commits world))))))
+
+
+(deftest an-adr-is-checked-on-a-later-finish-of-an-open-pr-too
+  (let [world  (on-branch-1 {:staged ["page.html"]
+                             :prs    [{:branch "1-add-landing-page"}]
+                             :changed-files [{"filename" "adr/0008-x.md" "status" "modified"}]})
+        result (kit-finish world variables)]
+    (is (= :finish/ci-rules (problem result)))
+    (is (empty? (fake/commits world)))))
+
+
+(deftest a-new-pr-of-an-issue-bigger-than-s-needs-the-size-line
+  (doseq [[labels refused?] {["size:M"] true ["size:L"] true [] true ["size:S"] false ["size:XS"] false}]
+    (let [{:keys [world result]} (finish-with {:issues [{:title "Add landing page" :on-board true :labels labels}]}
+                                              body-without-size)]
+      (if refused?
+        (do (is (= :finish/ci-rules (problem result)) (str labels " is refused without a Size line"))
+            (is (str/includes? (said result) "  FAIL  an M pull request has no 'Size:") (str labels))
+            (is (empty? (fake/commits world)) (str labels)))
+        (is (= :ok (::steps/status result)) (str labels " needs none"))))))
+
+
+(deftest the-size-line-in-the-gates-format-passes-with-an-arrow-or-the-ascii-one
+  (doseq [line ["Size: 164 → 150 lines after simplify" "Size: 164 -> 150 lines"]]
+    (let [{:keys [result]} (finish-with {:issues [{:title "Add landing page" :on-board true :labels ["size:M"]}]}
+                                        (str/replace body-without-size "ADR: none" (str line "\n\nADR: none")))]
+      (is (= :ok (::steps/status result)) line))))
+
+
+(deftest a-size-github-cannot-say-is-a-warning-and-the-finish-goes-on
+  (let [{:keys [result]} (finish-with {:size-unreadable true} body-without-size)]
+    (is (= :ok (::steps/status result)))
+    (is (= ["Warning: GitHub did not say the size of #1, so the Size line is not checked here; CI checks it."]
+           (:warnings result)))))
+
+
+(deftest an-open-prs-body-is-not-asked-for-a-size-line
+  (let [world  (on-branch-1 {:staged ["page.html"] :prs [{:branch "1-add-landing-page"}]})
+        result (kit-finish world variables "--pr-body-file" (file-with body-without-size))]
+    (is (= :ok (::steps/status result)))))

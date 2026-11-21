@@ -743,7 +743,7 @@ expect_exit 1 "finish: a Review section with only the hint stops before the comm
 contains "  with the same words as CI" "fill in ## Review" "$LAST"
 grep -q '^  FAIL' <<<"$LAST" && ok "  the gate's lines keep their indent" || bad "  the gate's lines" "$LAST"
 [ "$(head_now)" = "$before" ] && ok "  nothing committed" || bad "  committed anyway"
-printf '## What changed\n- x\n\n## Review\nLooked at it.\n\n## User-level test\nRan it.\n\nADR: none\n' > "$WORK/body.md"
+printf '## What changed\n- x\n\nSize: 5 → 4 lines\n\n## Review\nLooked at it.\n\n## User-level test\nRan it.\n\nADR: none\n' > "$WORK/body.md"
 expect_exit 1 "finish: a type outside Conventional Commits stops before the commit" flow finish --type update --pr-body-file "$WORK/body.md"
 contains "  names the way out" "pass --type" "$LAST"
 [ "$(head_now)" = "$before" ] && ok "  nothing committed" || bad "  committed anyway"

@@ -124,8 +124,26 @@
            "open the issue with kit start and move the work to its branch")]))
 
 
+(def ^:private name-status-words
+  {\A "added" \C "added" \D "removed" \M "modified" \R "renamed" \T "changed"})
+
+
+(defn name-status-files
+  "The changed files in the shape GitHub's pull request files have, `{\"filename\" \"status\" \"previous_filename\"}`, from
+  the text of `git diff --name-status`: a line is `M<TAB>path` or, for a rename, `R100<TAB>old<TAB>new`. CI reads the
+  files from GitHub and kit finish from git; the file rules take either."
+  [text]
+  (for [line  (str/split-lines (str text))
+        :let  [[code a b] (str/split line #"\t")
+               status     (name-status-words (first code))]
+        :when status]
+    (cond-> {"filename" (or b a) "status" status}
+      b (assoc "previous_filename" a))))
+
+
 (defn adr-problems
-  "Failing verdicts for the accepted ADRs, `adr/NNNN-*.md` that exist on the base, which the pull request's files change."
+  "Failing verdicts for the accepted ADRs, `adr/NNNN-*.md` that exist on the base, which the pull request's files change.
+  The files are GitHub's, or `name-status-files` of git's."
   [files]
   (for [{:strs [filename status previous_filename]} files
         :let  [f (if (= status "renamed") previous_filename filename)]
@@ -294,10 +312,10 @@
 
 
 (defn size-problems
-  "A failing verdict when an M pull request (an issue that is not XS or S) does not state its size in numbers before
-  and after the simplify pass (#117, #132)."
-  [issue body]
-  (when (and (not (#{"XS" "S"} (issue-size issue))) (not (re-find #"(?m)^Size: +\d+ +(?:→|->) +\d+\b" body)))
+  "A failing verdict when an M pull request (an issue whose size, \"XS\" … \"XL\" or nil, is not XS or S) does not state
+  its size in numbers before and after the simplify pass (#117, #132)."
+  [size body]
+  (when (and (not (#{"XS" "S"} size)) (not (re-find #"(?m)^Size: +\d+ +(?:→|->) +\d+\b" body)))
     [(fail :gate/no-size-line
            "an M pull request has no 'Size: <lines before> → <lines after>' line with numbers"
            "add it, e.g. 'Size: 164 → 150 lines after simplify'")]))
@@ -348,7 +366,7 @@
         issue  (when n
                  (try (fetch-issue repo n) (catch Exception e {"error" (ex-message e)})))]
     (concat (shape-problems branch title (str body) pr)
-            (size-problems issue (str body))
+            (size-problems (issue-size issue) (str body))
             (adr-problems files)
             (rule-problems files (str body))
             (when n

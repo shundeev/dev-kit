@@ -80,12 +80,21 @@
                        "revert it, and record the change as a new ADR with 'Supersedes: ADR-0003' (adr skill)"))))
 
 
+(deftest git-name-status-gives-the-files-github-gives
+  (is (= [{"filename" "adr/0003-x.md" "status" "modified"}
+          {"filename" "adr/0009-new.md" "status" "added"}
+          {"filename" "adr/0005-z.md" "status" "removed"}
+          {"filename" "adr/0004-y.md" "status" "renamed" "previous_filename" "adr/0004-old.md"}]
+         (gate/name-status-files
+          "M\tadr/0003-x.md\nA\tadr/0009-new.md\nD\tadr/0005-z.md\nR087\tadr/0004-old.md\tadr/0004-y.md\n")))
+  (is (empty? (gate/name-status-files ""))))
+
+
 (deftest an-m-pull-request-states-its-size
-  (let [m-issue {"labels" {"nodes" [{"name" "size:M"}]}}]
-    (is (= [:gate/no-size-line] (mapv :problem (gate/size-problems m-issue "no size here"))))
-    (is (nil? (gate/size-problems m-issue "Size: 164 → 150 lines after simplify")))
-    (is (nil? (gate/size-problems {"labels" {"nodes" [{"name" "size:S"}]}} "no size here"))
-        "an S pull request needs none")))
+  (is (= [:gate/no-size-line] (mapv :problem (gate/size-problems "M" "no size here"))))
+  (is (= [:gate/no-size-line] (mapv :problem (gate/size-problems nil "no size here"))) "no label counts as M")
+  (is (nil? (gate/size-problems "M" "Size: 164 → 150 lines after simplify")))
+  (is (nil? (gate/size-problems "S" "no size here")) "an S pull request needs none"))
 
 
 (defn- approved-issue

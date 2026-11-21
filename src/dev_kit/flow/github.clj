@@ -24,9 +24,8 @@
   "[.labels[].name | select(startswith(\"size:\")) | ltrimstr(\"size:\")] | first // empty")
 
 
-(defn issue-size
-  "The issue's size, \"L\" for the label size:L; nil when it has none or GitHub cannot say (the issue is then treated as
-  not L, which is the way that closes it)."
+(defn issue-size-read
+  "What GitHub says of the issue's size: {:size \"M\"} (nil when the issue has no size label), or nil when it cannot say."
   [repo number]
   (let [{:keys [exit out]}
         (shell/run "gh" "issue" "view" (str number)
@@ -34,7 +33,14 @@
           "--json" "labels"
           "--jq"   size-label-jq)]
     (when (zero? exit)
-      (not-empty (str/trim out)))))
+      {:size (not-empty (str/trim out))})))
+
+
+(defn issue-size
+  "The issue's size, \"L\" for the label size:L; nil when it has none or GitHub cannot say (the issue is then treated as
+  not L, which is the way that closes it)."
+  [repo number]
+  (:size (issue-size-read repo number)))
 
 
 (defn closes-issue?
