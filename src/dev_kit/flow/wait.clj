@@ -3,7 +3,7 @@
   (:require
    [clojure.string :as str]
    [dev-kit.flow.shell :as shell]
-   [dev-kit.flow.steps :as steps]))
+   [dev-kit.problem :as problem]))
 
 
 ;; ------------------------------------------------------------------ waiting on a pull request
@@ -31,7 +31,7 @@
   the step."
   [text]
   (or (parse-long text)
-      (steps/fail! :wait/bad-poll (bad-poll text))))
+      (problem/fail! :wait/bad-poll (bad-poll text))))
 
 
 (defn sleep!

@@ -8,7 +8,8 @@
    [dev-kit.flow.shell :as shell]
    [dev-kit.flow.steps :as steps]
    [dev-kit.flow.wait :as wait]
-   [dev-kit.flow.watched-pr :as watched-pr]))
+   [dev-kit.flow.watched-pr :as watched-pr]
+   [dev-kit.problem :as problem]))
 
 
 (def review-usage
@@ -58,7 +59,7 @@ Environment: GHWF_HUMAN, the owner's login (kit init or kit identity set it); GH
   "Refuses a run that does not know the owner's login."
   [{:keys [human]}]
   (when (str/blank? human)
-    (steps/fail!
+    (problem/fail!
      :review/no-owner
      "GHWF_HUMAN is not set, so the owner's reviews cannot be told from anyone else's. Fix: run 'kit init' (or 'kit identity') on this machine; it reads your own gh login.")))
 
@@ -106,8 +107,8 @@ Environment: GHWF_HUMAN, the owner's login (kit init or kit identity set it); GH
   "No review is coming from a pull request that is no longer open."
   [{:keys [pr]} {:keys [state]}]
   (when (not= "OPEN" state)
-    (steps/fail! :review/not-open
-                 (format "The pull request is %s, so no review is coming: %s" (str/lower-case state) pr))))
+    (problem/fail! :review/not-open
+                   (format "The pull request is %s, so no review is coming: %s" (str/lower-case state) pr))))
 
 
 (def ^:private reviews-query

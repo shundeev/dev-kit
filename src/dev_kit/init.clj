@@ -8,6 +8,7 @@
    [dev-kit.checks :as checks]
    [dev-kit.config :as config]
    [dev-kit.identity :as ident]
+   [dev-kit.problem :as problem]
    [rewrite-clj.zip :as z]))
 
 
@@ -34,13 +35,14 @@
               {:keys [pairs stray]} (some-> s checks/block-markers)]
           (cond
             (nil? s)       (write! f (str content "\n" (slurp (str (fs/path base/kit-dir "scaffold" "AGENTS.md")))))
-            (seq stray)    (config/fail! problem)
+            (seq stray)    (problem/fail! :init/stray-markers problem)
             (empty? pairs) (write! f (str content "\n\n" s))
             :else          (write! f (checks/with-block s content pairs))))
 
         :symlink
         (if (and (fs/exists? f) (not (fs/sym-link? f)))
-          (config/fail! path "is a real file where dev-kit wants a link; move it away, then run init again")
+          (problem/fail! :init/not-a-link
+                         (str path " is a real file where dev-kit wants a link; move it away, then run init again"))
           (do (fs/delete-if-exists f)
               (fs/create-dirs (fs/parent f))
               (fs/create-sym-link f target)))
@@ -49,7 +51,7 @@
         (let [m (checks/policy-map f)]
           (cond
             (nil? m) (write! f (config/json-text checks/policy-default))
-            (= m ::checks/unreadable) (config/fail! path problem)
+            (= m ::checks/unreadable) (problem/fail! :init/policy-unreadable (str path " " problem))
             :else (write! f
                           (config/json-text
                            (reduce (fn [m path] (assoc-in m path (get-in m path (get-in checks/policy-default path))))
@@ -65,14 +67,15 @@
                                    (str ";; Project settings for clj-kondo. Shared strict linters come from dev-kit.\n"
                                         entry))
             (nil? m)       (write! f (str s (when-not (str/ends-with? s "\n") "\n") entry)) ; empty, or comments only
-            (not (map? m)) (config/fail! path problem)
+            (not (map? m)) (problem/fail! :init/kondo-not-a-map (str path " " problem))
             :else          (let [zloc (z/of-string s)]
                              (write! f
                                      (z/root-string (if (z/get zloc :config-paths)
                                                       (z/edit (z/get zloc :config-paths) conj (ident/kondo-entry))
                                                       (z/assoc zloc :config-paths [(ident/kondo-entry)]))))))
           (when (checks/check item)
-            (config/fail! path "could not be updated; add" (ident/kondo-entry) "to :config-paths by hand")))
+            (problem/fail! :init/kondo-not-updated
+                           (str path " could not be updated; add " (ident/kondo-entry) " to :config-paths by hand"))))
 
         :git-config (base/sh "git" "config" "--local" git-key value))
       (str (checks/label item) " (" problem ")"))))
@@ -86,10 +89,11 @@
         ;; settings dev-kit wrote run its hook; kit.edn went missing, they are not the project's own
         settings (if (str/includes? (json/generate-string settings) ".claude/hooks/pretooluse.sh") {} settings)]
     (when (= ::ident/invalid settings)
-      (config/fail! ".claude/settings.json is not a JSON object: fix it or move it away, then run kit init again"))
+      (problem/fail! :init/settings-not-object
+                     ".claude/settings.json is not a JSON object: fix it or move it away, then run kit init again"))
     (cond-> {:repo     (or repo
                            (base/origin-repo base/root)
-                           (config/fail! "no origin remote on GitHub: pass --repo owner/name"))
+                           (problem/fail! :init/no-origin "no origin remote on GitHub: pass --repo owner/name"))
              :showcase showcase
              :modules  (into #{} (comp (remove str/blank?) (map keyword)) (some-> modules (str/split #",")))}
       (seq settings) (assoc :claude-settings settings))))

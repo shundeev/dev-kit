@@ -7,7 +7,8 @@
    [dev-kit.flow.board :as board]
    [dev-kit.flow.github :as github]
    [dev-kit.flow.shell :as shell]
-   [dev-kit.flow.steps :as steps]))
+   [dev-kit.flow.steps :as steps]
+   [dev-kit.problem :as problem]))
 
 
 ;; ------------------------------------------------------------------ kit finish
@@ -108,13 +109,13 @@ Options:
   [{:keys [base]}]
   (let [branch (github/head-branch)]
     (when (= branch "HEAD")
-      (steps/fail! :finish/detached-head "Detached HEAD is not supported"))
+      (problem/fail! :finish/detached-head "Detached HEAD is not supported"))
     (when (= branch base)
-      (steps/fail! :finish/on-base (format "On the base branch '%s': run from the issue branch" base)))
+      (problem/fail! :finish/on-base (format "On the base branch '%s': run from the issue branch" base)))
     {:branch branch
      :number (or
               (shell/issue-branch-number branch)
-              (steps/fail!
+              (problem/fail!
                :finish/branch-without-number
                (format
                 "The branch '%s' is not <number>-<slug>: open the issue with kit start and move the work to its branch"
@@ -126,9 +127,9 @@ Options:
   push leaves a branch with no pull request and a confusing rerun."
   [{:keys [body-file message-file]}]
   (when (and body-file (not (fs/readable? body-file)))
-    (steps/fail! :finish/no-body-file (format "PR body file '%s' not found" body-file)))
+    (problem/fail! :finish/no-body-file (format "PR body file '%s' not found" body-file)))
   (when (and message-file (not (fs/readable? message-file)))
-    (steps/fail! :finish/no-message-file (format "Commit message file '%s' not found" message-file)))
+    (problem/fail! :finish/no-message-file (format "Commit message file '%s' not found" message-file)))
   {})
 
 
@@ -142,7 +143,7 @@ Options:
   "A PR to open needs its description."
   [{:keys [pr-url body-file]}]
   (when-not (or pr-url body-file)
-    (steps/fail! :finish/body-file-required "--pr-body-file is required to open the pull request"))
+    (problem/fail! :finish/body-file-required "--pr-body-file is required to open the pull request"))
   {})
 
 
@@ -186,9 +187,9 @@ Options:
   [{:keys [kit branch subject pr-url body-file]}]
   (let [shape (run-shape-check kit branch subject (when-not pr-url body-file))]
     (when-not (zero? (:exit shape))
-      (steps/fail! :finish/shape
-                   (format "The pull request would fail CI's shape check; nothing was committed or pushed:\n%s"
-                           (str/trimr (str (:out shape) (:err shape))))))
+      (problem/fail! :finish/shape
+                     (format "The pull request would fail CI's shape check; nothing was committed or pushed:\n%s"
+                             (str/trimr (str (:out shape) (:err shape))))))
     {}))
 
 
@@ -205,7 +206,7 @@ Options:
   "ADR-0007: with the ready workflow on the base the PR opens as a draft and the workflow marks it ready. An open PR is
   judged by its own state, not the base's: a ready PR gets what a ready PR gets, and a draft is left to the workflow."
   [{:keys [repo base pr-url]}]
-  (let [base-draft? (github/ready-workflow? repo base #(steps/fail! :finish/workflow-unreadable %))]
+  (let [base-draft? (github/ready-workflow? repo base #(problem/fail! :finish/workflow-unreadable %))]
     {:base-draft? base-draft?
      :draft?      (if pr-url
                     (pr-draft? pr-url)
@@ -216,14 +217,14 @@ Options:
   "--hold works through the ready workflow, which reads drafts only."
   [{:keys [repo base pr-url hold draft? base-draft?]}]
   (when (and hold pr-url (not draft?))
-    (steps/fail!
+    (problem/fail!
      :finish/hold-on-ready-pr
      (format
       "%s is ready already: the workflow only reads drafts, so --hold would hold nothing. Nothing was committed or pushed: make it a draft first (gh pr ready %s --undo; that turns auto-merge off and keeps the owners' request) and run kit finish --hold again, or run kit finish without --hold."
       pr-url
       pr-url)))
   (when (and hold (not base-draft?))
-    (steps/fail!
+    (problem/fail!
      :finish/hold-without-workflow
      (format
       "--hold works through %s, which '%s' of %s does not hold yet. Nothing was committed or pushed: run kit finish without --hold (the PR opens ready, the owners are asked at once), or after the dev-kit update PR with the file has merged."
@@ -249,7 +250,7 @@ Options:
   (when hold
     (let [{:keys [exit out err]} (create-hold-label! repo)]
       (when-not (or (zero? exit) (re-find #"already exists" (str out err)))
-        (steps/fail!
+        (problem/fail!
          :finish/hold-label
          (format
           "Label 'hold' does not exist in %s and could not be created: create it on GitHub (Issues > Labels), then run again"
@@ -283,7 +284,7 @@ Options:
     (when (seq add)
       (stage! add))
     (when-not (staged?)
-      (steps/fail! :finish/nothing-staged "Nothing staged to commit (use --add <path>, or --no-commit)"))
+      (problem/fail! :finish/nothing-staged "Nothing staged to commit (use --add <path>, or --no-commit)"))
     (commit! message-file subject))
   {})
 
@@ -359,7 +360,7 @@ Options:
   (when (and hold (not opened?))
     (let [result (edit-pr! pr-url ["--add-label" "hold"])]
       (when-not (zero? (:exit result))
-        (steps/fail!
+        (problem/fail!
          :finish/hold-label-refused
          (format "%s could not get the label hold: %s. Fix: add the label on GitHub, or run kit finish --hold again."
                  pr-url
@@ -387,7 +388,7 @@ Options:
       (if (str/blank? url)
         (shell/warn (format "Warning: issue #%s not found, Status not set" number))
         (when-let [failure (board/board-set-field project-number owner url status-field review-status)]
-          (steps/fail!
+          (problem/fail!
            :finish/status-refused
            (format "The pull request is open: %s. But the board %s of #%s is not '%s': %s. Set it alone: %s"
                    pr-url

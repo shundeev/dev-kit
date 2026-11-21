@@ -7,7 +7,8 @@
    [dev-kit.flow.shell :as shell]
    [dev-kit.flow.steps :as steps]
    [dev-kit.flow.wait :as wait]
-   [dev-kit.flow.watched-pr :as watched-pr]))
+   [dev-kit.flow.watched-pr :as watched-pr]
+   [dev-kit.problem :as problem]))
 
 
 ;; ------------------------------------------------------------------ kit checks
@@ -203,17 +204,17 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
   [{:keys [pr head]} {:keys [checks now]}]
   (let [failed (wait/failed-checks checks)]
     (cond (= "MERGED" (:state now))
-          (steps/fail! :checks/merged
-                       (format "The pull request merged, so there is nothing to wait for: %s" pr)
-                       {:exit 2 :plain true})
+          (problem/fail! :checks/merged
+                         (format "The pull request merged, so there is nothing to wait for: %s" pr)
+                         {:exit 2 :plain true})
 
           (not= "OPEN" (:state now))
-          (steps/fail! :checks/not-open
-                       (format "Ended with no result: the pull request is %s, %s." (str/lower-case (:state now)) pr)
-                       {:exit 2 :plain true})
+          (problem/fail! :checks/not-open
+                         (format "Ended with no result: the pull request is %s, %s." (str/lower-case (:state now)) pr)
+                         {:exit 2 :plain true})
 
           (not= head (:head now))
-          (steps/fail!
+          (problem/fail!
            :checks/head-moved
            (format
             "Ended with no result: the head moved from %s to %s (a push). Fix: run kit checks again for the new commit."
@@ -222,10 +223,10 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
            {:exit 2 :plain true})
 
           (seq failed)
-          (steps/fail! :checks/failed
-                       (format
-                        "%s\nFix: open the link, fix the cause, push; then run kit checks again for the new commit."
-                        (wait/failed-text failed (str "on " (sha7 head))))))))
+          (problem/fail! :checks/failed
+                         (format
+                          "%s\nFix: open the link, fix the cause, push; then run kit checks again for the new commit."
+                          (wait/failed-text failed (str "on " (sha7 head))))))))
 
 
 (defn- wait-for-checks

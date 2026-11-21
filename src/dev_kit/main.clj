@@ -1,5 +1,5 @@
 (ns dev-kit.main
-  "kit's dispatch: the arguments, the commands that run git, the flow and retro; a :kit/problem ends here as its message and exit 1."
+  "kit's dispatch: the arguments, the commands that run git, the flow and retro; a problem ends here as its message and its exit code (1 when it names none)."
   (:require
    [babashka.fs :as fs]
    [babashka.process :as p]
@@ -9,7 +9,8 @@
    [dev-kit.commands :as commands]
    [dev-kit.config :as config]
    [dev-kit.gate :as gate]
-   [dev-kit.github :as github]))
+   [dev-kit.github :as github]
+   [dev-kit.problem :as problem]))
 
 
 (defn parse-args
@@ -96,36 +97,42 @@
                             (str/split-lines (or (base/sh "git" "diff" "--name-only" "HEAD")
                                                  "")))]
     (when-not (= base-branch branch)
-      (config/fail! (str "sync: the checkout is on "
-                         (if (str/blank? branch) "no branch (detached HEAD)" branch)
-                         ", not on "
-                         base-branch
-                         "; switch to "
-                         base-branch
-                         " first (git switch "
-                         base-branch
-                         ").")))
+      (problem/fail! :sync/wrong-branch
+                     (str "sync: the checkout is on "
+                          (if (str/blank? branch) "no branch (detached HEAD)" branch)
+                          ", not on "
+                          base-branch
+                          "; switch to "
+                          base-branch
+                          " first (git switch "
+                          base-branch
+                          ").")))
     (when (seq dirty)
-      (config/fail! (str "sync: uncommitted changes to tracked files: "
-                         (str/join ", " (take 5 dirty))
-                         (when (> (count dirty) 5) ", ...")
-                         "; commit or stash them first.")))
+      (problem/fail! :sync/dirty
+                     (str "sync: uncommitted changes to tracked files: "
+                          (str/join ", " (take 5 dirty))
+                          (when (> (count dirty) 5) ", ...")
+                          "; commit or stash them first.")))
     (when-not (zero? (git-run "fetch" "origin"))
-      (config/fail! "sync: git fetch origin failed; check the network and the remote, then run kit sync again."))
+      (problem/fail! :sync/fetch-failed
+                     "sync: git fetch origin failed; check the network and the remote, then run kit sync again."))
     (when-not (zero? (git-run "merge" "--ff-only" (str "origin/" base-branch)))
-      (config/fail! (str "sync: the local "
-                         base-branch
-                         " has commits of its own and cannot fast-forward to origin/"
-                         base-branch
-                         "; nothing was changed. Look at them with git log origin/"
-                         base-branch
-                         "..HEAD.")))
+      (problem/fail! :sync/cannot-fast-forward
+                     (str "sync: the local "
+                          base-branch
+                          " has commits of its own and cannot fast-forward to origin/"
+                          base-branch
+                          "; nothing was changed. Look at them with git log origin/"
+                          base-branch
+                          "..HEAD.")))
     (when-not (zero? (git-run "-c" "protocol.file.allow=always" "submodule" "update" "--init"))
-      (config/fail! "sync: git submodule update --init failed; fix what it printed, then run kit sync again."))
+      (problem/fail! :sync/submodule-failed
+                     "sync: git submodule update --init failed; fix what it printed, then run kit sync again."))
     (let [{:keys [exit]} @(p/process ["bb" (str (fs/path base/kit-dir "bin" "kit")) "doctor"]
                                      {:inherit true :dir (str base/root)})]
       (when-not (zero? exit)
-        (config/fail! "sync: kit doctor found problems, above; fix them with the commands it names."))
+        (problem/fail! :sync/doctor-failed
+                       "sync: kit doctor found problems, above; fix them with the commands it names."))
       (println (str "Up to date: " (base/sh "git" "log" "-1" "--format=%h %s")
                     "; dev-kit "   (base/sh-in base/kit-dir "git" "rev-parse" "--short" "HEAD"))))))
 
@@ -239,14 +246,21 @@
   (load-file (str (fs/path base/kit-dir "bin" "retro.clj")))
   (let [opts (parse-args more)
         opts (assoc opts :repo (gate/gate-repo opts (gate/gate-config)) :gh base/gh!)]
-    (if (= n "--missing")
-      ((resolve 'retro/run-missing) opts)
-      ((resolve 'retro/run)
-       (assoc opts :issue (parse-long n) :agent (get-in (config/read-defaults) [:agent :login]))))))
+    (try (if (= n "--missing")
+           ((resolve 'retro/run-missing) opts)
+           ((resolve 'retro/run)
+            (assoc opts :issue (parse-long n) :agent (get-in (config/read-defaults) [:agent :login]))))
+         (catch clojure.lang.ExceptionInfo e
+           (if (= :retro/bad-time (:problem (ex-data e)))
+             (do (binding [*out* *err*]
+                   (println (str "kit: retro: " (ex-message e)))
+                   (flush))
+                 (System/exit 1))
+             (throw e))))))
 
 
 (defn -main
-  "Runs the command the arguments name; a :kit/problem thrown on the way ends as its message and exit 1."
+  "Runs the command the arguments name; a problem thrown on the way ends as its message and its exit code (1 when it names none)."
   [& argv]
   (let [[cmd & args] argv]
     (when (and (#{"init" "doctor" "modules" "sync"} cmd)
@@ -276,6 +290,6 @@
         nil         (usage)
         (do (usage) (base/die "unknown command" cmd)))
       (catch clojure.lang.ExceptionInfo e
-        (if (:kit/problem (ex-data e))
-          (do (println (str "  FAIL  " (ex-message e))) (System/exit 1))
+        (if (:problem (ex-data e))
+          (do (println (str "  FAIL  " (ex-message e))) (System/exit (or (:exit (ex-data e)) 1)))
           (throw e))))))
