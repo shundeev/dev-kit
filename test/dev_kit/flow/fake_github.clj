@@ -197,6 +197,18 @@
   (fn [w] (update-in w [:prs n] merge fields)))
 
 
+(defn github-fails
+  "An event of the script: from now on every read a wait makes is answered with this gh output, e.g. \"HTTP 503\"."
+  [output]
+  (fn [w] (assoc w :github-error output)))
+
+
+(defn github-recovers
+  "An event of the script: GitHub answers again."
+  [w]
+  (dissoc w :github-error))
+
+
 (def nothing-happens
   "An event of the script: a pause after which GitHub is as before."
   identity)
@@ -301,7 +313,10 @@
    #'github/read-pr
    (fn [pr _repo fail]
      (let [found (pr-of @world pr)]
-       (cond (nil? found)
+       (cond (:github-error @world)
+             (fail (github/gh-failure-message "pr view" (:github-error @world)) github/gh-failure-fix)
+
+             (nil? found)
              (fail (github/gh-failure-message
                     "pr view"
                     (str "GraphQL: Could not resolve to a PullRequest with the number of " pr "."))
@@ -322,7 +337,7 @@
    #'github/required-checks
    (fn [pr _repo fail]
      (let [found (pr-of @world pr)]
-       (if-let [output (:checks-unreadable found)]
+       (if-let [output (or (:github-error @world) (:checks-unreadable found))]
          (fail (github/checks-failure-message output) (github/checks-failure-fix pr))
          (vec (:checks found)))))
 
@@ -742,7 +757,7 @@
   {#'review/graphql-reviews
    (fn [pr _repo fail]
      (let [found (pr-of @world pr)]
-       (if-let [output (:reviews-unreadable found)]
+       (if-let [output (or (:github-error @world) (:reviews-unreadable found))]
          (fail (github/gh-failure-message "api graphql" output) github/gh-failure-fix)
          {:state          (:state found)
           :viewer         (:viewer @world "the-agent")

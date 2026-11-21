@@ -45,3 +45,17 @@
     (is (= :flow/unknown-argument (:problem problem)))
     (is (= "Unknown argument: --bogus" (:message problem)))
     (is (string? (:fix problem)))))
+
+
+;; what passes (#139, step 8)
+
+
+(deftest only-a-github-error-that-passes-is-asked-again
+  (doseq [[message passes?] [["gh: No server is currently available (HTTP 503)" true]
+                             ["HTTP 502 Bad Gateway" true]
+                             ["Post https://api.github.com: connection reset by peer" true]
+                             ["error connecting to api.github.com\ncheck your internet connection" true]
+                             ["HTTP 404: Not Found" false]
+                             ["HTTP 401: Bad credentials" false]
+                             ["" false]]]
+    (is (= passes? (shell/passing-github-error? message)) message)))

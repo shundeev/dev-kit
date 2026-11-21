@@ -22,7 +22,7 @@
     (re-find #"Could not resolve to a ProjectV2|Could not resolve to a User|NOT_FOUND" msg)
     "no access to the board: check that it exists and that this gh account can write to it (the board's Settings > Manage access)"
 
-    (re-find #"HTTP 5|Bad Gateway|Service Unavailable|timed out|timeout|connection reset|Something went wrong" msg)
+    (shell/passing-github-error? msg)
     "GitHub had an error: run the command again"))
 
 
@@ -34,7 +34,7 @@
   [& args]
   (let [once #(apply shell/run "gh" args)
         r    (once)
-        r    (if (and (not (zero? (:exit r))) (some-> (board-hint (:err r)) (str/starts-with? "GitHub had an error")))
+        r    (if (and (not (zero? (:exit r))) (shell/passing-github-error? (:err r)))
                (once)
                r)]
     (if (zero? (:exit r))
