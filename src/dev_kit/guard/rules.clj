@@ -398,7 +398,11 @@
 ;; A Monitor call reaches the Bash-matched hooks, the guard among them, as a Bash call: tool_name "Bash", tool_input
 ;; {command, description}, no run_in_background (seen live in the friction log, #109). Nothing in the guard's input tells
 ;; it from a Bash call, so there is no Monitor clause here; the foreground-wait rule above tells them apart by the command.
-(defn -main
+(defn run
+  "The hook's whole work on its input (the parsed JSON, or the exception of a failed parse): {:exit 0|2 :out text
+  :err text}, which only claude/hooks/guard.clj prints and exits with. A decision is the JSON on :out with exit 0,
+  no decision is exit 0 with nothing; a failure of the guard is :err with exit 2, so the command is held back
+  (ADR-0001, rule 3)."
   [input]
   (let [command     (when (map? input)
                       (get-in input ["tool_input" "command"]))
@@ -407,32 +411,31 @@
     (try
       (when (instance? Exception input)
         (throw input)) ; the hook's input was no JSON
-      (when (and (string? command) (not (str/blank? command)))
-        (let [env      (System/getenv)
-              ;; the facts of this process: its environment, and the two reads run for real, git and gh in the
-              ;; given directory (#99)
-              facts    {:background? background?
-                        :shell       (some-> (get env "SHELL") (str/replace #".*/" ""))
-                        :env         env
-                        :cwd         "."
-                        :base        (or (get env "GHWF_DEFAULT_BASE") "main")
-                        :repo        (or (get env "GHWF_REPO") "<owner/repo>")
-                        :branch-of   (fn [dir] (stdout-in nil "git" "-C" dir "symbolic-ref" "--short" "-q" "HEAD"))
-                        :review-of   (fn [dir branch]
-                                       (stdout-in dir
-                                                  "gh"
-                                                  "pr"      "list"
-                                                  "--head"  branch
-                                                  "--state" "open"
-                                                  "--json"  "reviewDecision"
-                                                  "--jq"    ".[0].reviewDecision // empty"))}
-              decision (judge (loop-marked (statements/expand (tokenizer/tokenize command))) facts)]
-          (when decision
-            (println (decision-json decision))
-            (System/exit 0))))
+      (let [decision (when (and (string? command) (not (str/blank? command)))
+                       (let [env   (System/getenv)
+                             ;; the facts of this process: its environment, and the two reads run for real, git and
+                             ;; gh in the given directory (#99)
+                             facts {:background? background?
+                                    :shell       (some-> (get env "SHELL") (str/replace #".*/" ""))
+                                    :env         env
+                                    :cwd         "."
+                                    :base        (or (get env "GHWF_DEFAULT_BASE") "main")
+                                    :repo        (or (get env "GHWF_REPO") "<owner/repo>")
+                                    :branch-of   (fn [dir]
+                                                   (stdout-in nil "git" "-C" dir "symbolic-ref" "--short" "-q" "HEAD"))
+                                    :review-of   (fn [dir branch]
+                                                   (stdout-in dir
+                                                              "gh"
+                                                              "pr"      "list"
+                                                              "--head"  branch
+                                                              "--state" "open"
+                                                              "--json"  "reviewDecision"
+                                                              "--jq"    ".[0].reviewDecision // empty"))}]
+                         (judge (loop-marked (statements/expand (tokenizer/tokenize command))) facts)))]
+        (cond-> {:exit 0}
+          decision (assoc :out (decision-json decision))))
       (catch Exception exception
-        (binding [*out* *err*]
-          (println "Refused: the delivery guard failed, so the command is held back (ADR-0001, rule 3):"
-                   (ex-message exception)
-                   "— report it to the owner; the guard is .shared/claude/hooks/guard.clj"))
-        (System/exit 2)))))
+        {:exit 2
+         :err  (str "Refused: the delivery guard failed, so the command is held back (ADR-0001, rule 3): "
+                    (ex-message exception)
+                    " — report it to the owner; the guard is .shared/claude/hooks/guard.clj")}))))

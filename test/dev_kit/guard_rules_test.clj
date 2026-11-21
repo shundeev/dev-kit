@@ -402,3 +402,19 @@
                                 :branch-of (fn [_] (throw (ex-info "never read" {})))
                                 :review-of (fn [_ _] (throw (ex-info "never read" {}))))))
       "a command with no use for them never calls them"))
+
+
+(deftest the-hook-answers-with-a-result-and-leaves-the-exit-to-its-entry
+  (let [input #(json/parse-string (json/generate-string {:tool_name "Bash" :tool_input {:command %}}))]
+    (testing "a command with no rule against it: exit 0, nothing printed"
+      (is (= {:exit 0} (rules/run (input "git status")))))
+    (testing "a refusal: exit 0 with the JSON, which Claude Code reads"
+      (let [{:keys [exit out]} (rules/run (input "gh issue create --title x"))]
+        (is (= 0 exit))
+        (is (= "deny" (get-in (json/parse-string out) ["hookSpecificOutput" "permissionDecision"])))))
+    (testing "input that is no JSON: exit 2 and the guard's own refusal on stderr (ADR-0001)"
+      (let [{:keys [exit out err]} (rules/run (Exception. "bad json"))]
+        (is (= 2 exit))
+        (is (nil? out))
+        (is (str/includes? err "the delivery guard failed, so the command is held back"))
+        (is (str/includes? err "bad json"))))))
