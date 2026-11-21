@@ -286,7 +286,9 @@
                       (after-git!)
                       (sync!))
         "hook"      (hook! args)
-        ("start" "finish" "release" "merge" "checks" "review" "board") (flow! cmd args)
+        ("start" "finish" "release" "merge" "checks" "review" "board") (let [exit (flow! cmd args)]
+                                                                         (when-not (zero? exit)
+                                                                           (System/exit exit)))
         nil         (usage)
         (do (usage) (base/die "unknown command" cmd)))
       (catch clojure.lang.ExceptionInfo e

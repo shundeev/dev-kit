@@ -32,7 +32,7 @@
            :warnings (lines err))))
 
 
-(defn- said [result] (get-in result [::steps/problem :message] ""))
+(defn- said [result] (str/replace-first (:text (steps/refusal result)) #"^Error: " ""))
 
 
 (defn- the-pr [world] (first (fake/prs world)))
@@ -104,7 +104,10 @@
   (let [world  (fake/new-world {:current-branch "7-held" :prs [(held-draft :state "MERGED")]})
         result (kit-release world "--pr" "1")]
     (is (= :fail (::steps/status result)))
-    (is (= "https://github.com/o/r/pull/1 is MERGED, not open: nothing to release." (said result)))
+    (is
+     (=
+      "https://github.com/o/r/pull/1 is MERGED, not open: nothing to release. Fix: name the held pull request: kit release --pr <number>"
+      (said result)))
     (is (= ["hold"] (:labels (the-pr world))))))
 
 

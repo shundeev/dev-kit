@@ -102,8 +102,14 @@
 (deftest the-pull-request-ending-or-changing-while-it-waits-ends-it-with-no-result
   (doseq
     [[what event text]
-     [["closes" {:state "CLOSED"} (format "Ended with no result: the pull request is closed, %s." pr-url)]
-      ["merges" {:state "MERGED"} (format "The pull request merged, so there is nothing to wait for: %s" pr-url)]
+     [["closes" {:state "CLOSED"}
+       (format
+        "Ended with no result: the pull request is closed, %s. Fix: name an open pull request: kit checks --pr <number>"
+        pr-url)]
+      ["merges" {:state "MERGED"}
+       (format
+        "The pull request merged, so there is nothing to wait for: %s. Fix: nothing to do for this pull request; kit merge closes the work out"
+        pr-url)]
       ["gets a push" {:head "bbb2222"}
        "Ended with no result: the head moved from aaa1111 to bbb2222 (a push). Fix: run kit checks again for the new commit."]]]
     (let [world  (on-the-issue-branch {:checks [(check "selftest" "pending")]} :script [(fake/pr-becomes 1 event)])
@@ -188,26 +194,32 @@
 
 
 (deftest what-it-refuses-says-what-to-run-instead
-  (doseq [[what world variables args text]
-          [["main, with no pull request named"
-            (on-the-issue-branch {} :current-branch "main") {} []
-            "Error: Run from the issue branch, not 'main', or name the pull request: kit checks --pr <number>"]
-           ["the configured base, with no pull request named"
-            (on-the-issue-branch {} :current-branch "trunk") {"GHWF_DEFAULT_BASE" "trunk"} []
-            "Error: Run from the issue branch, not 'trunk', or name the pull request: kit checks --pr <number>"]
-           ["a detached head"
-            (on-the-issue-branch {} :current-branch "HEAD") {} []
-            "Error: Run from the issue branch, not 'HEAD', or name the pull request: kit checks --pr <number>"]
-           ["a branch with no open pull request"
-            (on-the-issue-branch {} :current-branch "8-other") {} []
-            (str "Error: No open pull request for branch '8-other' in o/r. "
-                 "Fix: open it with kit finish, or name it: kit checks --pr <number>")]
-           ["a pull request that is not a number"
-            (on-the-issue-branch {}) {} ["--pr" "abc"]
-            "Error: --pr is 'abc': give the pull request's number"]
-           ["a poll period that is not a number"
-            (on-the-issue-branch {}) {"GHWF_MERGE_POLL" "soon"} []
-            "Error: GHWF_MERGE_POLL is 'soon': give it a whole number of seconds, or unset it for 10"]]]
+  (doseq
+    [[what world variables args text]
+     [["main, with no pull request named"
+       (on-the-issue-branch {} :current-branch "main") {} []
+       "Error: 'main' is not an issue branch. Fix: run from the issue branch, or name the pull request: kit checks --pr <number>"]
+      ["the configured base, with no pull request named"
+       (on-the-issue-branch {} :current-branch "trunk") {"GHWF_DEFAULT_BASE" "trunk"} []
+       "Error: 'trunk' is not an issue branch. Fix: run from the issue branch, or name the pull request: kit checks --pr <number>"]
+      ["a detached head"
+       (on-the-issue-branch {} :current-branch "HEAD") {} []
+       "Error: 'HEAD' is not an issue branch. Fix: run from the issue branch, or name the pull request: kit checks --pr <number>"]
+      ["a branch with no open pull request"
+       (on-the-issue-branch {} :current-branch "8-other") {} []
+       (str "Error: No open pull request for branch '8-other' in o/r. "
+            "Fix: open it with kit finish, or name it: kit checks --pr <number>")]
+      ["a pull request that is not a number"
+       (on-the-issue-branch {}) {} ["--pr" "abc"]
+       "Error: --pr is 'abc'. Fix: give the pull request's number, e.g. --pr 12"]
+      ["a poll period below zero"
+       (on-the-issue-branch {}) {"GHWF_MERGE_POLL" "-1"} []
+       (str "Error: GHWF_MERGE_POLL is '-1': give it a whole number of seconds, or unset it for 10. "
+            "Fix: set GHWF_MERGE_POLL to a whole number of seconds (0 or more), or unset it")]
+      ["a poll period that is not a number"
+       (on-the-issue-branch {}) {"GHWF_MERGE_POLL" "soon"} []
+       (str "Error: GHWF_MERGE_POLL is 'soon': give it a whole number of seconds, or unset it for 10. "
+            "Fix: set GHWF_MERGE_POLL to a whole number of seconds (0 or more), or unset it")]]]
     (let [result (apply kit-checks world variables args)]
       (is (= 1 (:exit result)) what)
       (is (= text (:text result)) what))))

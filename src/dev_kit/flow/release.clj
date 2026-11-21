@@ -50,12 +50,9 @@ Options:
      (or
       pr
       (github/open-pr-url repo branch "open")
-      (problem/fail!
-       :release/no-open-pr
-       (format
-        "No open pull request for branch '%s' in %s. Fix: run it from the held PR's branch, or name it with --pr <number>"
-        branch
-        repo)))}))
+      (problem/fail! :release/no-open-pr
+                     (format "No open pull request for branch '%s' in %s" branch repo)
+                     {:fix "run it from the held PR's branch, or name it with --pr <number>"}))}))
 
 
 (defn- view-pr-for-release
@@ -84,31 +81,30 @@ Options:
   "Refuses a pull request that is not open: there is nothing to release."
   [{:keys [state url]}]
   (when-not (= state "OPEN")
-    (problem/fail! :release/not-open (format "%s is %s, not open: nothing to release." url state)))
+    (problem/fail! :release/not-open
+                   (format "%s is %s, not open: nothing to release." url state)
+                   {:fix "name the held pull request: kit release --pr <number>"}))
   nil)
 
 
 (defn- check-checks-passed
   "Refuses while GitHub reports no required check, or one that is not green; nothing has been changed yet."
   [{:keys [pr repo url]}]
-  (let [checks (github/required-checks pr repo #(problem/fail! :release/checks-unreadable %))]
+  (let [checks (github/required-checks pr repo #(problem/fail! :release/checks-unreadable %1 {:fix %2}))]
     (when (empty? checks)
       (problem/fail!
        :release/no-required-check
-       (format
-        "GitHub reports no required check on %s, so none can be called green. Fix: run it again once CI has started, or gh pr ready %s"
-        pr
-        pr)))
+       (format "GitHub reports no required check on %s, so none can be called green." pr)
+       {:fix (format "run it again once CI has started, or gh pr ready %s" pr)}))
     (let [bad (->> checks
                    (remove #(#{"pass" "skipping"} (:bucket %)))
                    (map #(str (:name %) " (" (:bucket %) ")")))]
       (when (seq bad)
         (problem/fail!
          :release/check-not-green
-         (format
-          "A required check of %s is not green: %s. Nothing was changed: wait for it (kit checks, in the background), then run kit release again; a failed check is fixed first."
-          url
-          (str/join ", " bad)))))
+         (format "A required check of %s is not green: %s. Nothing was changed." url (str/join ", " bad))
+         {:fix
+          "wait for it (kit checks, in the background), then run kit release again; a failed check is fixed first"})))
     nil))
 
 
@@ -171,13 +167,10 @@ Options:
 
 
 (defn release!
-  "kit release: read the command line, run the recipe on the real GitHub, print what it did, or the refusal."
+  "kit release: read the command line, run the recipe on the real GitHub, print what it did, or throw the refusal, which the flow's edge prints."
   [_kit args]
   (let [input (read-input args)]
-    (when (:help input)
+    (if (:help input)
       (println release-usage)
-      (System/exit 0))
-    (let [result (release input)]
-      (when (= :fail (::steps/status result))
-        (shell/exit-with! (steps/refusal result)))
-      (println (format "Released: %s" (:url result))))))
+      (let [result (steps/complete! (release input))]
+        (println (format "Released: %s" (:url result)))))))

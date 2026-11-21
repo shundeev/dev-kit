@@ -31,7 +31,9 @@
   "--pr names the pull request by its number."
   [{:keys [pr]}]
   (when (and pr (not (re-matches #"\d+" pr)))
-    (problem/fail! :pr/bad-number (format "--pr is '%s': give the pull request's number" pr))))
+    (problem/fail! :pr/bad-number
+                   (format "--pr is '%s'" pr)
+                   {:fix "give the pull request's number, e.g. --pr 12"})))
 
 
 (defn find-pr
@@ -42,21 +44,16 @@
         pr
         (do (when (#{default-base "HEAD"} branch)
               (problem/fail! :branch/not-an-issue-branch
-                             (format
-                              "Run from the issue branch, not '%s', or name the pull request: kit %s --pr <number>"
-                              branch
-                              command)))
+                             (format "'%s' is not an issue branch" branch)
+                             {:fix (format "run from the issue branch, or name the pull request: kit %s --pr <number>"
+                                           command)}))
             (github/open-pr-url repo branch "open"))
-        (problem/fail!
-         :pr/no-open-pr
-         (format
-          "No open pull request for branch '%s' in %s. Fix: open it with kit finish, or name it: kit %s --pr <number>"
-          branch
-          repo
-          command)))})
+        (problem/fail! :pr/no-open-pr
+                       (format "No open pull request for branch '%s' in %s" branch repo)
+                       {:fix (format "open it with kit finish, or name it: kit %s --pr <number>" command)}))})
 
 
 (defn no-result
   "The failure of a read of GitHub that gave no answer: gh's message as it is, exit 2."
-  [message]
-  (problem/fail! :github/no-answer message {:exit 2 :plain true}))
+  [message fix]
+  (problem/fail! :github/no-answer message {:exit 2 :plain true :fix fix}))
