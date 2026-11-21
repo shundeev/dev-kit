@@ -63,5 +63,21 @@
 (require 'dev-kit.guard.rules)
 
 
+;; Three ends, one exit: no rule speaks (exit 0, nothing printed), a decision (exit 0, its JSON on stdout, which
+;; Claude Code reads), or the guard failed — input that is no JSON, or an error in a rule (exit 2, the reason on
+;; stderr: the command is held back, ADR-0001, rule 3).
 (when run?
-  (dev-kit.guard.rules/-main input))
+  (System/exit
+   (try
+     (when (instance? Exception input)
+       (throw input))
+     (some-> (dev-kit.guard.rules/answer input)
+             println)
+     0
+     (catch Exception exception
+       (binding [*out* *err*]
+         (println
+          (format
+           "Refused: the delivery guard failed, so the command is held back (ADR-0001, rule 3): %s — report it to the owner; the guard is .shared/claude/hooks/guard.clj"
+           (ex-message exception))))
+       2))))

@@ -150,7 +150,7 @@
                             (and (= "review" (second kit)) (some #{"--wait"} texts))))))
       (deny
        :foreground-wait
-       "Refused: this command waits. Run it as a background command (run_in_background); you are woken when it exits (#109)."))))
+       "Refused: this command waits. Run it as a background command (run_in_background); you are woken when it exits (#109).\n\nThe allowed ways: run this command in the background, or use `kit checks` or `kit review --wait`, themselves run in the background."))))
 
 
 (defn- zsh-rule
@@ -378,11 +378,14 @@
 
 
 (defn decision-json
-  "What the hook prints for a decision: the JSON Claude Code reads (and managed/pretooluse.sh and `kit hook`)."
-  [{:keys [decision reason]}]
+  "What the hook prints for a decision: the JSON Claude Code reads (and managed/pretooluse.sh and `kit hook`). The
+  reason ends with the line `Rule: <rule name>`, so the friction log can count refusals by rule; no new key, since
+  a hook's JSON with a schema error is a non-blocking error (#139, step 8)."
+  [{:keys [decision rule reason]}]
   (json/generate-string {:hookSpecificOutput {:hookEventName      "PreToolUse"
                                               :permissionDecision (name decision)
-                                              :permissionDecisionReason reason}}))
+
+                                              :permissionDecisionReason (str reason "\n\nRule: " (name rule))}}))
 
 
 (defn- stdout-in
@@ -398,41 +401,32 @@
 ;; A Monitor call reaches the Bash-matched hooks, the guard among them, as a Bash call: tool_name "Bash", tool_input
 ;; {command, description}, no run_in_background (seen live in the friction log, #109). Nothing in the guard's input tells
 ;; it from a Bash call, so there is no Monitor clause here; the foreground-wait rule above tells them apart by the command.
-(defn -main
+(defn answer
+  "The guard's answer to the hook's input (its parsed JSON): the JSON Claude Code reads, as text, or nil when no rule
+  speaks. A failure of the guard throws; the hook's entry, claude/hooks/guard.clj, then holds the command back
+  (ADR-0001, rule 3)."
   [input]
-  (let [command     (when (map? input)
-                      (get-in input ["tool_input" "command"]))
-        background? (when (map? input)
-                      (true? (get-in input ["tool_input" "run_in_background"])))]
-    (try
-      (when (instance? Exception input)
-        (throw input)) ; the hook's input was no JSON
-      (when (and (string? command) (not (str/blank? command)))
-        (let [env      (System/getenv)
-              ;; the facts of this process: its environment, and the two reads run for real, git and gh in the
-              ;; given directory (#99)
-              facts    {:background? background?
-                        :shell       (some-> (get env "SHELL") (str/replace #".*/" ""))
-                        :env         env
-                        :cwd         "."
-                        :base        (or (get env "GHWF_DEFAULT_BASE") "main")
-                        :repo        (or (get env "GHWF_REPO") "<owner/repo>")
-                        :branch-of   (fn [dir] (stdout-in nil "git" "-C" dir "symbolic-ref" "--short" "-q" "HEAD"))
-                        :review-of   (fn [dir branch]
-                                       (stdout-in dir
-                                                  "gh"
-                                                  "pr"      "list"
-                                                  "--head"  branch
-                                                  "--state" "open"
-                                                  "--json"  "reviewDecision"
-                                                  "--jq"    ".[0].reviewDecision // empty"))}
-              decision (judge (loop-marked (statements/expand (tokenizer/tokenize command))) facts)]
-          (when decision
-            (println (decision-json decision))
-            (System/exit 0))))
-      (catch Exception exception
-        (binding [*out* *err*]
-          (println "Refused: the delivery guard failed, so the command is held back (ADR-0001, rule 3):"
-                   (ex-message exception)
-                   "— report it to the owner; the guard is .shared/claude/hooks/guard.clj"))
-        (System/exit 2)))))
+  (let [command     (get-in input ["tool_input" "command"])
+        background? (true? (get-in input ["tool_input" "run_in_background"]))]
+    (when (and (string? command) (not (str/blank? command)))
+      (let [env   (System/getenv)
+            ;; the facts of this process: its environment, and the two reads run for real, git and
+            ;; gh in the given directory (#99)
+            facts {:background? background?
+                   :shell       (some-> (get env "SHELL") (str/replace #".*/" ""))
+                   :env         env
+                   :cwd         "."
+                   :base        (or (get env "GHWF_DEFAULT_BASE") "main")
+                   :repo        (or (get env "GHWF_REPO") "<owner/repo>")
+                   :branch-of   (fn [dir]
+                                  (stdout-in nil "git" "-C" dir "symbolic-ref" "--short" "-q" "HEAD"))
+                   :review-of   (fn [dir branch]
+                                  (stdout-in dir
+                                             "gh"
+                                             "pr"      "list"
+                                             "--head"  branch
+                                             "--state" "open"
+                                             "--json"  "reviewDecision"
+                                             "--jq"    ".[0].reviewDecision // empty"))}]
+        (some-> (judge (loop-marked (statements/expand (tokenizer/tokenize command))) facts)
+                decision-json)))))
