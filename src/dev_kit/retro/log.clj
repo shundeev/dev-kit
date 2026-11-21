@@ -16,32 +16,32 @@
 
 (defn parse-time
   "A time given on the command line, in UTC or with an offset."
-  [opt s]
-  (or (try (Instant/parse s) (catch Exception _ nil))
-      (try (.toInstant (OffsetDateTime/parse s)) (catch Exception _ nil))
+  [option text]
+  (or (try (Instant/parse text) (catch Exception _ nil))
+      (try (.toInstant (OffsetDateTime/parse text)) (catch Exception _ nil))
       (problem/fail! :retro/bad-time
-                     (str "retro: " opt " " s " : not a time")
+                     (str "retro: " option " " text " : not a time")
                      {:fix "write it as 2026-11-12T10:00:00Z or 2026-11-12T11:00:00+01:00"})))
 
 
 (defn instant
-  [s]
-  (when s
-    (Instant/parse s)))
+  [text]
+  (when text
+    (Instant/parse text)))
 
 
-(defn before? [^Instant a ^Instant b] (.isBefore a b))
+(defn before? [^Instant earlier ^Instant later] (.isBefore earlier later))
 
 
-(defn stamp [^Instant t] (str/replace (subs (str t) 0 16) "T" " "))
+(defn stamp [^Instant moment] (str/replace (subs (str moment) 0 16) "T" " "))
 
 
 (defn span
-  [a b]
-  (let [m (.toMinutes (Duration/between a b))]
-    (if (>= m 60)
-      (format "%dh %02dm" (quot m 60) (rem m 60))
-      (str m "m"))))
+  [from to]
+  (let [minutes (.toMinutes (Duration/between from to))]
+    (if (>= minutes 60)
+      (format "%dh %02dm" (quot minutes 60) (rem minutes 60))
+      (str minutes "m"))))
 
 
 ;; ------------------------------------------------------------------ commands
@@ -66,102 +66,107 @@
 
 
 (defn base
-  [w]
-  (let [w (str/replace w #"[\"'()]" "")]
-    (if (str/blank? w)
-      w
-      (str (fs/file-name w)))))
+  [word]
+  (let [word (str/replace word #"[\"'()]" "")]
+    (if (str/blank? word)
+      word
+      (str (fs/file-name word)))))
 
 
-(defn plain? [w] (and w (re-matches #"[a-z][a-z0-9-]*" w)))
+(defn plain? [word] (and word (re-matches #"[a-z][a-z0-9-]*" word)))
 
 
-(defn words [s] (remove str/blank? (str/split (str/trim (str s)) #"\s+")))
+(defn words [text] (remove str/blank? (str/split (str/trim (str text)) #"\s+")))
 
 
-(defn command-words [seg] (drop-while #(or (lead-words %) (re-matches #"[A-Za-z_]\w*=.*" %)) (words seg)))
+(defn command-words
+  [segment]
+  (drop-while #(or (lead-words %) (re-matches #"[A-Za-z_]\w*=.*" %)) (words segment)))
 
 
 (defn split-top
   "Splits a shell command at && || ; | and newlines outside quotes."
-  [^String s]
-  (loop [i   0
-         q   nil
-         cur (StringBuilder.)
-         out []]
-    (if (>= i (count s))
-      (conj out (str cur))
-      (let [c  (.charAt s i)
-            c2 (when (< (inc i) (count s))
-                 (.charAt s (inc i)))
-            op (cond (or (and (= c \&) (= c2 \&)) (and (= c \|) (= c2 \|))) 2
-                     (#{\| \; \newline} c) 1)]
+  [^String command]
+  (loop [i          0
+         open-quote nil
+         current    (StringBuilder.)
+         parts      []]
+    (if (>= i (count command))
+      (conj parts (str current))
+      (let [character      (.charAt command i)
+            next-character (when (< (inc i) (count command))
+                             (.charAt command (inc i)))
+            operator-width (cond (or (and (= character \&) (= next-character \&))
+                                     (and (= character \|) (= next-character \|)))
+                                 2
+                                 (#{\| \; \newline} character) 1)]
         (cond
-          (and (= c \\) c2 (not= q \')) (recur (+ i 2) q (doto cur (.append c) (.append c2)) out)
-          q (recur (inc i) (when (not= c q) q) (.append cur c) out)
-          (#{\' \"} c) (recur (inc i) c (.append cur c) out)
-          op (recur (+ i op) nil (StringBuilder.) (conj out (str cur)))
-          :else (recur (inc i) q (.append cur c) out))))))
+          (and (= character \\) next-character (not= open-quote \'))
+          (recur (+ i 2) open-quote (doto current (.append character) (.append next-character)) parts)
+          open-quote (recur (inc i) (when (not= character open-quote) open-quote) (.append current character) parts)
+          (#{\' \"} character) (recur (inc i) character (.append current character) parts)
+          operator-width (recur (+ i operator-width) nil (StringBuilder.) (conj parts (str current)))
+          :else (recur (inc i) open-quote (.append current character) parts))))))
 
 
 (defn segments
   "The simple commands of a shell command: heredoc bodies dropped, $(…) bodies added."
-  [cmd]
-  (let [s (-> (str cmd)
-              (str/replace #"\\\n" " ")
-              (str/replace #"(?s)<<-?\s*['\"]?(\w+)['\"]?([^\n]*)\n.*?\n[ \t]*\1[ \t]*(?=\n|$)" "$2"))]
-    (concat (split-top s) (mapcat #(split-top (second %)) (re-seq #"\$\(([^()]*)\)" s)))))
+  [command]
+  (let [script (-> (str command)
+                   (str/replace #"\\\n" " ")
+                   (str/replace #"(?s)<<-?\s*['\"]?(\w+)['\"]?([^\n]*)\n.*?\n[ \t]*\1[ \t]*(?=\n|$)" "$2"))]
+    (concat (split-top script) (mapcat #(split-top (second %)) (re-seq #"\$\(([^()]*)\)" script)))))
 
 
 (defn gh-args
   "gh's words without its flags and their values."
-  [ws]
-  (loop [[w & more] ws
-         out        []]
-    (cond (nil? w) out
-          (gh-value-flags w) (recur (rest more) out)
-          (str/starts-with? w "-") (recur more out)
-          :else (recur more (conj out w)))))
+  [arguments]
+  (loop [[word & more] arguments
+         kept []]
+    (cond (nil? word) kept
+          (gh-value-flags word) (recur (rest more) kept)
+          (str/starts-with? word "-") (recur more kept)
+          :else (recur more (conj kept word)))))
 
 
 (defn gh-api-write?
-  [ws]
-  (if-let [m (some (fn [[a b]]
-                     (cond (#{"-X" "--method"} a)  b
-                           (str/starts-with? a "--method=") (subs a 9)
-                           (re-matches #"-X\w+" a) (subs a 2)))
-                   (partition-all 2 1 ws))]
-    (not= "GET" (str/upper-case (str m)))
-    (boolean (some #{"-f" "-F" "--field" "--raw-field" "--input"} ws))))
+  [arguments]
+  (if-let [method (some (fn [[flag value]]
+                          (cond (#{"-X" "--method"} flag)  value
+                                (str/starts-with? flag "--method=") (subs flag 9)
+                                (re-matches #"-X\w+" flag) (subs flag 2)))
+                        (partition-all 2 1 arguments))]
+    (not= "GET" (str/upper-case (str method)))
+    (boolean (some #{"-f" "-F" "--field" "--raw-field" "--input"} arguments))))
 
 
 (defn shape-of
-  [[w & more]]
-  (let [b (base w)]
-    (case b
-      "gh"  (let [[a c :as args] (gh-args more)]
-              (cond (not= a "api")       (str/join " " (cons "gh" (filter plain? (take 2 args))))
-                    (= c "graphql")      "gh api graphql"
-                    (gh-api-write? more) "gh api (REST, write)"
-                    :else                "gh api (REST)"))
-      "git" (let [sub (first (remove #(str/starts-with? % "-")
-                                     (loop [ws more]
-                                       (if (#{"-C" "-c"} (first ws))
-                                         (recur (drop 2 ws))
-                                         ws))))]
-              (if (plain? sub)
-                (str "git " sub)
+  [[word & more]]
+  (let [program (base word)]
+    (case program
+      "gh"  (let [[command subcommand :as args] (gh-args more)]
+              (cond (not= command "api")     (str/join " " (cons "gh" (filter plain? (take 2 args))))
+                    (= subcommand "graphql") "gh api graphql"
+                    (gh-api-write? more)     "gh api (REST, write)"
+                    :else                    "gh api (REST)"))
+      "git" (let [subcommand (first (remove #(str/starts-with? % "-")
+                                            (loop [ws more]
+                                              (if (#{"-C" "-c"} (first ws))
+                                                (recur (drop 2 ws))
+                                                ws))))]
+              (if (plain? subcommand)
+                (str "git " subcommand)
                 "git"))
       ("bash" "sh" "zsh" "bb" "python" "python3" "node")
       (if (#{"-e" "-c"} (first more))
-        (str b " " (first more))
-        (let [[script sub] (remove #(or (str/starts-with? % "-") (re-find #"^\d*[<>&]" %)) more)
+        (str program " " (first more))
+        (let [[script subcommand] (remove #(or (str/starts-with? % "-") (re-find #"^\d*[<>&]" %)) more)
               file (some-> script base)]
           (str/join " "
                     (remove str/blank?
-                            [b (when (and file (re-matches #"[\w.+-]+" file)) file)
-                             (when (and (= b "bb") (plain? sub)) sub)]))))
-      b)))
+                            [program (when (and file (re-matches #"[\w.+-]+" file)) file)
+                             (when (and (= program "bb") (plain? subcommand)) subcommand)]))))
+      program)))
 
 
 (defn shapes
@@ -169,16 +174,16 @@
   by its first plain word."
   [tool input]
   (if (= tool "Bash")
-    (let [segs  (segments (:command input))
-          named (distinct (keep (fn [seg]
-                                  (let [[w :as ws] (command-words seg)]
-                                    (when (and w
-                                               (not (skip-words w))
-                                               (not (and (str/starts-with? w "$") (not (str/includes? w "/"))))
-                                               (re-matches #"[A-Za-z][\w.+-]*" (base w)))
-                                      (shape-of ws))))
-                                segs))]
-      (or (seq named) (some #(when (and (plain? %) (not= "cd" %)) [%]) (keep #(first (command-words %)) segs)) []))
+    (let [parts (segments (:command input))
+          named (distinct (keep (fn [segment]
+                                  (let [[word :as command-parts] (command-words segment)]
+                                    (when (and word
+                                               (not (skip-words word))
+                                               (not (and (str/starts-with? word "$") (not (str/includes? word "/"))))
+                                               (re-matches #"[A-Za-z][\w.+-]*" (base word)))
+                                      (shape-of command-parts))))
+                                parts))]
+      (or (seq named) (some #(when (and (plain? %) (not= "cd" %)) [%]) (keep #(first (command-words %)) parts)) []))
     [(str tool)]))
 
 
@@ -187,9 +192,9 @@
 
 (defn shape-all
   [tool input]
-  (let [s (shapes tool input)]
-    (if (seq s)
-      (str/join " + " (cond-> (vec (take 3 s)) (< 3 (count s)) (conj "…")))
+  (let [found (shapes tool input)]
+    (if (seq found)
+      (str/join " + " (cond-> (vec (take 3 found)) (< 3 (count found)) (conj "…")))
       "shell")))
 
 
@@ -205,8 +210,8 @@
 
 
 (defn rule-matches?
-  [tool input [_ t body]]
-  (and (re-find (glob-re t) tool)
+  [tool input [_ tool-pattern body]]
+  (and (re-find (glob-re tool-pattern) tool)
        (cond
          (nil? body)     true
          (= tool "Bash") (some #(re-find (glob-re body) (str/join " " (command-words %))) (segments (:command input)))
@@ -218,13 +223,13 @@
   "The ask rule that raised a window, from the rules in force at that moment. Only a rule of plain words is
   printed whole; one naming a path or a URL prints as Tool(…)."
   [{:keys [tool input asks]}]
-  (if-let [[r t body] (some #(let [p (re-matches #"([\w*-]+)(?:\((.*)\))?" %)]
-                               (when (and p (rule-matches? tool input p)) p))
-                            asks)]
+  (if-let [[rule tool-pattern body] (some #(let [parsed (re-matches #"([\w*-]+)(?:\((.*)\))?" %)]
+                                             (when (and parsed (rule-matches? tool input parsed)) parsed))
+                                          asks)]
     (str "ask rule: "
          (if (or (nil? body) (re-matches #"[\w .:*-]*" body))
-           r
-           (str t "(…)")))
+           rule
+           (str tool-pattern "(…)")))
     (str (shape-all tool input) " (no ask rule matches)")))
 
 
@@ -241,29 +246,31 @@
 (defn read-log
   "Every event of the log, in order. A line that is not a whole event (a session still writing) is skipped."
   [dir]
-  (vec (for [f     (sort (map str (fs/glob dir "*.jsonl")))
-             line  (with-open [r (io/reader f)] (doall (line-seq r)))
-             :let  [e (try (let [e (json/parse-string line true)]
-                             ;; an event without a turn id belongs to no turn
-                             (cond-> (assoc e :at (instant (:at e))) (str/blank? (str (:turn e))) (dissoc :turn)))
-                           (catch Exception _ nil))]
-             :when (and (:at e) (:session e))]
-         e)))
+  (vec (for [file  (sort (map str (fs/glob dir "*.jsonl")))
+             line  (with-open [reader (io/reader file)] (doall (line-seq reader)))
+             :let  [event (try (let [parsed (json/parse-string line true)]
+                                 ;; an event without a turn id belongs to no turn
+                                 (cond-> (assoc parsed :at (instant (:at parsed)))
+                                   (str/blank? (str (:turn parsed))) (dissoc :turn)))
+                               (catch Exception _ nil))]
+             :when (and (:at event) (:session event))]
+         event)))
 
 
 (defn task-of
   [{:keys [branch origin]}]
-  (when-let [[_ n] (some->> branch (re-matches #"(\d+)-.+"))] [(some-> origin str/lower-case) (parse-long n)]))
+  (when-let [[_ number] (some->> branch (re-matches #"(\d+)-.+"))]
+    [(some-> origin str/lower-case) (parse-long number)]))
 
 
 (defn runs
   "Commands sorted by time, split where neighbours are more than 10 minutes apart."
   [cmds]
-  (reduce (fn [acc c]
-            (let [prev (peek (peek acc))]
-              (if (and prev (not (before? (.plus ^Instant (:at prev) (Duration/ofMinutes 10)) (:at c))))
-                (conj (pop acc) (conj (peek acc) c))
-                (conj acc [c]))))
+  (reduce (fn [groups command]
+            (let [previous (peek (peek groups))]
+              (if (and previous (not (before? (.plus ^Instant (:at previous) (Duration/ofMinutes 10)) (:at command))))
+                (conj (pop groups) (conj (peek groups) command))
+                (conj groups [command]))))
           []
           cmds))
 
@@ -272,20 +279,20 @@
   "Calls in order, each with its window and outcome. A window goes to the first call of its turn with the same
   agent, tool and input that has neither yet."
   [events]
-  (reduce (fn [calls e]
-            (let [same (fn [ks] (fn [i c] (when (= (map c ks) (map e ks)) i)))]
-              (case (:event e)
-                "PreToolUse" (conj calls (assoc e :task (task-of e)))
+  (reduce (fn [calls event]
+            (let [same (fn [fields] (fn [index call] (when (= (map call fields) (map event fields)) index)))]
+              (case (:event event)
+                "PreToolUse" (conj calls (assoc event :task (task-of event)))
                 "PermissionRequest"
-                (if-let [i (first (keep-indexed (fn [i c]
-                                                  (when (and (nil? (:window c)) (nil? (:outcome c)))
-                                                    ((same [:turn :agent :tool :input]) i c)))
-                                                calls))]
-                  (assoc-in calls [i :window] e)
+                (if-let [index (first (keep-indexed (fn [index call]
+                                                      (when (and (nil? (:window call)) (nil? (:outcome call)))
+                                                        ((same [:turn :agent :tool :input]) index call)))
+                                                    calls))]
+                  (assoc-in calls [index :window] event)
                   calls)
                 ("PostToolUse" "PostToolUseFailure" "PermissionDenied" "HookDenied")
-                (if-let [i (first (keep-indexed (same [:id]) calls))]
-                  (update calls i assoc :outcome (:event e) :reason (:reason e) :done (:at e))
+                (if-let [index (first (keep-indexed (same [:id]) calls))]
+                  (update calls index assoc :outcome (:event event) :reason (:reason event) :done (:at event))
                   calls)
                 calls)))
           []
@@ -297,31 +304,35 @@
   [events]
   (let [calls    (pair events)
         turns    (distinct (keep :turn events))
-        ended    (fn [ev] (into {} (for [e events :when (and (:turn e) (= ev (:event e)))] [(:turn e) e])))
+        ended    (fn [event-name]
+                   (into
+                    {}
+                    (for [event events :when (and (:turn event) (= event-name (:event event)))] [(:turn event) event])))
         stop     (ended "Stop")
         failed   (ended "StopFailure")
-        named    (memoize (fn [t]
-                            (let [ts (set (keep :task (filter #(= t (:turn %)) calls)))]
-                              (when (= 1 (count ts))
-                                (first ts)))))
+        named    (memoize (fn [turn]
+                            (let [tasks (set (keep :task (filter #(= turn (:turn %)) calls)))]
+                              (when (= 1 (count tasks))
+                                (first tasks)))))
         ;; a message, an Esc, a failed turn or a question belongs to the task the session was last working on
-        latest   (loop [[t & more] turns
-                        prev       nil
-                        out        {}]
-                   (if t
-                     (let [n (or (named t) prev)] (recur more n (assoc out t n)))
-                     out))
-        item     (fn [kind cause c] {:kind kind :cause cause :at (:at c) :task (or (:task c) (named (:turn c)))})
-        first-at (fn [t] (:at (first (filter #(= t (:turn %)) events))))
+        latest   (loop [[turn & more] turns
+                        previous      nil
+                        by-turn       {}]
+                   (if turn
+                     (let [task (or (named turn) previous)] (recur more task (assoc by-turn turn task)))
+                     by-turn))
+        item     (fn [kind cause source]
+                   {:kind kind :cause cause :at (:at source) :task (or (:task source) (named (:turn source)))})
+        first-at (fn [turn] (:at (first (filter #(= turn (:turn %)) events))))
         dialog   #{"AskUserQuestion" "ExitPlanMode"}
-        call     (fn [{:keys [tool input window outcome reason turn] :as c}]
+        call     (fn [{:keys [tool input window outcome reason turn] :as call}]
                    (let [ran? (#{"PostToolUse" "PostToolUseFailure"} outcome)]
                      (cond-> []
-                       (= tool "AskUserQuestion") (conj (item :question "AskUserQuestion" c))
-                       (= tool "ExitPlanMode") (conj (item :plan (if ran? "approved" "declined") c))
+                       (= tool "AskUserQuestion") (conj (item :question "AskUserQuestion" call))
+                       (= tool "ExitPlanMode") (conj (item :plan (if ran? "approved" "declined") call))
                        (and window (not (dialog tool)))
-                       (conj (item (if ran? :confirm-yes :confirm-no) (window-cause window) c))
-                       (= outcome "HookDenied") (conj (assoc (item :refusal-hook (shape-all tool input) c)
+                       (conj (item (if ran? :confirm-yes :confirm-no) (window-cause window) call))
+                       (= outcome "HookDenied") (conj (assoc (item :refusal-hook (shape-all tool input) call)
                                                              :why
                                                              (second (re-find #"Rule: (\S+)" (str reason)))))
                        (= outcome "PermissionDenied")
@@ -329,51 +340,51 @@
                                    (str (shape-all tool input)
                                         " — "
                                         (or (second (re-find #"\[(\w+)\]" (str reason))) "classifier"))
-                                   c))
-                       (= outcome "PostToolUseFailure") (conj (item :tool-error (shape tool input) c))
+                                   call))
+                       (= outcome "PostToolUseFailure") (conj (item :tool-error (shape tool input) call))
                        (and (nil? outcome) (nil? window) (stop turn) (not (dialog tool)))
-                       (conj (item :refusal-rule (shape-all tool input) c)))))
+                       (conj (item :refusal-rule (shape-all tool input) call)))))
         bash     (filter #(and (= "Bash" (:tool %)) (get-in % [:input :command])) calls)]
     {:items    (concat
                 (mapcat call calls)
                 ;; neither Stop nor StopFailure while the session went on: the owner pressed Esc, unless on a
                 ;; window, which is that window's no
-                (for [t     (butlast turns)
-                      :when (and (not (stop t))
-                                 (not (failed t))
-                                 (not (some #(and (= t (:turn %)) (:window %) (nil? (:outcome %))) calls)))]
-                  {:kind :interrupt :cause "—" :at (first-at t) :task (latest t)})
-                (for [t (keys failed)] {:kind :turn-failed :cause "—" :at (first-at t) :task (latest t)})
-                (for [[t e] stop
-                      :when (:needs_input e)]
-                  {:kind :question :cause "needs input in chat" :at (:at e) :task (latest t)})
+                (for [turn  (butlast turns)
+                      :when (and (not (stop turn))
+                                 (not (failed turn))
+                                 (not (some #(and (= turn (:turn %)) (:window %) (nil? (:outcome %))) calls)))]
+                  {:kind :interrupt :cause "—" :at (first-at turn) :task (latest turn)})
+                (for [turn (keys failed)] {:kind :turn-failed :cause "—" :at (first-at turn) :task (latest turn)})
+                (for [[turn event] stop
+                      :when        (:needs_input event)]
+                  {:kind :question :cause "needs input in chat" :at (:at event) :task (latest turn)})
                 ;; the same command, word for word, three times or more within minutes: polling or retries
                 (for [[_ same] (group-by #(str/join " " (words (get-in % [:input :command]))) bash)
                       run      (runs same)
                       :when    (>= (count run) 3)]
                   (assoc (item :repeat (shape "Bash" (:input (first run))) (first run)) :n (count run))))
-     :messages (for [e     events
-                     :when (= "UserPromptSubmit" (:event e))]
-                 {:at (:at e) :text (:prompt e) :task (latest (:turn e))})
+     :messages (for [event events
+                     :when (= "UserPromptSubmit" (:event event))]
+                 {:at (:at event) :text (:prompt event) :task (latest (:turn event))})
      ;; where the time went (#65): spans {:what :task :from :to}
-     :time     (let [end  (fn [t] (:at (or (stop t) (failed t) (last (filter #(= t (:turn %)) events)))))
+     :time     (let [end  (fn [turn] (:at (or (stop turn) (failed turn) (last (filter #(= turn (:turn %)) events)))))
                      asks (filter #(= "UserPromptSubmit" (:event %)) events)
-                     task (fn [c] (or (:task c) (named (:turn c))))]
+                     task (fn [call] (or (:task call) (named (:turn call))))]
                  (concat
-                  (for [t turns] {:what :turn :task (latest t) :from (first-at t) :to (end t)})
+                  (for [turn turns] {:what :turn :task (latest turn) :from (first-at turn) :to (end turn)})
                   ;; a window the owner answered, from the window to the run
-                  (for [{:keys [window done tool] :as c} calls
+                  (for [{:keys [window done tool] :as call} calls
                         :when (and window done (not (dialog tool)))]
-                    {:what :window :task (task c) :from (:at window) :to done})
+                    {:what :window :task (task call) :from (:at window) :to done})
                   ;; a question: AskUserQuestion until answered; "needs input" until the owner's next message
-                  (for [c     calls
-                        :when (and (= "AskUserQuestion" (:tool c)) (:done c))]
-                    {:what :question :task (task c) :from (:at c) :to (:done c)})
-                  (for [[t e] stop
-                        :when (:needs_input e)
-                        :let  [answer (:at (first (filter #(before? (:at e) (:at %)) asks)))]
-                        :when answer]
-                    {:what :question :task (latest t) :from (:at e) :to answer})
-                  (for [{:keys [window done tool input] :as c} calls
+                  (for [call  calls
+                        :when (and (= "AskUserQuestion" (:tool call)) (:done call))]
+                    {:what :question :task (task call) :from (:at call) :to (:done call)})
+                  (for [[turn event] stop
+                        :when        (:needs_input event)
+                        :let         [answer (:at (first (filter #(before? (:at event) (:at %)) asks)))]
+                        :when        answer]
+                    {:what :question :task (latest turn) :from (:at event) :to answer})
+                  (for [{:keys [window done tool input] :as call} calls
                         :when (and done (nil? window) (not (dialog tool)))]
-                    {:what :command :task (task c) :from (:at c) :to done :shape (shape tool input)})))}))
+                    {:what :command :task (task call) :from (:at call) :to done :shape (shape tool input)})))}))

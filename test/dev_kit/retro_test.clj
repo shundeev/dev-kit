@@ -56,8 +56,8 @@
   [issues]
   (fn [& _]
     (json/generate-string
-     {"data" {"search" {"nodes" (for [[n title note merged] issues]
-                                  {"number"   n
+     {"data" {"search" {"nodes" (for [[number title note merged] issues]
+                                  {"number"   number
                                    "title"    title
                                    "comments" {"nodes" (if note
                                                          [{"body" note}]
@@ -68,14 +68,14 @@
 
 
 (defn- at-the-edge
-  "f as kit runs it: {:out what it printed :err what it printed to stderr :code its exit code}, a problem it throws
+  "`action` as kit runs it: {:out what it printed :err what it printed to stderr :code its exit code}, a problem it throws
   printed by kit's edge."
-  [f]
+  [action]
   (let [{:keys [result out err]} (fake/captured (fn []
-                                                  (try (f)
-                                                       (catch clojure.lang.ExceptionInfo e
-                                                         (main/report-problem (ex-data e))
-                                                         (or (:exit (ex-data e)) 1)))))]
+                                                  (try (action)
+                                                       (catch clojure.lang.ExceptionInfo exception
+                                                         (main/report-problem (ex-data exception))
+                                                         (or (:exit (ex-data exception)) 1)))))]
     {:out out :err err :code result}))
 
 
