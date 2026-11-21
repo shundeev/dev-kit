@@ -73,6 +73,8 @@ component is an M: stop, resize it and ask for G1.
   - each manual step for the owner: automate it, or plan it as numbered steps in the PR;
   - work that runs on real data: a throwaway probe over that data comes before the tests and the
     code (#55, #60). What it shows goes into the design; the probe itself goes away.
+  - a pattern that will be repeated across files: the design shows one real step followed to its
+    code with "go to definition" (the locality rule, rules/clojure.md "Clojure design").
 - For M, post the design on the issue as a comment starting with `## Design`, and name what the
   owner decides. It answers the issue's open questions by number first (#33).
 - With the Claude Docs connector in the session, an M design is drafted in a doc first, and the
@@ -118,6 +120,7 @@ component is an M: stop, resize it and ask for G1.
   the PR (#95).
 - A brief for a change to a hook or a gate names ADR-0006: it judges the repository of what is acted on,
   never the session's folder (#117).
+- A brief to a subagent says it sends no report on a wake-up where nothing changed.
 - A loop that splits words runs through `bash -c`, not in the session's zsh (#55, #33).
 - Stay inside the issue's scope. A finding outside it is a comment on the issue, or a new issue
   when a PR could close it.
