@@ -64,4 +64,10 @@
 
 
 (when run?
-  (dev-kit.guard.rules/-main input))
+  (let [{:keys [exit out err]} (dev-kit.guard.rules/run input)]
+    (when out
+      (println out))
+    (when err
+      (binding [*out* *err*]
+        (println err)))
+    (System/exit exit)))

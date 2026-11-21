@@ -349,6 +349,13 @@
       [c {:background? true} nil]))))
 
 
+(deftest the-refusal-of-a-wait-names-the-allowed-ways
+  (let [reason (:reason (decision "sleep 5" {:background? false}))]
+    (is (str/includes? reason "run_in_background"))
+    (is (str/includes? reason "`kit checks`"))
+    (is (str/includes? reason "`kit review --wait`"))))
+
+
 (deftest a-poll-loop-is-not-a-wait-for-one-event
   (check-rows
    (for [c poll-loops
@@ -378,14 +385,24 @@
     (is (= :gh-api-write (:rule (decision "gh api -X POST x; gh issue create -t x" {}))))))
 
 
+(deftest every-refusal-ends-with-the-rule-that-made-it
+  (doseq [[line changes] [["gh issue create --title x" {}]
+                          ["sleep 5" {:background? false}]
+                          ["DELIVERY_GUARD=off ls" {}]]]
+    (let [made (decision line changes)]
+      (is (str/ends-with? (get-in (json/parse-string (rules/decision-json made))
+                                  ["hookSpecificOutput" "permissionDecisionReason"])
+                          (str "\n\nRule: " (name (:rule made))))))))
+
+
 (deftest the-hook-prints-the-json-claude-code-and-the-kit-read
   (is (= (str "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\","
-              "\"permissionDecisionReason\":\"no \\\"x\\\"\"}}")
+              "\"permissionDecisionReason\":\"no \\\"x\\\"\\n\\nRule: foreground-wait\"}}")
          (rules/decision-json {:decision :deny :rule :foreground-wait :reason "no \"x\""}))
       "the text managed/pretooluse.sh greps for stays contiguous")
   (is (= {"hookSpecificOutput" {"hookEventName"      "PreToolUse"
                                 "permissionDecision" "ask"
-                                "permissionDecisionReason" "r"}}
+                                "permissionDecisionReason" "r\n\nRule: guard-off"}}
          (json/parse-string (rules/decision-json {:decision :ask :rule :guard-off :reason "r"})))))
 
 
@@ -402,3 +419,19 @@
                                 :branch-of (fn [_] (throw (ex-info "never read" {})))
                                 :review-of (fn [_ _] (throw (ex-info "never read" {}))))))
       "a command with no use for them never calls them"))
+
+
+(deftest the-hook-answers-with-a-result-and-leaves-the-exit-to-its-entry
+  (let [input #(json/parse-string (json/generate-string {:tool_name "Bash" :tool_input {:command %}}))]
+    (testing "a command with no rule against it: exit 0, nothing printed"
+      (is (= {:exit 0} (rules/run (input "git status")))))
+    (testing "a refusal: exit 0 with the JSON, which Claude Code reads"
+      (let [{:keys [exit out]} (rules/run (input "gh issue create --title x"))]
+        (is (= 0 exit))
+        (is (= "deny" (get-in (json/parse-string out) ["hookSpecificOutput" "permissionDecision"])))))
+    (testing "input that is no JSON: exit 2 and the guard's own refusal on stderr (ADR-0001)"
+      (let [{:keys [exit out err]} (rules/run (Exception. "bad json"))]
+        (is (= 2 exit))
+        (is (nil? out))
+        (is (str/includes? err "the delivery guard failed, so the command is held back"))
+        (is (str/includes? err "bad json"))))))
