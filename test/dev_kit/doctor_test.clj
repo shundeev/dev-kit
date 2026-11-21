@@ -28,7 +28,7 @@
   (let [dir (fake/new-project)
         {:keys [result out]} (fake/with-project dir (fake/captured #(commands/doctor {:ci true})))]
     (is (= 1 result))
-    (is (str/includes? out "FAIL  kit.edn is missing  →  "))
+    (is (str/includes? out "FAIL  kit.edn is missing. Fix: "))
     (is (str/includes? out "/bin/kit init --repo <owner/repo> --showcase <name>"))))
 
 
@@ -45,7 +45,7 @@
         {:keys [result out]} (fake/with-project dir (fake/captured #(commands/doctor {:ci true})))]
     (is (= 1 result))
     (is (str/includes? out
-                       (str "FAIL  .github/CODEOWNERS: differs from what dev-kit generates  →  "
+                       (str "FAIL  .github/CODEOWNERS: differs from what dev-kit generates. Fix: "
                             base/mount
                             "/bin/kit init")))))
 
@@ -54,7 +54,7 @@
   (with-redefs [checks/problems (constantly [(base/finding :warn "something to look at" "look at it")])]
     (let [{:keys [result out]} (fake/captured #(commands/doctor {:quiet true}))]
       (is (= 0 result))
-      (is (str/includes? out "WARN  something to look at  →  look at it")))))
+      (is (str/includes? out "WARN  something to look at. Fix: look at it")))))
 
 
 (deftest a-quiet-doctor-prints-nothing-when-all-is-well

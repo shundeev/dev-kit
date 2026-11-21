@@ -15,8 +15,8 @@
 (defn print-findings
   "Prints each finding as one line: its level, what is wrong and what to do."
   [findings]
-  (doseq [{:keys [level message fix]} findings]
-    (println (format "  %-4s  %s  →  %s" (if (= level :fail) "FAIL" "WARN") message fix))))
+  (doseq [{:keys [level] :as finding} findings]
+    (println (format "  %-4s  %s" (if (= level :fail) "FAIL" "WARN") (problem/refusal-text finding)))))
 
 
 (defn- print-all-clear
@@ -63,7 +63,7 @@
   "Prints why init writes nothing, one line for each of the problems ({:message :fix}). Returns the exit code, 1."
   [problems]
   (println "dev-kit init" (str "(" base/root ")"))
-  (doseq [{:keys [message fix]} problems] (println (str "  FAIL  " message "  →  " fix)))
+  (print-findings (map #(assoc % :level :fail) problems))
   (println "  nothing was written")
   1)
 
@@ -150,12 +150,12 @@
                "  nothing to change"))
     (ident/offer-login! agent)
     (when-let [problem (ident/agent-login-problem agent)]
-      (println (str "  WARN  "
-                    problem
-                    "  →  in your own terminal: bb "
-                    (fs/path base/kit-dir "bin" "kit")
-                    " identity --dir "
-                    dir
-                    " — it logs "
-                    (:login agent)
-                    " in")))))
+      (print-findings [{:level   :warn
+                        :message problem
+                        :fix     (str "in your own terminal: bb "
+                                      (fs/path base/kit-dir "bin" "kit")
+                                      " identity --dir "
+                                      dir
+                                      " — it logs "
+                                      (:login agent)
+                                      " in")}]))))

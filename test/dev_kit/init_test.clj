@@ -34,8 +34,8 @@
         _ (spit (str (fs/path dir "kit.edn")) "{:repo \"not-a-repo\" :modules #{}}")
         {:keys [result out]} (fake/with-project dir (fake/captured #(commands/init {})))]
     (is (= 1 result))
-    (is (str/includes? out "FAIL  :repo is \"not-a-repo\", not \"owner/name\"  →  set it in kit.edn"))
-    (is (str/includes? out "FAIL  :showcase is missing  →  set it in kit.edn"))
+    (is (str/includes? out "FAIL  :repo is \"not-a-repo\", not \"owner/name\". Fix: set it in kit.edn"))
+    (is (str/includes? out "FAIL  :showcase is missing. Fix: set it in kit.edn"))
     (is (str/includes? out "nothing was written"))
     (is (not (exists? dir "AGENTS.md")))))
 
@@ -47,7 +47,7 @@
         {:keys [result out]} (fake/with-project dir (fake/captured #(commands/init flags)))]
     (is (= 1 result))
     (is (str/includes? out
-                       (str "FAIL  .github/CODEOWNERS holds a file dev-kit did not write  →  "
+                       (str "FAIL  .github/CODEOWNERS holds a file dev-kit did not write. Fix: "
                             "move it away, or merge what it needs elsewhere; then run kit init again")))
     (is (= "* @someone\n" (slurp (str (fs/path dir ".github" "CODEOWNERS")))))
     (is (not (exists? dir "AGENTS.md")))))
@@ -62,7 +62,7 @@
     (is (str/includes? out
                        (str "FAIL  .clj-kondo/config.edn: .clj-kondo/config.edn is not a map: "
                             "make it a map, e.g. {:config-paths")))
-    (is (str/includes? out "  →  make it a map by hand, then run kit init again"))
+    (is (str/includes? out "Fix: make it a map by hand, then run kit init again"))
     (is (exists? dir "AGENTS.md") "the other items are done")))
 
 
