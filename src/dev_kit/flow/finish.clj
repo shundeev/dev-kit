@@ -370,14 +370,17 @@ Options:
 
 (defn- open-pr
   "The body is the file's, with \"Closes #<issue>\" in front unless it has a closing keyword for that issue; an issue of
-  size L gets \"Part of #<issue>\" instead, unless --last says this pull request is its last."
+  size L gets \"Part of #<issue>\" instead, unless --last says this pull request is its last. A body that already
+  starts its own text with that line is left as it is."
   [{:keys [repo base branch number subject body-file pr-url base-draft? hold last-pr]}]
   (if pr-url
     {}
     (let [text  (shell/file-text body-file)
-          body  (if (github/closes-issue? text number)
+          line  (when-not (github/closes-issue? text number)
+                  (closing-line repo number last-pr))
+          body  (if (or (nil? line) (re-find (re-pattern (str "(?i)^\\Q" line "\\E\\b")) text))
                   text
-                  (format "%s\n\n%s" (closing-line repo number last-pr) text))
+                  (format "%s\n\n%s" line text))
           flags (cond-> []
                   base-draft? (conj "--draft")
                   hold        (conj "--label" "hold"))]

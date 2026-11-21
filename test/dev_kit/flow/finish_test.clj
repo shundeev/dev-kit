@@ -422,6 +422,13 @@
   (is (= (shaped "Closes #1 and more") (body-of-pr-for-issue ["size:L"] "Closes #1 and more"))))
 
 
+(deftest a-body-that-starts-with-part-of-gets-no-second-part-of-line
+  (is (= (shaped "Part of #1, step 2: the body") (body-of-pr-for-issue ["size:L"] "Part of #1, step 2: the body")))
+  (is (= (str "Part of #1\n\n" (shaped "Part of #12\n\nPart of #1, step 2"))
+         (body-of-pr-for-issue ["size:L"] "Part of #12\n\nPart of #1, step 2"))
+      "another issue's line is not this one's"))
+
+
 ;; Stories moved from the selftest's flow sections (#139 step 8).
 
 
