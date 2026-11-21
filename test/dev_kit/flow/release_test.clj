@@ -5,6 +5,7 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [dev-kit.flow.fake-github :as fake]
+   [dev-kit.flow.main :as flow]
    [dev-kit.flow.release :as release]
    [dev-kit.flow.steps :as steps]))
 
@@ -133,3 +134,13 @@
   (is (= "owner/name" (:repo (release/read-input ["--repo" "owner/name"]))))
   (is (true? (:help (release/read-input ["--help"]))))
   (is (true? (:help (release/read-input ["-h"])))))
+
+
+;; Stories moved from the selftest's flow sections (#139 step 8).
+
+
+(deftest the-help-says-the-release-covers-a-draft-that-was-never-held
+  (let [out  (java.io.StringWriter.)
+        exit (binding [*out* out] (flow/main "release" ["--help"] "bin/kit"))]
+    (is (= 0 exit))
+    (is (str/includes? (str out) "never held"))))

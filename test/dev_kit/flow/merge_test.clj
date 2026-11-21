@@ -5,6 +5,7 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [dev-kit.flow.fake-github :as fake]
+   [dev-kit.flow.github :as github]
    [dev-kit.flow.merge :as merge-cmd]
    [dev-kit.flow.steps :as steps]))
 
@@ -303,3 +304,65 @@
     (is (= :read-poll (::steps/stopped-at result)))
     (is (not (:auto-merge (first (fake/prs world)))))
     (is (left-alone? world))))
+
+
+;; Stories moved from the selftest's flow sections (#139 step 8).
+
+
+(deftest a-conflict-seen-at-the-first-look-stops-at-once-and-asks-for-no-merge
+  (let [world  (clone [(approved-pr :merge-state "DIRTY")])
+        result (kit-merge world {})]
+    (is (= :fail (::steps/status result)))
+    (is (str/includes? (said result) "git merge origin/main") "it says to merge the base in")
+    (is (str/includes? (said result) "dismisses") "and that the push dismisses the Approve")
+    (is (not (:auto-merge (first (fake/prs world)))) "no merge is asked for")
+    (is (= [] (fake/slept world)) "it did not wait")
+    (is (left-alone? world) "the branch is kept")))
+
+
+(deftest a-state-that-github-recomputes-while-waiting-after-auto-merge-is-on-is-read-again
+  (let [world  (clone [(approved-pr :merge-state "BLOCKED")]
+                      :script
+                      [(fake/pr-becomes 3 {:decision nil :merge-state "UNKNOWN"})
+                       (fake/pr-becomes 3 {:decision "APPROVED" :merge-state "BLOCKED"})
+                       (fake/pr-becomes 3 {:state "MERGED"})])
+        result (kit-merge world {})]
+    (is (= :ok (::steps/status result)) "the merge goes through, with no word of a lost approval")
+    (is (= [10 10 10] (fake/slept world)))))
+
+
+(deftest a-pull-request-with-no-closing-reference-closes-no-issue
+  (let [world  (clone [(approved-pr :state "MERGED" :closes [])])
+        result (kit-merge world {})]
+    (is (= :ok (::steps/status result)))
+    (is (= ["OPEN" "CLOSED"] (issue-states world)) "no issue is closed")
+    (is (not-any? #(str/starts-with? % "Closed #") (:lines result)) "and none is reported closed")
+    (is (= "Done" (status-of-card world)) "the card is Done all the same")))
+
+
+(defn- merged-by-the-second-look
+  "kit merge against the world, where GitHub merges the pull request between its first look and its second."
+  [world]
+  (let [reads (atom 0)
+        input (assoc (merge-cmd/read-input [] (fn [variable default] (get variables variable default)))
+                     :kit
+                     "bin/kit")]
+    (binding [*out* (java.io.StringWriter.)]
+      (fake/with-github world
+                        #(let [read-pr github/read-pr]
+                           (with-redefs [github/read-pr (fn [& args]
+                                                          (let [pr (apply read-pr args)]
+                                                            (if (< 1 (swap! reads inc))
+                                                              (assoc pr :state "MERGED" :merge-state "CLEAN")
+                                                              pr)))]
+                             (merge-cmd/merge-pr input)))))))
+
+
+(deftest a-pull-request-github-merged-while-the-branch-was-to-be-updated-goes-to-the-closeout
+  (let [world  (clone [(approved-pr :merge-state "BEHIND")])
+        result (merged-by-the-second-look world)]
+    (is (= :ok (::steps/status result)))
+    (is (nil? (:updates (first (fake/prs world)))) "no update of the merged pull request's branch")
+    (is (nil? (:squashed (first (fake/prs world)))) "no second merge")
+    (is (= "Done" (status-of-card world)) "it is closed out")
+    (is (= #{"main"} (fake/local-branches world)) "and the local branch is gone")))

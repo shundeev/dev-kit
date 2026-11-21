@@ -371,3 +371,43 @@
                text)
              (:body (first (fake/prs world))))
           (format "%s: %s" story why)))))
+
+
+;; Stories moved from the selftest's flow sections (#139 step 8).
+
+
+(deftest a-closed-pull-request-does-not-count-and-the-body-file-loses-its-trailing-newlines
+  (let [world  (on-branch-1 {:prs [{:branch "1-add-landing-page" :state "CLOSED"}]})
+        result (kit-finish world
+                           variables
+                           "--add" "page.html"
+                           "--pr-body-file" (file-with "What changed.\nADR: none\n\n"))
+        opened (first (filter #(= "OPEN" (:state %)) (fake/prs world)))]
+    (is (= :ok (::steps/status result)) "the finish succeeds")
+    (is (= 2 (count (fake/prs world))) "a new PR is opened next to the closed one")
+    (is (= "Closes #1\n\nWhat changed.\nADR: none" (:body opened)) "its body is the file's, with no trailing newline")))
+
+
+(deftest hold-on-an-open-draft-asks-nobody-turns-on-no-auto-merge-and-says-to-run-kit-release
+  (let [world  (on-branch-1 {:ready-workflow true :prs [{:branch "1-add-landing-page" :draft true}]})
+        result (kit-finish world variables "--hold" "--add" "page.html")]
+    (is (= :ok (::steps/status result)) "the finish succeeds")
+    (is (empty? (:owners (the-pr world))) "the owners are not asked")
+    (is (false? (boolean (:auto-merge (the-pr world)))) "auto-merge stays off")
+    (is (str/includes? (:printed result) "kit release") "the owner reads that it waits for kit release")))
+
+
+(deftest an-empty-owner-leaves-the-board-alone
+  (let [world  (on-branch-1 {})
+        result (kit-finish world variables "--add" "page.html" "--owner" "" "--pr-body-file" (file-with "Body"))]
+    (is (= :ok (::steps/status result)) "the finish succeeds")
+    (is (some? (the-pr world)) "the PR is open")
+    (is (empty? (:fields (first (fake/cards world)))) "the card's Status is left alone")))
+
+
+(deftest a-draft-opened-without-hold-carries-no-label-and-has-its-assignee
+  (let [world (on-branch-1 {:ready-workflow true})]
+    (kit-finish world variables "--add" "page.html" "--pr-body-file" (file-with "Body"))
+    (is (true? (:draft (the-pr world))) "the PR is a draft")
+    (is (empty? (:labels (the-pr world))) "it is not held unless asked")
+    (is (= ["the-human"] (:assignees (the-pr world))) "the person behind the agent is the assignee")))
