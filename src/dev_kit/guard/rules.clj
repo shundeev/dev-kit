@@ -378,11 +378,14 @@
 
 
 (defn decision-json
-  "What the hook prints for a decision: the JSON Claude Code reads (and managed/pretooluse.sh and `kit hook`)."
-  [{:keys [decision reason]}]
+  "What the hook prints for a decision: the JSON Claude Code reads (and managed/pretooluse.sh and `kit hook`). The
+  reason ends with the line `Rule: <rule name>`, so the friction log can count refusals by rule; no new key, since
+  a hook's JSON with a schema error is a non-blocking error (#139, step 8)."
+  [{:keys [decision rule reason]}]
   (json/generate-string {:hookSpecificOutput {:hookEventName      "PreToolUse"
                                               :permissionDecision (name decision)
-                                              :permissionDecisionReason reason}}))
+
+                                              :permissionDecisionReason (str reason "\n\nRule: " (name rule))}}))
 
 
 (defn- stdout-in
