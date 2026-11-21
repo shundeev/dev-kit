@@ -34,6 +34,10 @@
   no calls by keyword, no factories that return a step, no keyword built at run time (#139).
 - A pattern that will be repeated is reviewed for navigation too: from any call to its code in
   one jump, and "find references" lists only the real calls.
+- Data says what happened, not what its reader should do with it. No key in a value steers how
+  its consumer handles it — how to print it, where to send it, whether to skip it; the consumer
+  decides from the facts. When two values need different handling, they are different things:
+  give them different shapes (a refusal and an answer), not a flag (#139, #158).
 
 Before adding a function or a map key, run LSP `findReferences` / `incomingCalls` on what it
 wraps or carries and answer: who creates the value, who reads it. If one place creates it and

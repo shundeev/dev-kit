@@ -23,16 +23,18 @@
 (def label (into {} kinds))
 
 
-(def rank (into {} (map-indexed (fn [i [k]] [k i]) kinds)))
+(def rank (into {} (map-indexed (fn [index [kind]] [kind index]) kinds)))
 
 
-(defn tally [items] (reduce (fn [m i] (update m [(:kind i) (:cause i)] (fnil + 0) (:n i 1))) {} items))
+(defn tally
+  [items]
+  (reduce (fn [counts item] (update counts [(:kind item) (:cause item)] (fnil + 0) (:n item 1))) {} items))
 
 
-(defn ordered [m] (sort-by (fn [[[k c]]] [(rank k) c]) m))
+(defn ordered [counts] (sort-by (fn [[[kind cause]]] [(rank kind) cause]) counts))
 
 
-(defn one-line [s] (str/trim (str/replace (str s) #"\s+" " ")))
+(defn one-line [text] (str/trim (str/replace (str text) #"\s+" " ")))
 
 
 (defn seconds [spans] (reduce + (map #(.getSeconds (Duration/between (:from %) (:to %))) spans)))
@@ -40,11 +42,11 @@
 
 (defn minutes
   "A duration as people read it: 45s, 12m, 1h 05m."
-  [secs]
-  (let [m (quot secs 60)]
-    (cond (< secs 60) (str secs "s")
-          (>= m 60)   (format "%dh %02dm" (quot m 60) (rem m 60))
-          :else       (str m "m"))))
+  [total-seconds]
+  (let [whole-minutes (quot total-seconds 60)]
+    (cond (< total-seconds 60)  (str total-seconds "s")
+          (>= whole-minutes 60) (format "%dh %02dm" (quot whole-minutes 60) (rem whole-minutes 60))
+          :else                 (str whole-minutes "m"))))
 
 
 (defn time-lines
@@ -66,7 +68,8 @@
             (minutes (seconds (of :command)))
             (when (seq longest)
               (str "; the longest: "
-                   (str/join ", " (for [c longest] (str (:shape c) " " (minutes (seconds [c]))))))))])))
+                   (str/join ", "
+                             (for [command longest] (str (:shape command) " " (minutes (seconds [command]))))))))])))
 
 
 (defn mark? [text] (re-find #"(?iu)^\s*(трение|friction)\s*:" (str text)))
@@ -119,28 +122,29 @@
           ""]
          (when (seq own)
            (concat ["| Kind | Cause | This task | 14 days |" "|---|---|---|---|"]
-                   (for [[[k c] n] (ordered (tally own))]
-                     (str "| " (label k) " | " c " | " n " | " (get fortnight [k c] 0) " |"))))
+                   (for [[[kind cause] events] (ordered (tally own))]
+                     (str "| " (label kind) " | " cause " | " events " | " (get fortnight [kind cause] 0) " |"))))
          (when-let [refused (seq (filter #(#{:refusal-hook :refusal-classifier :refusal-rule} (:kind %)) own))]
            (concat
             [""
              "Refusals of the task, each needs a verdict in the retrospective (it protected something, or it was too strict and the hook changes):"]
-            (for [r (sort-by :at refused)]
+            (for [refusal (sort-by :at refused)]
               (str "- "
-                   (log/stamp (:at r))
+                   (log/stamp (:at refusal))
                    " "
-                   (label (:kind r))
+                   (label (:kind refusal))
                    " · "
-                   (one-line (:cause r))
-                   (when (:why r)
-                     (str " (rule " (:why r) ")"))))))
+                   (one-line (:cause refusal))
+                   (when (:why refusal)
+                     (str " (rule " (:why refusal) ")"))))))
          (rule-lines items own now (or days 14))
          (time-lines spans)
          (when-let [recurring (seq (ordered (filter #(>= (val %) 3) fortnight)))]
            (concat ["" "Recurring in the last 14 days (3 or more, whichever task):"]
-                   (for [[[k c] n] recurring] (str "- " (label k) " · " c ": " n))))
+                   (for [[[kind cause] events] recurring] (str "- " (label kind) " · " cause ": " events))))
          (when (seq marks)
-           (concat ["" "The owner's marks:"] (for [m marks] (str "- " (log/stamp (:at m)) " " (one-line (:text m))))))
+           (concat ["" "The owner's marks:"]
+                   (for [mark marks] (str "- " (log/stamp (:at mark)) " " (one-line (:text mark))))))
          [""
           (str "Owner messages: "
                (count others)
@@ -149,31 +153,31 @@
                " --messages`; publish only counts and paraphrases)")]
          (when messages
            (concat ["" "Owner messages (local only, never publish):"]
-                   (for [m    others
-                         :let [t (one-line (:text m))]]
-                     (str "- " (log/stamp (:at m)) " " (subs t 0 (min 300 (count t))))))))))))
+                   (for [message others
+                         :let    [text (one-line (:text message))]]
+                     (str "- " (log/stamp (:at message)) " " (subs text 0 (min 300 (count text))))))))))))
 
 
 (defn run
   "Prints the friction data of one issue. Throws a usage problem for a --now that is not a time and for a --days that
   is not a number."
-  [{:keys [issue repo agent gh now days] :as opts}]
+  [{:keys [issue repo agent now days] :as opts}]
   (let [now  (if now
                (log/parse-time "--now" now)
                (Instant/now))
         days (if days
-               (let [n (parse-long days)]
-                 (if (and n (pos? n))
-                   n
+               (let [whole-days (parse-long days)]
+                 (if (and whole-days (pos? whole-days))
+                   whole-days
                    (problem/fail! :retro/bad-days
                                   (str "retro: --days " days " : not a number of days")
                                   {:fix "write a whole number above 0, e.g. --days 30"})))
                14)]
     (println (str "## Friction data: " repo "#" issue))
     (println)
-    (doseq [l (log-lines (assoc opts :now now :days days))] (println l))
+    (doseq [line (log-lines (assoc opts :now now :days days))] (println line))
     (println)
     (println "### GitHub")
-    (doseq [l (try (github/github-lines gh repo issue agent)
-                   (catch Exception e [(str "GitHub: not available (" (ex-message e) ")")]))]
-      (println l))))
+    (doseq [line (try (github/github-lines repo issue agent)
+                      (catch Exception exception [(str "GitHub: not available (" (ex-message exception) ")")]))]
+      (println line))))

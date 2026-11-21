@@ -264,7 +264,7 @@
                    {:fix "e.g. kit retro 55, or kit retro --missing"}))
   (load-file (str (fs/path base/kit-dir "bin" "retro.clj")))
   (let [opts (parse-args more)
-        opts (assoc opts :repo (gate/gate-repo opts (gate/gate-config)) :gh base/gh!)]
+        opts (assoc opts :repo (gate/gate-repo opts (gate/gate-config)))]
     (if (= n "--missing")
       ((resolve 'retro/run-missing) opts)
       ((resolve 'retro/run)

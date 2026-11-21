@@ -61,12 +61,12 @@
     (is (= [] (problems-of "12-x" "fix(GH-12): x" nil nil)))))
 
 
-(deftest a-verdict-reads-as-the-sentence-it-always-was
+(deftest a-verdict-reads-like-a-refusal-the-text-then-what-to-do
   (is (= (str
           "the title 'x' is not '<type>(GH-1): <summary>' with a type from build, chore, ci, docs, feat, fix, perf, "
-          "refactor, test: pass --type from that list, or fix the first line of the commit message")
+          "refactor, test. Fix: pass --type from that list, or fix the first line of the commit message")
          (gate/verdict-text (first (gate/shape-problems "1-a" "x" nil nil)))))
-  (is (= "branch 'main' is not <issue>-<slug>: open the issue with kit start and move the work to its branch"
+  (is (= "branch 'main' is not <issue>-<slug>. Fix: open the issue with kit start and move the work to its branch"
          (gate/verdict-text (first (gate/shape-problems "main" "x" nil nil))))))
 
 
@@ -129,8 +129,9 @@
 
 
 (deftest a-lost-approval-says-how-to-get-it-again
-  (is (= (str "`design-approved` on #5 was set by the agent (the-agent); only a person with write access approves; "
-              "the owner approves again: remove `design-approved` from #5 and add it back")
+  (is (= (str
+          "`design-approved` on #5 was set by the agent (the-agent); only a person with write access approves. Fix: "
+          "the owner approves again: remove `design-approved` from #5 and add it back")
          (gate/verdict-text (verdict (approved-issue {:by "the-agent"}) "write")))))
 
 
@@ -155,8 +156,8 @@
         out  (with-out-str
                (reset! code
                  (gate/print-verdicts! [{:level :ok :message "size S: fine"}
-                                        {:level :fail :message "branch 'x' is bad" :fix "fix it" :join ": "}])))]
-    (is (= "  ok    size S: fine\n  FAIL  branch 'x' is bad: fix it\n" out))
+                                        {:level :fail :message "branch 'x' is bad" :fix "fix it"}])))]
+    (is (= "  ok    size S: fine\n  FAIL  branch 'x' is bad. Fix: fix it\n" out))
     (is (= 1 @code)))
   (let [code (atom :unset)
         out  (with-out-str (reset! code (gate/print-verdicts! [{:level :ok :message "fine"}])))]
@@ -189,9 +190,9 @@
 
 (deftest the-edit-hook-names-the-rule-it-refuses-by
   (testing "no approval: the reason says what to do and ends with the rule"
-    (is (= "Refused: #5 has no `design-approved`: wait\n\nRule: gate.design-approval"
+    (is (= "Refused: #5 has no `design-approved`. Fix: wait\n\nRule: gate.design-approval"
            (hook-answer a-project
-                        (fn [_ _] {:level :fail :message "#5 has no `design-approved`" :fix "wait" :join ": "})))))
+                        (fn [_ _] {:level :fail :message "#5 has no `design-approved`" :fix "wait"})))))
   (testing "GitHub cannot be asked: refused, with its own rule"
     (let [reason (hook-answer a-project (fn [_ _] (throw (ex-info "no network" {}))))]
       (is (str/starts-with? reason "Refused: could not check the design approval of #5 (no network)"))

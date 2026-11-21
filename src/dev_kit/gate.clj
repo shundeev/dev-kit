@@ -42,24 +42,22 @@
 
 
 ;; A verdict is a map: {:level :ok or :fail, :problem the kind of failure, :message what is wrong, :fix what to do
-;; next, :join what stands between them in the printed line (": " unless a sentence reads better with "; ")}.
+;; next}.
 
 
 (defn- fail
   "A failing verdict: the problem's keyword, what is wrong and what to do about it."
-  ([problem message fix] (fail problem message fix ": "))
-  ([problem message fix join] {:level :fail :problem problem :message message :fix fix :join join}))
+  [problem message fix]
+  {:level :fail :problem problem :message message :fix fix})
 
 
 (defn- ok [message] {:level :ok :message message})
 
 
 (defn verdict-text
-  "The sentence a person reads: what is wrong, then what to do."
-  [{:keys [message fix join]}]
-  (str message
-       (when fix
-         (str join fix))))
+  "The sentence a person reads: what is wrong, then what to do, the way a refusal reads."
+  [verdict]
+  (problem/refusal-text verdict))
 
 
 (defn print-verdicts!
@@ -180,27 +178,24 @@
       (nil? event)
       (fail :gate/approval-without-event
             (str "#" n " carries `design-approved` but GitHub shows no event for it")
-            redo
-            "; ")
+            redo)
 
       (= by agent)
       (fail :gate/approved-by-agent
             (str "`design-approved` on #" n " was set by the agent (" by "); only a person with write access approves")
-            redo
-            "; ")
+            redo)
 
       (not (#{"write" "maintain" "admin"}
             (str/trim (base/gh! "api" (str "repos/" repo "/collaborators/" by "/permission") "--jq" ".permission"))))
       (fail :gate/approver-cannot-write
             (str "`design-approved` on #" n " was set by " by ", who has no write access")
-            redo
-            "; ")
+            redo)
 
       (later? (get issue "lastEditedAt"))
-      (fail :gate/body-edited (str "the body of #" n " was edited after the approval (" at ")") redo "; ")
+      (fail :gate/body-edited (str "the body of #" n " was edited after the approval (" at ")") redo)
 
       changed
-      (fail :gate/design-edited (str "a `## Design` comment on #" n " changed after the approval (" at ")") redo "; ")
+      (fail :gate/design-edited (str "a `## Design` comment on #" n " changed after the approval (" at ")") redo)
 
       :else (ok (str "G1: design of #" n " approved by " by " at " at)))))
 
@@ -260,8 +255,7 @@
       (or (nil? issue) (get issue "error"))
       (fail :gate/not-an-issue
             (str "#" n " is not an issue of " repo (some->> (get issue "error") (str ": ")))
-            "the branch must start with the number of the PR's issue"
-            "; ")
+            "the branch must start with the number of the PR's issue")
 
       (not= "OPEN" (get issue "state"))
       (fail :gate/issue-closed
@@ -318,8 +312,7 @@
           :when (not (str/includes? quoted l))]
       (fail :gate/rule-line-unquoted
             (str "the pull request removes this rule line from rules/shared.md and its body does not quote it: '" l "'")
-            "Quote the old line in the PR body, next to the new one"
-            ". "))))
+            "quote the old line in the PR body, next to the new one"))))
 
 
 (defn gate-ci!
@@ -342,7 +335,7 @@
                      (catch Exception e
                        (problem/fail! :gate/github-unreadable
                                       (format "could not read PR #%s of %s from GitHub (%s)" pr repo (ex-message e))
-                                      {:fix "rerun the job" :join "; "})))
+                                      {:fix "rerun the job"})))
         {:strs [title body]} (read! #(json/parse-string (base/gh! "api"  (str "repos/" repo "/pulls/" pr)
                                                                   "--jq" "{title, body}")))
         files  (read! #(doall (pr-files repo pr)))
@@ -487,5 +480,5 @@
     :else (print-verdicts! (try (gate-ci! opts)
                                 (catch clojure.lang.ExceptionInfo e
                                   (if (= :gate/github-unreadable (:problem (ex-data e)))
-                                    [(assoc (select-keys (ex-data e) [:problem :message :fix :join]) :level :fail)]
+                                    [(assoc (select-keys (ex-data e) [:problem :message :fix]) :level :fail)]
                                     (throw e)))))))

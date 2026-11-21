@@ -3,6 +3,7 @@
   (:require
    [cheshire.core :as json]
    [clojure.string :as str]
+   [dev-kit.base :as base]
    [dev-kit.retro.log :as log]))
 
 
@@ -11,7 +12,7 @@
 
 (def query
   (str
-   "query($o:String!,$n:String!,$i:Int!){repository(owner:$o,name:$n){issue(number:$i){"
+   "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number){"
    "labels(first:50){nodes{name}}"
    " timelineItems(itemTypes:[LABELED_EVENT],last:50){nodes{... on LabeledEvent{actor{login} label{name} createdAt}}}"
    " comments(first:100){nodes{body createdAt}}"
@@ -23,19 +24,19 @@
    " comments(first:100){nodes{body}}}}}}}"))
 
 
-(defn nodes [m & path] (get-in m (concat path ["nodes"])))
+(defn nodes [parent & path] (get-in parent (concat path ["nodes"])))
 
 
 (defn github-lines
-  [gh repo n agent]
-  (let [[o r]     (str/split repo #"/")
-        issue     (or (get-in (json/parse-string (gh "api" "graphql"
-                                                     "-f"  (str "query=" query)
-                                                     "-f"  (str "o=" o)
-                                                     "-f"  (str "n=" r)
-                                                     "-F"  (str "i=" n)))
+  [repo number agent]
+  (let [[owner repository] (str/split repo #"/")
+        issue     (or (get-in (json/parse-string (base/gh! "api" "graphql"
+                                                   "-f" (str "query=" query)
+                                                   "-f" (str "owner=" owner)
+                                                   "-f" (str "name=" repository)
+                                                   "-F" (str "number=" number)))
                               ["data" "repository" "issue"])
-                      (throw (ex-info (str repo "#" n " not found") {})))
+                      (throw (ex-info (str repo "#" number " not found") {})))
         size      (some #(second (re-matches #"size:(XS|S|M|L|XL)" (get % "name"))) (nodes issue "labels"))
         design    (->> (nodes issue "comments")
                        (filter #(str/starts-with? (str (get % "body")) "## Design"))

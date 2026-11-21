@@ -39,7 +39,7 @@
                r)]
     (if (zero? (:exit r))
       (str/trim (:out r))
-      (throw (ex-info (str/trim (:err r)) {:board true})))))
+      (throw (ex-info (str/trim (:err r)) {})))))
 
 
 (def ^:private board-cache (atom {}))

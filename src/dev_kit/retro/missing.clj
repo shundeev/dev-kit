@@ -3,6 +3,7 @@
   (:require
    [cheshire.core :as json]
    [clojure.string :as str]
+   [dev-kit.base :as base]
    [dev-kit.problem :as problem]
    [dev-kit.retro.github :as github]
    [dev-kit.retro.log :as log])
@@ -17,39 +18,41 @@
 
 (def missing-query
   (str
-   "query($q:String!){search(query:$q,type:ISSUE,first:50){nodes{... on Issue{number title"
+   "query($search:String!){search(query:$search,type:ISSUE,first:50){nodes{... on Issue{number title"
    " comments(last:100){nodes{body}} closedByPullRequestsReferences(first:5,includeClosedPrs:true){nodes{mergedAt}}}}}}"))
 
 
 (defn missing
   "[number title] of the issues closed as completed by a merged PR since `since` that lack a retrospective."
-  [gh repo ^Instant since]
-  (let [q (str "repo:" repo " is:issue is:closed reason:completed closed:>=" (subs (str since) 0 10))]
-    (for [i     (get-in (json/parse-string (gh "api" "graphql" "-f" (str "query=" missing-query) "-f" (str "q=" q)))
+  [repo ^Instant since]
+  (let [search (str "repo:" repo " is:issue is:closed reason:completed closed:>=" (subs (str since) 0 10))]
+    (for [issue (get-in (json/parse-string (base/gh! "api" "graphql"
+                                             "-f" (str "query=" missing-query)
+                                             "-f" (str "search=" search)))
                         ["data" "search" "nodes"])
-          :when (and (some #(get % "mergedAt") (github/nodes i "closedByPullRequestsReferences"))
+          :when (and (some #(get % "mergedAt") (github/nodes issue "closedByPullRequestsReferences"))
                      (not-any? #(str/starts-with? (str/trim (str (get % "body"))) "## Retrospective")
-                               (github/nodes i "comments")))]
-      [(get i "number") (get i "title")])))
+                               (github/nodes issue "comments")))]
+      [(get issue "number") (get issue "title")])))
 
 
 (defn run-missing
   "The list of merged issues without a retrospective, with what to do, on stdout, and 1: an answer, not a problem.
   Nil and silence when every merged issue has its retrospective. When GitHub cannot be asked, a problem with exit 2."
-  [{:keys [repo gh now]}]
+  [{:keys [repo now]}]
   (let [now   (if now
                 (log/parse-time "--now" now)
                 (Instant/now))
-        found (try (doall (missing gh repo (.minus ^Instant now (Duration/ofDays 14))))
-                   (catch Exception e
+        found (try (doall (missing repo (.minus ^Instant now (Duration/ofDays 14))))
+                   (catch Exception exception
                      (problem/fail! :retro/github-unavailable
-                                    (str "retro: GitHub not available: " (ex-message e))
+                                    (str "retro: GitHub not available: " (ex-message exception))
                                     {:fix  "check gh auth status and the network, then run kit retro --missing again"
                                      :exit 2})))]
     (when (seq found)
       (println
        (str "Merged in the last 14 days without a `## Retrospective` comment: "
-            (str/join ", " (for [[n t] found] (str "#" n " " t)))
+            (str/join ", " (for [[number title] found] (str "#" number " " title)))
             "."))
       (println
        (str
