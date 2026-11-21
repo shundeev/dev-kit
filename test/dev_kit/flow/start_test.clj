@@ -2,8 +2,10 @@
   "kit start, told as the owner's stories (#139, ADR-0008). Each runs the command against an in-memory GitHub and
   says what exists afterwards: a test names what the owner sees, not which calls were made."
   (:require
+   [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
+   [dev-kit.flow.board :as board]
    [dev-kit.flow.fake-github :as fake]
    [dev-kit.flow.shell :as shell]
    [dev-kit.flow.start :as start]
@@ -248,3 +250,155 @@
                           (with-redefs [fake/start-substitutes (fn [_world] {})]
                             (kit-start world "--title" "Add landing page" "--priority" "High")))
         "a command whose own call lacks its substitute stops at that call and does not touch GitHub")))
+
+
+;; Stories moved from the selftest's flow sections (#139 step 8).
+
+
+(defn- with-card-status
+  "The world, with the status given to the card of issue `number`."
+  [world number status]
+  (swap! world update
+    :cards
+    (fn [cards] (mapv #(cond-> % (= number (:issue %)) (assoc-in [:fields "Status"] status)) cards)))
+  world)
+
+
+(deftest work-that-is-closed-and-done-is-not-reused-so-a-new-issue-is-filed
+  (let [world  (with-card-status (fake/new-world {:issues [{:title "Recurring" :state "CLOSED" :on-board true}]})
+                                 1
+                                 "Done")
+        result (kit-start world "--title" "Recurring" "--priority" "High")]
+    (is (= :ok (::steps/status result)) "the start succeeds")
+    (is (= "2" (:number result)) "the answer is a new issue, not the closed one")
+    (is (= 2 (count (fake/issues world))) "one issue is filed")
+    (is (= ["CLOSED" "OPEN"] (mapv :state (fake/issues world))) "the closed one stays closed")))
+
+
+(deftest an-issue-number-with-no-reuse-existing-files-nothing-new
+  (let [world  (fake/new-world {:issues [{:title "Recurring" :on-board true} {:title "Other"}]})
+        result (kit-start world "--title" "Recurring" "--priority" "High" "--issue" "2" "--no-reuse-existing")]
+    (is (= :ok (::steps/status result)) "the start succeeds")
+    (is (= "2" (:number result)) "the issue named by number is the one")
+    (is (= 2 (count (fake/issues world))) "no duplicate is filed")))
+
+
+(defn- kit-start-where
+  "kit-start, with `change` wrapped around the command inside the world: a function of the thunk that runs it."
+  [world change & args]
+  (let [out    (java.io.StringWriter.)
+        err    (java.io.StringWriter.)
+        input  (assoc (start/read-input (vec args) (fn [variable default] (get variables variable default)))
+                      :kit
+                      "bin/kit")
+        result (binding [*out* out
+                         *err* err]
+                 (fake/with-github world #(change (fn [] (start/start input)))))]
+    (assoc result :warnings (str/split-lines (str err)))))
+
+
+(defn- seen-by
+  "Runs kit start against the world, with the calls to the var recorded: each call's arguments, in order."
+  [world call-var & args]
+  (let [calls (atom [])]
+    (apply kit-start-where
+           world
+           (fn [thunk]
+             (let [real @call-var]
+               (with-redefs-fn {call-var (fn [& call-args]
+                                           (swap! calls conj call-args)
+                                           (apply real call-args))}
+                 thunk)))
+           args)
+    @calls))
+
+
+(deftest a-new-issue-without-a-body-is-filed-with-an-empty-body-and-a-body-file-is-passed-on
+  (let [bodyless (seen-by (fake/new-world {}) #'start/file-issue! "--title" "No body" "--priority" "High")
+        filed    (seen-by (fake/new-world {})
+                          #'start/file-issue!
+                          "--title"     "From a file"
+                          "--priority"  "High"
+                          "--body-file" "/tmp/body.md")]
+    (is (= [["--body" ""]] (map #(nth % 2) bodyless)) "gh gets an empty --body, so it asks nothing")
+    (is (= [["--body-file" "/tmp/body.md"]] (map #(nth % 2) filed)) "a body file is passed on as it is")))
+
+
+(deftest a-draft-gets-its-body-file-without-trailing-newlines-and-no-empty-body
+  (let [path  (str (java.io.File/createTempFile "body" ".md"))
+        _ (spit path "Drafted body\n\n")
+        filed (seen-by (fake/new-world {})
+                       #'start/create-draft!
+                       "--title"     "Drafted"
+                       "--priority"  "High"
+                       "--mode"      "draft-convert"
+                       "--body-file" path)
+        bare  (seen-by (fake/new-world {})
+                       #'start/create-draft!
+                       "--title"    "Bare draft"
+                       "--priority" "High"
+                       "--mode"     "draft-convert"
+                       "--body"     "")]
+    (is (= ["Drafted body"] (map last filed)) "the body is the file's, without its trailing newlines")
+    (is (= [nil] (map last bare)) "an empty --body is not given to gh at all")))
+
+
+(deftest --status-wins-over-the-in-progress-an-issue-number-implies
+  (let [world (fake/new-world {:issues [{:title "Known" :on-board true}]})]
+    (kit-start world "--title" "Known" "--priority" "High" "--issue" "1" "--status" "Done")
+    (is (= "Done" (get-in (first (fake/cards world)) [:fields "Status"])))))
+
+
+(deftest a-board-error-in-the-fields-names-the-issue-the-field-the-reason-and-the-fix
+  (doseq [[story reason fix]
+          [["a token without the project scope"
+            "GraphQL: Your token has not been granted the required scopes to execute this query. (INSUFFICIENT_SCOPES)"
+            "gh auth refresh"]
+           ["no access to the board"
+            "GraphQL: Could not resolve to a ProjectV2 with the number 3. (NOT_FOUND)"
+            "no access to the board"]]]
+    (let [world  (fake/new-world {})
+          result (kit-start-where world
+                                  #(with-redefs [board/board-set-field (constantly reason)] (%))
+                                  "--title"    "Scoped"
+                                  "--priority" "High"
+                                  "--showcase" "Yes")]
+      (is (= :start/field-refused (get-in result [::steps/problem :problem])) story)
+      (is (str/includes? (said result) "#1") (format "%s: names the issue" story))
+      (is (str/includes? (said result) "Showcase") (format "%s: names the field" story))
+      (is (str/includes? (said result) reason) (format "%s: GitHub's reason" story))
+      (is (str/includes? (said result) fix) (format "%s: and the fix" story)))))
+
+
+(defn- board-page
+  "One page of the board's items as GraphQL prints it: `size` issues numbered from `from`, then the cursor, or none."
+  [from size cursor]
+  (json/generate-string
+   {:data {:owner {:projectV2 {:items {:pageInfo {:hasNextPage (some? cursor) :endCursor cursor}
+                                       :nodes    (for [n (range from (+ from size))]
+                                                   {:id         (str "PVTI_" n)
+                                                    :isArchived (zero? (mod n 100))
+                                                    :status     {:name "Done"}
+                                                    :content    {:__typename "Issue"
+                                                                 :title      (str "Old task number " n)
+                                                                 :number     n
+                                                                 :url        (str "https://github.com/o/r/issues/" n)
+                                                                 :state      "OPEN"}})}}}}}))
+
+
+(deftest a-board-of-1500-items-is-read-page-by-page-without-the-archived-ones
+  (let [asked (atom [])
+        pages {nil "c1" "c1" "c2" "c2" nil}
+        from  (atom 0)]
+    (with-redefs [shell/gh! (fn [& args]
+                              (let [after (some #(when (str/starts-with? % "after=") (subs % 6)) args)
+                                    page  (board-page @from 500 (get pages after))]
+                                (swap! asked conj after)
+                                (swap! from + 500)
+                                page))]
+      (let [items (#'start/project-items "u473t8" "3" "Status")]
+        (is (= [nil "c1" "c2"] @asked) "each page is asked for with the cursor of the one before")
+        (is (= 1485 (count items)) "every card but the archived ones is read")
+        (is (= ["Old task number 1" "Done" "Issue"]
+               ((juxt :title :status #(get-in % [:content :type])) (first items)))
+            "with its title, status and kind")))))

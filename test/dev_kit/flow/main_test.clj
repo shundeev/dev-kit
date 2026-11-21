@@ -52,3 +52,13 @@
     (is (= 2 exit))
     (is (str/starts-with? err "Usage: kit board set <project-number> <owner> <issue-url> <field> <option>"))
     (is (str/includes? err "\nFix: give the arguments as shown"))))
+
+
+;; Stories moved from the selftest's flow sections (#139 step 8).
+
+
+(deftest a-help-before-an-unknown-option-shows-the-usage
+  (let [{:keys [exit out err]} (run {} "start" "--help" "--bogus")]
+    (is (= 0 exit))
+    (is (str/includes? out "Usage: kit start"))
+    (is (= "" err))))
