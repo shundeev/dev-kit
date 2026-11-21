@@ -115,11 +115,9 @@
   the agent. Run by the owner, in their own terminal: changing a ruleset takes an admin. Safe to run again."
   [{check-name :check :keys [yes] :as opts}]
   (when (System/getenv "CLAUDECODE")
-    (problem/fail!
-     :github/agent-session
-     (str
-      "kit github changes the repository's settings, which an agent session never does: run it in your own terminal, "
-      "logged in to gh as the owner")))
+    (problem/fail! :github/agent-session
+                   "kit github changes the repository's settings, which an agent session never does"
+                   {:fix "run it in your own terminal, logged in to gh as the owner"}))
   (let [cfg        (gate/gate-config)
         repo       (gate/gate-repo opts cfg)
         first-line #(first (str/split-lines (str %)))
@@ -127,15 +125,15 @@
                      (try (apply gh-json args)
                           (catch clojure.lang.ExceptionInfo e
                             (problem/fail! :github/unreadable
-                                           (str what
-                                                " could not be read ( " (first-line (ex-message e))
-                                                " ): check `gh auth status` and the "
-                                                "connection, then run kit github again")))))
+                                           (str what " could not be read ( " (first-line (ex-message e)) " )")
+                                           {:fix
+                                            "check `gh auth status` and the connection, then run kit github again"}))))
         _ (when-not (get-in (read! repo "api" (str "repos/" repo)) [:permissions :admin])
             (problem/fail! :github/not-admin
-                           (str "gh is not logged in as an admin of " repo
-                                " (gh auth status): changing its ruleset takes an admin; "
-                                "run kit github as the owner")))
+                           (str "gh is not logged in as an admin of "
+                                repo
+                                " (gh auth status): changing its ruleset takes an admin")
+                           {:fix "run kit github as the owner"}))
         org        (first (str/split repo #"/"))
         teams      (filter #(str/includes? % "/") (:owners cfg))
         users      (remove #(str/includes? % "/") (:owners cfg))
@@ -145,7 +143,8 @@
                            (str "the team " t
                                 " in :owners is not of " org
                                 " ; a team gives access only to its own organization's "
-                                "repositories: fix :owners in kit.edn")))
+                                "repositories")
+                           {:fix "fix :owners in kit.edn"}))
         sets       (read! (str "the rulesets of " repo) "api" (str "repos/" repo "/rulesets?per_page=100"))
         mains      (filter #(= "main" (:name %)) sets)
         _ (when (next mains)
@@ -155,17 +154,13 @@
                                 (count mains)
                                 " rulesets named main (ids "
                                 (str/join ", " (map :id mains))
-                                "): "
-                                "keep one in Settings → Rules → Rulesets, then run kit github again")))
+                                ")")
+                           {:fix "keep one in Settings → Rules → Rulesets, then run kit github again"}))
         _ (when (and (empty? mains) (seq sets))
-            (problem/fail!
-             :github/no-main-ruleset
-             (str repo
-                  " has rulesets, none named main ( "
-                  (str/join ", " (map :name sets))
-                  " ): rename the one that "
-                  "protects the default branch to main in Settings → Rules → Rulesets, or delete it, then run "
-                  "kit github again")))
+            (problem/fail! :github/no-main-ruleset
+                           (str repo " has rulesets, none named main ( " (str/join ", " (map :name sets)) " )")
+                           {:fix (str "rename the one that protects the default branch to main in "
+                                      "Settings → Rules → Rulesets, or delete it, then run kit github again")}))
         main       (first mains)
         have       (when main
                      (read! "the main ruleset" "api" (str "repos/" repo "/rulesets/" (:id main))))
@@ -176,7 +171,9 @@
                              (:rules have))
                        "checks")
         _ (when-not (re-matches #"[A-Za-z0-9 ._/()-]+" check-name)
-            (problem/fail! :github/bad-check-name (str "--check " (pr-str check-name) " is not a check name")))
+            (problem/fail! :github/bad-check-name
+                           (str "--check " (pr-str check-name) " is not a check name")
+                           {:fix "name the required status check as it shows on a pull request, e.g. --check checks"}))
         me         (read! "your GitHub account" "api" "user")
         want       (expected-ruleset check-name
                                      (for [t teams]
@@ -191,14 +188,15 @@
                          (catch clojure.lang.ExceptionInfo _ "none"))
         agent      (get-in cfg [:agent :login])
         _ (when-let [p (some-> agent perm #{"admin" "maintain"})]
-            (problem/fail!
-             :github/agent-too-strong
-             (str
-              "the agent " agent
-              " has "      p
-              " on "       repo
-              " , more than Write: with it the agent could change the rules "
-              "it works under. Lower it to Write in Settings → Collaborators and teams, then run kit github again")))
+            (problem/fail! :github/agent-too-strong
+                           (str "the agent "
+                                agent
+                                " has "
+                                p
+                                " on "
+                                repo
+                                " , more than Write: with it the agent could change the rules it works under")
+                           {:fix "lower it to Write in Settings → Collaborators and teams, then run kit github again"}))
         pending    (set (keep #(get-in % [:invitee :login])
                               (read! "the invitations" "api" (str "repos/" repo "/invitations"))))
         access     (into {} (map (juxt :slug :permission)) (read! "the teams" "api" (str "repos/" repo "/teams")))
@@ -224,7 +222,9 @@
       (println "  nothing to change")
       (do (doseq [[what] plan] (println (str "  " what)))
           (when-not (confirm! yes)
-            (problem/fail! :github/not-confirmed "nothing was changed: run kit github --yes to apply these changes"))
+            (problem/fail! :github/not-confirmed
+                           "nothing was changed"
+                           {:fix "run kit github --yes to apply these changes"}))
           (doseq [[what act] plan]
             (try (act)
                  (catch clojure.lang.ExceptionInfo e
@@ -232,7 +232,8 @@
                                   (str "\"" (first-line what)
                                        "\" failed (" (first-line (ex-message e))
                                        "); the steps above it"
-                                       " are done. Run kit github again: it is safe to repeat")))))))
+                                       " are done")
+                                  {:fix "run kit github again: it is safe to repeat"}))))))
     (when agent
       (let [dir      (ident/expand-home (get-in cfg [:agent :gh-config-dir]))
             ;; As the agent: its own config, never a token the shell may hold.
@@ -254,13 +255,15 @@
                 {:keys [exit out] :as r} (as-agent "user/repository_invitations")]
             (when-not (zero? exit)
               (problem/fail! :github/invitations-unreadable
-                             (str "the agent's invitations could not be read (" (why r) "): " by-hand)))
+                             (str "the agent's invitations could not be read (" (why r) ")")
+                             {:fix by-hand}))
             (doseq [inv   (json/parse-string (or (not-empty out) "[]") true)
                     :when (= repo (get-in inv [:repository :full_name]))]
               (let [r (as-agent (str "user/repository_invitations/" (:id inv)) "-X" "PATCH")]
                 (when-not (zero? (:exit r))
                   (problem/fail! :github/invitation-not-accepted
-                                 (str "accepting the invitation as " agent " failed (" (why r) "): " by-hand)))
+                                 (str "accepting the invitation as " agent " failed (" (why r) ")")
+                                 {:fix by-hand}))
                 (println (str "  " agent ": accepted the invitation, as the agent")))))
           (when (or (pending agent) (some #(str/starts-with? (first %) (str agent ":")) plan))
             (println (str "  "

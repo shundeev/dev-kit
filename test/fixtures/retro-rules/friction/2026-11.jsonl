@@ -1,0 +1,16 @@
+{"at": "2026-11-11T10:01:00Z", "event": "PreToolUse", "session": "b", "turn": "b-t", "tool": "Bash", "id": "b-0", "input": {"command": "git reset --hard"}, "branch": "61-other-task", "origin": "u473t8/fake"}
+{"at": "2026-11-11T10:01:00Z", "event": "HookDenied", "session": "b", "turn": "b-t", "tool": "Bash", "id": "b-0", "reason": "Refused: git reset --hard destroys uncommitted work.\n\nRule: git.reset-hard"}
+{"at": "2026-11-11T10:02:00Z", "event": "PreToolUse", "session": "b", "turn": "b-t", "tool": "Bash", "id": "b-1", "input": {"command": "sleep 30; gh pr view 9"}, "branch": "61-other-task", "origin": "u473t8/fake"}
+{"at": "2026-11-11T10:02:00Z", "event": "HookDenied", "session": "b", "turn": "b-t", "tool": "Bash", "id": "b-1", "reason": "Refused: this command waits.\n\nRule: foreground-wait"}
+{"at": "2026-11-11T11:00:00Z", "event": "Stop", "session": "b", "turn": "b-t", "needs_input": false}
+{"at": "2026-11-12T10:01:00Z", "event": "PreToolUse", "session": "a", "turn": "a-t", "tool": "Bash", "id": "a-0", "input": {"command": "git reset --hard HEAD~1"}, "branch": "55-count-friction", "origin": "u473t8/fake"}
+{"at": "2026-11-12T10:01:00Z", "event": "HookDenied", "session": "a", "turn": "a-t", "tool": "Bash", "id": "a-0", "reason": "Refused: git reset --hard destroys uncommitted work.\n\nRule: git.reset-hard"}
+{"at": "2026-11-12T10:02:00Z", "event": "PreToolUse", "session": "a", "turn": "a-t", "tool": "Bash", "id": "a-1", "input": {"command": "git reset --hard origin/main"}, "branch": "55-count-friction", "origin": "u473t8/fake"}
+{"at": "2026-11-12T10:02:00Z", "event": "HookDenied", "session": "a", "turn": "a-t", "tool": "Bash", "id": "a-1", "reason": "Refused: git reset --hard destroys uncommitted work.\n\nRule: git.reset-hard"}
+{"at": "2026-11-12T10:03:00Z", "event": "PreToolUse", "session": "a", "turn": "a-t", "tool": "Bash", "id": "a-2", "input": {"command": "sleep 60 && gh pr checks 7"}, "branch": "55-count-friction", "origin": "u473t8/fake"}
+{"at": "2026-11-12T10:03:00Z", "event": "HookDenied", "session": "a", "turn": "a-t", "tool": "Bash", "id": "a-2", "reason": "Refused: this command waits.\n\nRule: foreground-wait"}
+{"at": "2026-11-12T10:04:00Z", "event": "PreToolUse", "session": "a", "turn": "a-t", "tool": "Edit", "id": "a-3", "input": {"file_path": "/w/fake-55/a.txt"}, "branch": "55-count-friction", "origin": "u473t8/fake"}
+{"at": "2026-11-12T10:04:00Z", "event": "HookDenied", "session": "a", "turn": "a-t", "tool": "Edit", "id": "a-3", "reason": "Refused: #55 has no `design-approved`: code waits until the owner approves the design by adding it\n\nRule: gate.design-approval"}
+{"at": "2026-11-12T10:05:00Z", "event": "PreToolUse", "session": "a", "turn": "a-t", "tool": "Bash", "id": "a-4", "input": {"command": "gh issue create --title x"}, "branch": "55-count-friction", "origin": "u473t8/fake"}
+{"at": "2026-11-12T10:05:00Z", "event": "HookDenied", "session": "a", "turn": "a-t", "tool": "Bash", "id": "a-4", "reason": "Refused: a raw gh issue create"}
+{"at": "2026-11-12T11:00:00Z", "event": "Stop", "session": "a", "turn": "a-t", "needs_input": false}

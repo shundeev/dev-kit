@@ -468,7 +468,7 @@ git -C "$O" check-ignore -q $local && ok "and ignores the file there" || bad "no
 git worktree add -q "$WORK/wt" 2>/dev/null
 expect_exit 0 "identity works in a linked worktree" bb $kit identity --dir "$WORK/wt"
 git -C "$WORK/wt" check-ignore -q $local && ok "ignored in the worktree" || bad "not ignored in the worktree"
-expect_exit 2 "identity refuses a directory that is not a repository root" bb $kit identity --dir "$WORK"
+expect_exit 1 "identity refuses a directory that is not a repository root" bb $kit identity --dir "$WORK"
 
 echo "- clojure module"
 sed -i 's/:modules  #{}/:modules  #{:clojure}/' kit.edn
@@ -1946,7 +1946,7 @@ XDG_STATE_HOME="$WORK/fry" call Bash '{"command":"git reset --hard"}' >/dev/null
 [ -d "$WORK/fry" ] && [ ! -e "$FR" ] && ok "  a hand check writes no friction, where the entry hook itself does" || bad "  friction written" "$(find "$FR" -type f)"
 touch "$WORK/kit-hook-ran"; khook "rm $WORK/kit-hook-ran" >/dev/null
 [ -e "$WORK/kit-hook-ran" ] && ok "  the command is never run" || bad "  the command ran"
-expect_exit 2 "kit hook: no command says what to pass" bb $kit hook
+expect_exit 1 "kit hook: no command says what to pass" bb $kit hook
 contains "  names the usage" "kit hook '<command>'" "$LAST"
 
 # #129: kit sync brings the owner's checkout and its .shared up to the remote, and never changes anything it cannot

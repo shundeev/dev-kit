@@ -1,5 +1,5 @@
 (ns dev-kit.base
-  "What every part of kit stands on: where dev-kit and the project are, running a command, failing, and gh."
+  "What every part of kit stands on: where dev-kit and the project are, running a command, what doctor finds, and gh."
   (:require
    [babashka.fs :as fs]
    [babashka.process :as p]
@@ -21,10 +21,10 @@
 (def root (fs/parent kit-dir))
 
 
-(defn die
-  [& msg]
-  (binding [*out* *err*] (println (str "kit: " (str/join " " msg))))
-  (System/exit 2))
+(defn finding
+  "One thing kit doctor finds: a level (:fail or :warn), what is wrong and what to do about it."
+  [level message fix]
+  {:level level :message message :fix fix})
 
 
 (defn sh-in

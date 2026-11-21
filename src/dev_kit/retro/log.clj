@@ -20,7 +20,8 @@
   (or (try (Instant/parse s) (catch Exception _ nil))
       (try (.toInstant (OffsetDateTime/parse s)) (catch Exception _ nil))
       (problem/fail! :retro/bad-time
-                     (str opt " " s " : not a time; write it as 2026-11-12T10:00:00Z or 2026-11-12T11:00:00+01:00"))))
+                     (str "retro: " opt " " s " : not a time")
+                     {:usage true :fix "write it as 2026-11-12T10:00:00Z or 2026-11-12T11:00:00+01:00"})))
 
 
 (defn instant
