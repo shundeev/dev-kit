@@ -302,10 +302,12 @@
    (fn [pr _repo fail]
      (let [found (pr-of @world pr)]
        (cond (nil? found)
-             (fail (github/gh-failure-text
+             (fail (github/gh-failure-message
                     "pr view"
-                    (str "GraphQL: Could not resolve to a PullRequest with the number of " pr ".")))
-             (:unreadable found) (fail (github/gh-failure-text "pr view" (:unreadable found)))
+                    (str "GraphQL: Could not resolve to a PullRequest with the number of " pr "."))
+                   github/gh-failure-fix)
+             (:unreadable found) (fail (github/gh-failure-message "pr view" (:unreadable found))
+                                       github/gh-failure-fix)
              :else
              {:state       (:state found)
               :decision    (:decision found)
@@ -321,7 +323,7 @@
    (fn [pr _repo fail]
      (let [found (pr-of @world pr)]
        (if-let [output (:checks-unreadable found)]
-         (fail (github/checks-failure-text pr output))
+         (fail (github/checks-failure-message output) (github/checks-failure-fix pr))
          (vec (:checks found)))))
 
    #'github/ready-workflow?
@@ -329,7 +331,7 @@
      ([_repo _base] (:ready-workflow @world))
      ([repo base fail]
       (if-let [message (:workflow-unreadable @world)]
-        (fail (github/ready-workflow-failure repo base 1 message))
+        (fail (github/ready-workflow-failure repo base 1 message) github/ready-workflow-fix)
         (:ready-workflow @world))))
 
    #'github/auto-merge!
@@ -720,7 +722,8 @@
   {#'checks/required-contexts
    (fn [repo base fail]
      (if-let [output (:rules-unreadable @world)]
-       (fail (github/gh-failure-text (str "api repos/" repo "/rules/branches/" base) output))
+       (fail (github/gh-failure-message (str "api repos/" repo "/rules/branches/" base) output)
+             github/gh-failure-fix)
        (vec (distinct (:required-contexts @world)))))
 
    #'checks/ready-runs
@@ -740,7 +743,7 @@
    (fn [pr _repo fail]
      (let [found (pr-of @world pr)]
        (if-let [output (:reviews-unreadable found)]
-         (fail (github/gh-failure-text "api graphql" output))
+         (fail (github/gh-failure-message "api graphql" output) github/gh-failure-fix)
          {:state          (:state found)
           :viewer         (:viewer @world "the-agent")
           :head-committed (:committed found)

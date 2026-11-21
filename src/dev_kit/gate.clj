@@ -220,7 +220,7 @@
    (:repo cfg)
    (problem/fail! :gate/no-repository
                   "no repository: this folder has no GitHub origin and GHWF_REPO is not set"
-                  {:usage true :fix "run inside the clone, or pass --repo owner/name"})))
+                  {:fix "run inside the clone, or pass --repo owner/name"})))
 
 
 (defn managed-paths
@@ -332,13 +332,11 @@
                    (problem/fail!
                     :gate/no-branch
                     "gate: pass --branch"
-                    {:usage true
-                     :fix   "CI passes it from GITHUB_HEAD_REF; by hand: kit gate --branch <n>-<slug> --pr <number>"}))
+                    {:fix "CI passes it from GITHUB_HEAD_REF; by hand: kit gate --branch <n>-<slug> --pr <number>"}))
         pr     (or pr
                    (problem/fail! :gate/no-pr
                                   "gate: pass --pr"
-                                  {:usage true
-                                   :fix   "name the pull request: kit gate --branch <n>-<slug> --pr <number>"}))
+                                  {:fix "name the pull request: kit gate --branch <n>-<slug> --pr <number>"}))
         n      (branch-issue branch)
         read!  #(try (%)
                      (catch Exception e

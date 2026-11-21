@@ -6,7 +6,8 @@
   (:require
    [cheshire.core :as json]
    [clojure.string :as str]
-   [dev-kit.flow.shell :as shell]))
+   [dev-kit.flow.shell :as shell]
+   [dev-kit.problem :as problem]))
 
 
 (defn issue-url
@@ -28,25 +29,30 @@
   (let [reason (if (str/blank? message)
                  (format "gh exit code %s" exit)
                  message)]
-    (format
-     "Could not look for %s on '%s' of %s (%s). Nothing was committed or pushed: run it again when GitHub answers, or check 'gh auth status'."
-     ready-workflow-path
-     base
-     repo
-     reason)))
+    (format "Could not look for %s on '%s' of %s (%s). Nothing was committed or pushed"
+            ready-workflow-path
+            base
+            repo
+            reason)))
+
+
+(def ready-workflow-fix "run it again when GitHub answers, or check 'gh auth status'.")
 
 
 (defn ready-workflow?
   "Whether `base` of `repo` holds the ready workflow (ADR-0007). Not-found is a plain no; any other failure goes to
-  `fail` with the text: guessing would open a ready PR in a repository that has the workflow, or a draft that nothing
-  marks ready. Without `fail` it ends the run."
-  ([repo base] (ready-workflow? repo base shell/die))
+  `fail` with the text and what to do: guessing would open a ready PR in a repository that has the workflow, or a
+  draft that nothing marks ready. Without `fail` it stops the step as a problem of its own."
+  ([repo base]
+   (ready-workflow? repo
+                    base
+                    #(problem/fail! :github/workflow-unreadable %1 {:fix %2})))
   ([repo base fail]
    (let [{:keys [exit out err]}
          (shell/run "gh" "api" (format "repos/%s/contents/%s?ref=%s" repo ready-workflow-path base) "--silent")]
      (cond (zero? exit) true
            (re-find #"404|Not Found" (str out err)) false
-           :else (fail (ready-workflow-failure repo base exit (str/trim (str out err))))))))
+           :else (fail (ready-workflow-failure repo base exit (str/trim (str out err))) ready-workflow-fix)))))
 
 
 (defn head-branch
@@ -74,22 +80,39 @@
     [pr]))
 
 
-(defn gh-failure-text
+(defn gh-failure-message
   "What a failed gh call says: the command's first two words and gh's output."
   [command output]
-  (format
-   "gh %s failed: %s. Fix: run it by hand to see why; an unreachable GitHub and an expired token both show there."
-   command
-   (str/trim output)))
+  (format "gh %s failed: %s" command (str/trim output)))
+
+
+(def gh-failure-fix
+  "run it by hand to see why; an unreachable GitHub and an expired token both show there.")
+
+
+(def not-json-fix "run it by hand to see what gh answers; GitHub may be returning an error page")
+
+
+(defn- abbreviate
+  "The start of a text, for a message that quotes it."
+  [text]
+  (let [text (str/trim text)]
+    (if (> (count text) 200)
+      (str (subs text 0 200) "…")
+      text)))
 
 
 (defn gh-json
-  "A gh call's JSON output. A call that fails goes to `fail` (die, or a stop with its own exit code) with gh's message."
+  "A gh call's JSON output. A call that fails, or answers with something that is not JSON, goes to `fail` (a function
+  of the text and what to do: a stop with its own exit code) with gh's message."
   [fail & args]
-  (let [{:keys [exit out err]} (apply shell/run "gh" args)]
+  (let [{:keys [exit out err]} (apply shell/run "gh" args)
+        command (str/join " " (take 2 args))]
     (if (zero? exit)
-      (json/parse-string out true)
-      (fail (gh-failure-text (str/join " " (take 2 args)) (str out err))))))
+      (try (json/parse-string out true)
+           (catch Exception _
+             (fail (format "gh %s answered with text that is not JSON: %s" command (abbreviate out)) not-json-fix)))
+      (fail (gh-failure-message command (str out err)) gh-failure-fix))))
 
 
 (defn read-pr
@@ -118,12 +141,17 @@
      :auto-merge  (some? (:autoMergeRequest j))}))
 
 
-(defn checks-failure-text
-  "What a failed `gh pr checks` says: the pull request as gh took it and gh's output."
-  [pr output]
+(defn checks-failure-message
+  "What a failed `gh pr checks` says: gh's output."
+  [output]
+  (format "gh pr checks failed: %s" (str/trim output)))
+
+
+(defn checks-failure-fix
+  "What to do about a failed `gh pr checks`: the pull request as gh took it."
+  [pr]
   (format
-   "gh pr checks failed: %s. Fix: run `gh pr checks %s --required` by hand to see why; an unreachable GitHub and an expired token both show there."
-   (str/trim output)
+   "run `gh pr checks %s --required` by hand to see why; an unreachable GitHub and an expired token both show there."
    pr))
 
 
@@ -136,7 +164,7 @@
     (cond (sequential? parsed) parsed
           (re-find #"(?i)no (required )?checks reported" (str out err)) []
           :else
-          (fail (checks-failure-text (first (pr-args pr repo)) (str out err))))))
+          (fail (checks-failure-message (str out err)) (checks-failure-fix (first (pr-args pr repo)))))))
 
 
 (defn auto-merge!

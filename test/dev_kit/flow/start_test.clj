@@ -37,7 +37,7 @@
 
 (defn- said
   [result]
-  (get-in result [::steps/problem :message] ""))
+  (:text (steps/refusal result)))
 
 
 (deftest a-new-task-gets-an-issue-a-card-with-its-fields-and-a-branch-named-after-it
@@ -114,7 +114,7 @@
     (is (= :start/field-refused (get-in result [::steps/problem :problem])) "because the board refused the field")
     (is (str/includes? (said result) "#1 is filed, but its Size")
         "the answer names the issue already filed and the field")
-    (is (str/includes? (said result) "Then run kit start again with --issue 1") "and says how to go on")
+    (is (str/includes? (said result) "Fix: run kit start again with --issue 1") "and says how to go on")
     (is (= 1 (count (fake/issues world))) "the issue exists")
     (is (empty? (fake/linked-branches world)) "no branch is made")
     (is (= "main" (fake/checked-out world)) "and the working tree is where it was")))
@@ -125,7 +125,7 @@
         result (kit-start world "--title" "Add landing page" "--priority" "High")]
     (is (= :start/board-refused (get-in result [::steps/problem :problem])) "the board's refusal is the problem")
     (is (str/includes? (said result) "#1 is filed but could not be put on the board") "the answer names the issue")
-    (is (str/includes? (said result) "Then run kit start again with --issue 1") "and says how to go on")
+    (is (str/includes? (said result) "Fix: run kit start again with --issue 1") "and says how to go on")
     (is (= 1 (count (fake/issues world))) "the issue exists")
     (is (empty? (fake/linked-branches world)) "no branch is made")))
 

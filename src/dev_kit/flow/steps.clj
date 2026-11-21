@@ -3,7 +3,9 @@
   returns the facts it adds; what it needs from the outside it calls directly (step 7b of #139). A step that cannot go on throws a problem with dev-kit.problem/fail!, and the run stops there: the
   result keeps every fact gathered before it and names the step. The run's own keys are namespaced (::status,
   ::done, ::stopped-at, ::problem), so no fact of a command can collide with them: kit start has a :status of its
-  own, the board's Status.")
+  own, the board's Status."
+  (:require
+   [dev-kit.problem :as problem]))
 
 
 (defn run
@@ -27,11 +29,18 @@
 
 
 (defn refusal
-  "How a stopped run ends: the text for stderr and the exit code. \"Error: <text>\" and 1, unless the step's fail!
-  named another :exit or a :plain text."
+  "How a stopped run ends: the text of its problem (dev-kit.problem/refusal-text) and its exit code, 1 when it names none."
   [result]
-  (let [{:keys [message exit plain]} (::problem result)]
-    {:text (if plain
-             message
-             (str "Error: " message))
-     :exit (or exit 1)}))
+  (let [problem (::problem result)]
+    {:text (problem/refusal-text problem)
+     :exit (or (:exit problem) 1)}))
+
+
+(defn complete!
+  "The result of a run that went through. A stopped run is thrown again as its problem, for kit's one edge to print
+  and to turn into an exit code."
+  [result]
+  (if (= :fail (::status result))
+    (let [problem (::problem result)]
+      (throw (ex-info (:message problem) problem)))
+    result))

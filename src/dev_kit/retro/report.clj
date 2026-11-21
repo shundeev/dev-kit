@@ -167,7 +167,7 @@
                    n
                    (problem/fail! :retro/bad-days
                                   (str "retro: --days " days " : not a number of days")
-                                  {:usage true :fix "write a whole number above 0, e.g. --days 30"})))
+                                  {:fix "write a whole number above 0, e.g. --days 30"})))
                14)]
     (println (str "## Friction data: " repo "#" issue))
     (println)

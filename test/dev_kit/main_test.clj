@@ -16,12 +16,12 @@
     (let [{:keys [result out err]} (fake/captured #(main/run ["github" "--bogus"]))]
       (is (= 1 result))
       (is (= "" out))
-      (is (str/starts-with? err "kit: unknown option --bogus  →  "))))
+      (is (str/starts-with? err "unknown option --bogus. Fix: "))))
   (testing "an unknown command, after the usage"
     (let [{:keys [result out err]} (fake/captured #(main/run ["frobnicate"]))]
       (is (= 1 result))
       (is (str/includes? out "kit doctor"))
-      (is (str/starts-with? err "kit: unknown command frobnicate  →  "))))
+      (is (str/starts-with? err "unknown command frobnicate. Fix: "))))
   (testing "kit hook with no command"
     (let [{:keys [result err]} (fake/captured #(main/run ["hook"]))]
       (is (= 1 result))
@@ -30,20 +30,20 @@
     (let [{:keys [result out err]} (fake/captured #(main/run ["retro"]))]
       (is (= 1 result))
       (is (= "" out))
-      (is (= "kit: retro: name the issue  →  e.g. kit retro 55, or kit retro --missing\n" err))))
+      (is (= "retro: name the issue. Fix: e.g. kit retro 55, or kit retro --missing\n" err))))
   (testing "kit gate with no pull request"
     (let [{:keys [result out err]} (fake/captured #(main/run ["gate" "--repo" "u473t8/fake" "--branch" "26-x"]))]
       (is (= 1 result))
       (is (= "" out))
-      (is (str/starts-with? err "kit: gate: pass --pr  →  name the pull request")))))
+      (is (str/starts-with? err "gate: pass --pr. Fix: name the pull request")))))
 
 
-(deftest a-problem-that-is-not-a-usage-error-prints-fail-on-stdout-with-its-code
+(deftest a-refusal-of-a-command-with-its-own-code-prints-the-same-form-on-stderr
   (let [dir (fake/new-project)
         {:keys [result out err]} (fake/with-project dir (fake/captured #(main/run ["user-test"])))]
     (is (= 1 result))
-    (is (= "" err))
-    (is (str/starts-with? out "  FAIL  no kit.edn  →  "))))
+    (is (= "" out))
+    (is (str/starts-with? err "no kit.edn. Fix: "))))
 
 
 (defn- entry-hook

@@ -4,7 +4,8 @@
   (:require
    [clojure.test :refer [deftest is testing]]
    [dev-kit.flow.fake-github :as fake]
-   [dev-kit.flow.github :as github]))
+   [dev-kit.flow.github :as github]
+   [dev-kit.flow.shell :as shell]))
 
 
 (deftest a-pause-runs-the-next-event-of-the-script
@@ -29,7 +30,7 @@
   (let [world (fake/new-world {:issues [{:title "Fix"}]
                                :prs    [{:branch "1-fix" :head "abc" :labels ["hold"] :owners ["u473t8"]}
                                         {:branch "9-old" :unreadable "HTTP 502"}]})
-        fail  #(throw (ex-info % {}))
+        fail  #(throw (ex-info %1 {:fix %2}))
         ask   #(fake/with-github world %)]
     (is (= "https://github.com/o/r/pull/2" (ask #(github/open-pr-url "o/r" "1-fix" "open")))
         "pull requests are numbered after the issues")
@@ -47,7 +48,7 @@
     (is (= (ask #(github/read-pr "2" "o/r" fail)) (ask #(github/read-pr "https://github.com/o/r/pull/2" "o/r" fail)))
         "by number or by URL")
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                          #"^gh pr view failed: HTTP 502\. Fix: run it by hand"
+                          #"^gh pr view failed: HTTP 502$"
                           (ask #(github/read-pr "3" "o/r" fail)))
         "a failed read goes to the step's fail with gh's message, as the real one")
     (is (= [] (ask #(github/required-checks "2" "o/r" fail))))))
@@ -56,3 +57,13 @@
 (deftest a-command-keeps-its-own-things-in-the-world
   (is (= ["abc"] (:commits @(fake/new-world {:commits ["abc"]})))
       "an option new-world does not know goes into the world as it is, for the command's operations to read"))
+
+
+(deftest a-reply-that-is-not-json-stops-the-step-with-what-gh-answered-and-what-to-do
+  (let [refusals (atom [])
+        fail     (fn [text fix] (swap! refusals conj [text fix]) ::stopped)]
+    (with-redefs [shell/run (constantly {:exit 0 :out "not json\n" :err ""})]
+      (is (= ::stopped (github/gh-json fail "api" "repos/o/r/rules/branches/main"))))
+    (is (= [["gh api repos/o/r/rules/branches/main answered with text that is not JSON: not json" github/not-json-fix]]
+           @refusals)
+        "no Java stack trace: the refusal names the call and quotes the answer")))
