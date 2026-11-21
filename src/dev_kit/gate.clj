@@ -7,7 +7,8 @@
    [clojure.string :as str]
    [dev-kit.base :as base]
    [dev-kit.config :as config]
-   [dev-kit.identity :as ident]))
+   [dev-kit.identity :as ident]
+   [dev-kit.problem :as problem]))
 
 
 ;; The pull request gate, in CI: `kit gate --branch … --pr …`. In order:
@@ -182,8 +183,9 @@
    (base/origin-repo ".")
    (not-empty (System/getenv "GHWF_REPO"))
    (:repo cfg)
-   (base/die
-    "no repository: this folder has no GitHub origin and GHWF_REPO is not set; run inside the clone, or pass --repo owner/name")))
+   (problem/fail! :gate/no-repository
+                  "no repository: this folder has no GitHub origin and GHWF_REPO is not set"
+                  {:usage true :fix "run inside the clone, or pass --repo owner/name"})))
 
 
 (defn managed-paths
@@ -295,8 +297,11 @@
   [{:keys [branch pr] :as opts}]
   (let [cfg    (gate-config)
         repo   (gate-repo opts cfg)
-        branch (or branch (not-empty (System/getenv "GITHUB_HEAD_REF")) (base/die "gate: pass --branch"))
-        pr     (or pr (base/die "gate: pass --pr"))
+        branch (or branch
+                   (not-empty (System/getenv "GITHUB_HEAD_REF"))
+                   (problem/fail! :gate/no-branch "gate: no branch to check" {:usage true :fix "pass --branch <name>"}))
+        pr     (or pr
+                   (problem/fail! :gate/no-pr "gate: no pull request to check" {:usage true :fix "pass --pr <number>"}))
         n      (branch-issue branch)
         read!  #(try (%)
                      (catch Exception e

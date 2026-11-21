@@ -84,7 +84,8 @@
         m (read-json-object f)]
     (when (= ::invalid m)
       (problem/fail! :identity/settings-not-object
-                     (str local-settings " is not a JSON object; fix or remove it, then run again")))
+                     (str local-settings " is not a JSON object")
+                     {:fix "fix or remove it, then run again"}))
     (fs/create-dirs (fs/parent f))
     (spit f
           (config/json-text (update m
@@ -106,7 +107,9 @@
   "Adds path to the repository's info/exclude: per clone, shared by its worktrees."
   [dir path]
   (let [ex (or (base/sh-in dir "git" "rev-parse" "--path-format=absolute" "--git-path" "info/exclude")
-               (base/die (str dir) "is not a git repository"))
+               (problem/fail! :identity/not-a-repository
+                              (str dir " is not a git repository")
+                              {:usage true :fix "run it inside a git repository, or name one with --dir"}))
         s  (base/slurp-if ex)]
     (fs/create-dirs (fs/parent ex))
     (spit ex
@@ -196,26 +199,28 @@
           token    (first (filter #(not-empty (System/getenv %)) ["GH_TOKEN" "GITHUB_TOKEN"]))]
       (cond
         (and session? token)
-        [[:fail (str token " is set, so gh in this Claude session uses that token, not the agent's account")
-          (str "unset " token " in the shell that starts claude, then restart the session")]]
+        [(base/finding :fail
+                       (str token " is set, so gh in this Claude session uses that token, not the agent's account")
+                       (str "unset " token " in the shell that starts claude, then restart the session"))]
 
         (and session? (not (same-dir? want have)))
-        [[:fail
-          (str "this Claude session runs gh from "
-               have
-               (if user
-                 (str ", logged in as " user)
-                 ", logged out")
-               ", not from the agent's config "
-               want)
-          (if (local-env-problem base/root (agent-env agent))
-            (str base/mount "/bin/kit init, then restart this Claude session")
-            (str "restart this Claude session: " local-settings " is in place and applies at start"))]]
+        [(base/finding :fail
+                       (str "this Claude session runs gh from "
+                            have
+                            (if user
+                              (str ", logged in as " user)
+                              ", logged out")
+                            ", not from the agent's config "
+                            want)
+                       (if (local-env-problem base/root (agent-env agent))
+                         (str base/mount "/bin/kit init, then restart this Claude session")
+                         (str "restart this Claude session: " local-settings " is in place and applies at start")))]
 
         :else
         (when-let [problem (agent-login-problem agent)]
-          [[(if session? :fail :warn) problem
-            (str "in your own terminal: " base/mount "/bin/kit init — it logs " login " in")]])))))
+          [(base/finding (if session? :fail :warn)
+                         problem
+                         (str "in your own terminal: " base/mount "/bin/kit init — it logs " login " in"))])))))
 
 
 (defn codeowners-text

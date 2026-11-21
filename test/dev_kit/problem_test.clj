@@ -11,7 +11,7 @@
 
 (def converted
   "Namespaces where every problem/fail! carries a :fix. A namespace is added here when its stops get their advice."
-  #{})
+  '#{dev-kit.config dev-kit.checks dev-kit.init dev-kit.identity dev-kit.commands dev-kit.github dev-kit.main})
 
 
 (defn- source-forms

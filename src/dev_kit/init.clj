@@ -35,14 +35,17 @@
               {:keys [pairs stray]} (some-> s checks/block-markers)]
           (cond
             (nil? s)       (write! f (str content "\n" (slurp (str (fs/path base/kit-dir "scaffold" "AGENTS.md")))))
-            (seq stray)    (problem/fail! :init/stray-markers problem)
+            (seq stray)    (problem/fail! :init/stray-markers
+                                          problem
+                                          {:fix "remove the stray marker or restore its pair, then run kit init again"})
             (empty? pairs) (write! f (str content "\n\n" s))
             :else          (write! f (checks/with-block s content pairs))))
 
         :symlink
         (if (and (fs/exists? f) (not (fs/sym-link? f)))
           (problem/fail! :init/not-a-link
-                         (str path " is a real file where dev-kit wants a link; move it away, then run init again"))
+                         (str path " is a real file where dev-kit wants a link")
+                         {:fix "move it away, then run kit init again"})
           (do (fs/delete-if-exists f)
               (fs/create-dirs (fs/parent f))
               (fs/create-sym-link f target)))
@@ -51,7 +54,9 @@
         (let [m (checks/policy-map f)]
           (cond
             (nil? m) (write! f (config/json-text checks/policy-default))
-            (= m ::checks/unreadable) (problem/fail! :init/policy-unreadable (str path " " problem))
+            (= m ::checks/unreadable) (problem/fail! :init/policy-unreadable
+                                                     (str path " " problem)
+                                                     {:fix "fix the file by hand, then run kit init again"})
             :else (write! f
                           (config/json-text
                            (reduce (fn [m path] (assoc-in m path (get-in m path (get-in checks/policy-default path))))
@@ -67,7 +72,9 @@
                                    (str ";; Project settings for clj-kondo. Shared strict linters come from dev-kit.\n"
                                         entry))
             (nil? m)       (write! f (str s (when-not (str/ends-with? s "\n") "\n") entry)) ; empty, or comments only
-            (not (map? m)) (problem/fail! :init/kondo-not-a-map (str path " " problem))
+            (not (map? m)) (problem/fail! :init/kondo-not-a-map
+                                          (str path " " problem)
+                                          {:fix "make it a map by hand, then run kit init again"})
             :else          (let [zloc (z/of-string s)]
                              (write! f
                                      (z/root-string (if (z/get zloc :config-paths)
@@ -75,7 +82,8 @@
                                                       (z/assoc zloc :config-paths [(ident/kondo-entry)]))))))
           (when (checks/check item)
             (problem/fail! :init/kondo-not-updated
-                           (str path " could not be updated; add " (ident/kondo-entry) " to :config-paths by hand"))))
+                           (str path " could not be updated")
+                           {:fix (str "add " (ident/kondo-entry) " to :config-paths by hand")})))
 
         :git-config (base/sh "git" "config" "--local" git-key value))
       (str (checks/label item) " (" problem ")"))))
@@ -90,10 +98,13 @@
         settings (if (str/includes? (json/generate-string settings) ".claude/hooks/pretooluse.sh") {} settings)]
     (when (= ::ident/invalid settings)
       (problem/fail! :init/settings-not-object
-                     ".claude/settings.json is not a JSON object: fix it or move it away, then run kit init again"))
+                     ".claude/settings.json is not a JSON object"
+                     {:fix "fix it or move it away, then run kit init again"}))
     (cond-> {:repo     (or repo
                            (base/origin-repo base/root)
-                           (problem/fail! :init/no-origin "no origin remote on GitHub: pass --repo owner/name"))
+                           (problem/fail! :init/no-origin
+                                          "no origin remote on GitHub"
+                                          {:fix "pass --repo owner/name"}))
              :showcase showcase
              :modules  (into #{} (comp (remove str/blank?) (map keyword)) (some-> modules (str/split #",")))}
       (seq settings) (assoc :claude-settings settings))))
