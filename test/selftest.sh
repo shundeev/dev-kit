@@ -1202,7 +1202,7 @@ echo 'GraphQL: Your token has not been granted the required scopes to execute th
 : > "$B/pr-list"; echo "Board task" > "$B/issue-title"
 expect_exit 1 "finish: a failed In review update stops it, after the PR is open" flow finish --pr-body-file "$WORK/body.md"
 contains "  says the PR is open" "is open" "$LAST"; contains "  with the command for the status alone" "kit board set" "$LAST"
-rm -f "$B/board-fails"; cmd="${LAST##*Set it alone: }"
+rm -f "$B/board-fails"; cmd="${LAST##*set it alone: }"
 expect_exit 0 "  and that command, run as printed, sets it" env PATH="$KIT/test/fake-gh:$PATH" bash -c "$cmd"
 contains "  to In review" "Status: In review" "$LAST"
 echo 'GraphQL: Your token has not been granted the required scopes to execute this query. (INSUFFICIENT_SCOPES)' > "$B/board-fails"

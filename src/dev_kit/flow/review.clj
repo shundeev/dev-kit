@@ -59,9 +59,9 @@ Environment: GHWF_HUMAN, the owner's login (kit init or kit identity set it); GH
   "Refuses a run that does not know the owner's login."
   [{:keys [human]}]
   (when (str/blank? human)
-    (problem/fail!
-     :review/no-owner
-     "GHWF_HUMAN is not set, so the owner's reviews cannot be told from anyone else's. Fix: run 'kit init' (or 'kit identity') on this machine; it reads your own gh login.")))
+    (problem/fail! :review/no-owner
+                   "GHWF_HUMAN is not set, so the owner's reviews cannot be told from anyone else's."
+                   {:fix "run 'kit init' (or 'kit identity') on this machine; it reads your own gh login."})))
 
 
 (defn- same-login?
@@ -108,7 +108,8 @@ Environment: GHWF_HUMAN, the owner's login (kit init or kit identity set it); GH
   [{:keys [pr]} {:keys [state]}]
   (when (not= "OPEN" state)
     (problem/fail! :review/not-open
-                   (format "The pull request is %s, so no review is coming: %s" (str/lower-case state) pr))))
+                   (format "The pull request is %s, so no review is coming: %s" (str/lower-case state) pr)
+                   {:fix "open a new pull request with kit finish, or name another one: kit review --pr <number>"})))
 
 
 (def ^:private reviews-query
@@ -185,8 +186,9 @@ Environment: GHWF_HUMAN, the owner's login (kit init or kit identity set it); GH
                                       ["-f" (str "threadsAfter=" threads-after)])))
             request  (get-in response [:data :repository :pullRequest])]
         (when-not request
-          (fail (github/gh-failure-text "api graphql"
-                                        (str (or (some-> response :errors first :message) "no such pull request")))))
+          (fail (github/gh-failure-message "api graphql"
+                                           (str (or (some-> response :errors first :message) "no such pull request")))
+                github/gh-failure-fix))
         (let [{:keys [reviews reviewThreads]} request
               result (->
                       result
@@ -279,10 +281,7 @@ Environment: GHWF_HUMAN, the owner's login (kit init or kit identity set it); GH
 (defn review!
   [_kit args]
   (let [input (read-input args shell/env)]
-    (when (:help input)
+    (if (:help input)
       (println review-usage)
-      (System/exit 0))
-    (let [result (review input)]
-      (when (= :fail (::steps/status result))
-        (shell/exit-with! (steps/refusal result)))
-      (run! println (report-lines result)))))
+      (let [result (steps/complete! (review input))]
+        (run! println (report-lines result))))))

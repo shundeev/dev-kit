@@ -21,6 +21,15 @@
   (is (= {:text "Error: gh failed" :exit 4} (refused :x/gh "gh failed" {:exit 4}))))
 
 
+(deftest the-fix-follows-the-text-in-the-form-the-person-knows
+  (is (= {:text "Error: no branch. Fix: check one out" :exit 1}
+         (refused :x/no-branch "no branch" {:fix "check one out"})))
+  (is (= "Error: closed. Fix: reopen it" (:text (refused :x/closed "closed." {:fix "reopen it"})))
+      "a text that ends with a full stop takes the fix after it")
+  (is (= "Error: 1 failed:\n  lint\nFix: push" (:text (refused :x/failed "1 failed:\n  lint" {:fix "push"})))
+      "a text of several lines takes the fix on its own line"))
+
+
 (deftest the-run-stops-at-the-first-refusal-and-keeps-what-it-gathered
   (let [result (steps/run {:args []}
                  :read  (fn [_] {:branch "7-fix"})

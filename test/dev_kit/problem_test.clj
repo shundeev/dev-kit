@@ -11,7 +11,9 @@
 
 (def converted
   "Namespaces where every problem/fail! carries a :fix. A namespace is added here when its stops get their advice."
-  #{})
+  #{'dev-kit.flow.board 'dev-kit.flow.checks 'dev-kit.flow.finish 'dev-kit.flow.github 'dev-kit.flow.merge
+    'dev-kit.flow.release 'dev-kit.flow.review 'dev-kit.flow.shell 'dev-kit.flow.start 'dev-kit.flow.steps
+    'dev-kit.flow.wait 'dev-kit.flow.watched-pr})
 
 
 (defn- source-forms

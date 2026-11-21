@@ -47,7 +47,7 @@
 
 (defn- said
   [result]
-  (get-in result [::steps/problem :message] ""))
+  (str/replace-first (:text (steps/refusal result)) #"^Error: " ""))
 
 
 (defn- on-branch-1
@@ -127,7 +127,8 @@
         result (kit-finish world variables "--hold" "--add" "page.html")]
     (is (= :finish/hold-on-ready-pr (problem result)) "the finish stops")
     (is (str/includes? (said result) "is ready already: the workflow only reads drafts") "and says why")
-    (is (str/includes? (said result) "gh pr ready https://github.com/o/r/pull/2 --undo") "and what to run first")
+    (is (str/includes? (said result) "Fix: make it a draft first (gh pr ready https://github.com/o/r/pull/2 --undo")
+        "and what to run first")
     (is (nothing-committed-or-pushed? world []) "nothing is committed or pushed")))
 
 
@@ -135,7 +136,7 @@
   (let [world  (on-branch-1 {})
         result (kit-finish world variables "--hold" "--add" "page.html" "--pr-body-file" (file-with "Body"))]
     (is (= :finish/hold-without-workflow (problem result)) "the finish stops")
-    (is (str/includes? (said result) "run kit finish without --hold") "and says what to do")
+    (is (str/includes? (said result) "Fix: run kit finish without --hold") "and says what to do")
     (is (nothing-committed-or-pushed? world []) "nothing is committed or pushed")
     (is (empty? (fake/prs world)) "and no PR is opened")))
 
@@ -207,17 +208,18 @@
                :world   {:current-branch "main"}
                :args    ["--pr-body-file" body]
                :problem :finish/on-base
-               :text    "On the base branch 'main': run from the issue branch"}
+               :text    "On the base branch 'main'. Fix: run from the issue branch"}
               {:story   "a branch with no issue number"
                :world   {:current-branch "landing-page"}
                :args    ["--pr-body-file" body]
                :problem :finish/branch-without-number
-               :text    "The branch 'landing-page' is not <number>-<slug>: open the issue with kit start"}
-              {:story   "a GitHub that cannot say whether main holds the ready workflow"
-               :world   {:workflow-unreadable "HTTP 502: Bad Gateway"}
-               :args    ["--pr-body-file" body]
+               :text    "The branch 'landing-page' is not <number>-<slug>. Fix: open the issue with kit start"}
+              {:story "a GitHub that cannot say whether main holds the ready workflow"
+               :world {:workflow-unreadable "HTTP 502: Bad Gateway"}
+               :args ["--pr-body-file" body]
                :problem :finish/workflow-unreadable
-               :text    "(HTTP 502: Bad Gateway). Nothing was committed or pushed: run it again when GitHub answers"}]]
+               :text
+               "(HTTP 502: Bad Gateway). Nothing was committed or pushed. Fix: run it again when GitHub answers"}]]
     (doseq [{:keys [story world args text] expected :problem} rows
             :let [story-world (on-branch-1 (merge {:commits ["feat(GH-1): earlier"]} world))
                   result      (apply kit-finish story-world variables "--add" "page.html" args)]]
@@ -234,7 +236,8 @@
         pushed (on-branch-1 {:commits ["feat(GH-1): add landing page"]})
         again  (kit-finish pushed variables "--no-commit" "--pr-body-file" (file-with "Body"))]
     (is (= :finish/nothing-staged (problem result)) "with nothing staged the finish stops")
-    (is (str/includes? (said result) "Nothing staged to commit (use --add <path>, or --no-commit)") "and says how")
+    (is (str/includes? (said result) "Nothing staged to commit. Fix: use --add <path> to stage files, or --no-commit")
+        "and says how")
     (is (empty? (fake/remote-branches world)) "nothing is pushed")
     (is (= :ok (::steps/status again)) "--no-commit goes on")
     (is (= ["feat(GH-1): add landing page"] (fake/commits pushed)) "it commits nothing more")
@@ -278,7 +281,7 @@
     (is (= :finish/status-refused (problem result)) "the finish stops")
     (is (str/includes? (said result) "The pull request is open: https://github.com/o/r/pull/2.") "and names the PR")
     (is (str/includes? (said result) "But the board Status of #1 is not 'In review'") "and the status")
-    (is (str/includes? (said result) "Set it alone: bb bin/kit board set 3 u473t8 https://github.com/o/r/issues/1")
+    (is (str/includes? (said result) "Fix: set it alone: bb bin/kit board set 3 u473t8 https://github.com/o/r/issues/1")
         "and how to set it alone")
     (is (some? (the-pr world)) "the PR is open")))
 
