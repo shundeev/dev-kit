@@ -4,7 +4,10 @@
   built from it, so a flag cannot be in the code and not in the help. Requires nothing but babashka.cli: it is
   loaded for every command, among them the hook that runs on every edit, so it must stay light.
   A flag with a value is `:coerce :string` (else `--title` at the end of the line becomes true); a spec is a
-  vector of pairs (else help lists the flags in no order).")
+  vector of pairs (else help lists the flags in no order).
+  A flag is the only layer this tree owns: a value left out (the board, the owner, the base, the Status names) is
+  filled by the command's read-input from the folder's kit.edn, then the GHWF_* environment, then its default, which
+  the flag's :default-desc names. The tree checks a choice (:enum) and a required option; no recipe checks them again.")
 
 
 (def repo
@@ -123,7 +126,101 @@
      [:skip-retro
       {:coerce :boolean
        :desc
-       "Start although a merged issue lacks its retrospective. Only the owner waives this: a permission rule asks them first (#56)"}]]}])
+       "Start although a merged issue lacks its retrospective. Only the owner waives this: a permission rule asks them first (#56)"}]]}
+   {:cmds ["finish"]
+    :doc
+    "Commit what is staged, push, open the pull request and set the card to In review. Never merges: that is kit merge.
+
+Run it from the issue branch (<number>-<slug>, made by kit start). It commits what is staged, or the --add paths.
+
+Where main of the repository holds .github/workflows/ready-when-green.yml (ADR-0007), the pull request opens as a draft: GitHub asks the owners for a review only when that workflow marks it ready, once the required checks have passed, and it turns auto-merge on then. Elsewhere the pull request opens ready, with auto-merge on, and the owners are asked at once.
+
+Subjects follow Conventional Commits with the issue in the scope, feat(GH-12): add landing page. GitHub appends the pull request's number on squash."
+    :spec
+    [[:type
+      {:coerce       :string
+       :enum         ["feat" "fix" "docs" "refactor" "test" "perf" "build" "ci" "chore"]
+       :desc         "Commit type of the subject"
+       :default-desc "the type of the branch's first commit, else feat"}]
+     [:summary
+      {:coerce       :string
+       :desc         "Subject text after \"type(GH-n): \""
+       :default-desc "the issue's title"}]
+     [:commit-message-file
+      {:coerce :string
+       :desc   "Full commit message (subject, body, trailers); overrides --summary for the commit"}]
+     [:pr-body-file
+      {:coerce :string
+       :desc
+       "The pull request's description. Required when the pull request is opened. Must contain a line \"ADR: none\" or \"ADR: adr/NNNN-....md\". \"Closes #<issue>\" is added if missing, \"Part of #<issue>\" for an issue of size L (it has several pull requests)"}]
+     [:last
+      {:coerce :boolean
+       :desc
+       "The last pull request of an issue of size L: it says \"Closes #<issue>\", and kit merge closes the issue. Harmless on any other size, which says \"Closes\" anyway"}]
+     [:add {:coerce [:string] :desc "Stage this path before committing (repeatable)"}]
+     [:hold
+      {:coerce :boolean
+       :desc
+       "Open the pull request with the label hold, for one that overlaps a pull request still waiting: the workflow leaves it a draft until kit release. Needs the ready workflow on main"}]
+     [:no-commit
+      {:coerce :boolean :desc "Commit nothing; push and open the pull request for commits already on the branch"}]
+     repo
+     [:owner {:coerce :string :desc "Board owner" :default-desc "the folder's kit.edn"}]
+     [:project-number {:coerce :string :desc "Board number" :default-desc "the folder's kit.edn"}]
+     [:base {:coerce :string :desc "The pull request's base branch" :default-desc "the folder's kit.edn"}]
+     [:status-field {:coerce :string :desc "Name of the Status field" :default-desc "Status"}]
+     [:review-status {:coerce :string :desc "Status option to set" :default-desc "In review"}]]}
+   {:cmds ["release"]
+    :doc
+    "Free a held pull request: remove the label hold, mark it ready and turn auto-merge on.
+
+For a pull request held with the label hold (kit finish --hold), once the pull request it waited for has merged: removes the label, marks it ready (GitHub then asks the owners for a review) and turns on auto-merge (ADR-0007). It also frees a draft that was never held but that nothing marked ready. It refuses, naming the check and changing nothing, while a required check on the pull request's head is not green."
+    :spec
+    [[:pr
+      {:coerce :string :desc "The pull request, a number or a URL" :default-desc "the open one of the current branch"}]
+     repo]}
+   {:cmds ["merge"]
+    :doc
+    "After the owner's Approve: merge the pull request, close the issue out and clean up.
+
+Run it from the issue branch, as a background command: the agent is woken when it exits. When the pull request is open, it needs the owner's Approve of the latest commit. A branch behind the base is updated by merging the base into it, which keeps the approval. It turns on auto-merge (squash) and waits until GitHub reports the pull request MERGED, or until merging became impossible (closed, a required check failed, DIRTY, the approval gone); it then stops and names the reason.
+
+When GitHub already merged it, only the closeout runs: board Status \"Done\", the branch deleted locally and on GitHub, back to the base branch; each issue the pull request closes that is still open is closed as completed (auto-merge merges as github-actions, and GitHub then closes none). An issue of size L is closed only when the pull request's body says \"Closes #<issue>\" (kit finish --last writes it); otherwise it stays open, its card keeps its Status, and a line says so. A pull request that did not merge keeps its branch."
+    :epilog "Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else bounds the wait."
+    :spec [repo
+           [:owner {:coerce :string :desc "Board owner" :default-desc "the folder's kit.edn"}]
+           [:project-number {:coerce :string :desc "Board number" :default-desc "the folder's kit.edn"}]
+           [:base {:coerce :string :desc "The pull request's base branch" :default-desc "the folder's kit.edn"}]
+           [:status-field {:coerce :string :desc "Name of the Status field" :default-desc "Status"}]
+           [:done-status {:coerce :string :desc "Status option to set" :default-desc "Done"}]]}
+   {:cmds ["checks"]
+    :doc
+    "Wait until the pull request's required checks have finished and say how they ended.
+
+Waits until the checks the base branch requires exist on the pull request's head commit and have finished, and, where the base has the ready workflow, until that workflow has decided (ADR-0007). The checks are read from the base's rulesets (classic branch protection needs admin to read); a base that requires none ends it at once. Run it as a background command: the agent is woken when it exits.
+
+exit 0  every required check passed, or the base requires none. Where the base has the ready workflow, it also waits for the completion of that workflow's run for this head (not for the pull request to leave draft: its review request and auto-merge come after) and reports the pull request's state: ready (owners asked, auto-merge on), held (the label hold: kit release), or still a draft (the run's own decision line)
+exit 1  a required check failed (or was cancelled): each is named with its link, at once
+exit 2  no result: the pull request was closed or merged, its head moved (a push: the new commit's checks are the ones to await; run it again), or gh could not be read (its message is printed)"
+    :epilog "Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else bounds the wait."
+    :spec [[:pr {:coerce :string :desc "The pull request" :default-desc "the open one of the current branch"}]
+           repo]}
+   {:cmds ["review"]
+    :doc
+    "The owner's latest review of the pull request and the review threads still open; with --wait, after the owner's next review.
+
+Prints the owner's latest review of the pull request (its state, time and text) and every review thread that is still unresolved: where it is, and each comment as author: text. The owner is GHWF_HUMAN, the person's own login on this machine; reviews by anyone else, the agent's own replies included, are not theirs.
+
+With --wait it ends once the owner has a review submitted after the agent last gave the pull request back: the later of the head commit's date and the latest review by the account running kit (its thread replies are reviews too). A review of the owner's already after that is reported at once, so one submitted before the command started is not missed; any state counts (approved, changes requested, commented). It looks every poll period and prints as above. Run it as a background command: the agent is woken when it exits. Nothing bounds the wait.
+
+exit 0  the review was printed (with --wait: a newer one came)
+exit 1  GHWF_HUMAN is not set, or the pull request merged or closed while waiting: no review is coming
+exit 2  gh could not be read (its message is printed)"
+    :epilog
+    "Environment: GHWF_HUMAN, the owner's login (kit init or kit identity set it); GHWF_MERGE_POLL, seconds between looks (default 10)."
+    :spec [[:pr {:coerce :string :desc "The pull request" :default-desc "the open one of the current branch"}]
+           repo
+           [:wait {:coerce :boolean :desc "Wait for a review of the owner's after the last hand-back"}]]}])
 
 
 (def dispatch-options

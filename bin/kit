@@ -2,8 +2,7 @@
 ;; dev-kit: lays out and checks the shared setup of a project that mounts dev-kit at .shared
 ;;
 ;; The commands and their options are the tree in src/dev_kit/cli.clj, and `kit --help` and `kit <command> --help`
-;; print them from it. finish, release, merge, checks and review still read their own command line (#139); each
-;; prints its help with --help.
+;; print them from it.
 ;;
 ;; Two kinds of files:
 ;;   scaffold — created once if missing, then owned by the project (kit.edn, LICENSE, the

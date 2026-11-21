@@ -40,13 +40,6 @@
         (is (= "https://x/1" (shell/gh! "pr" "list")))))))
 
 
-(deftest an-unknown-flag-is-refused-with-what-to-do
-  (let [problem (refusal #(shell/parse-opts {"--pr" [:pr :value]} ["--bogus"]))]
-    (is (= :flow/unknown-argument (:problem problem)))
-    (is (= "Unknown argument: --bogus" (:message problem)))
-    (is (string? (:fix problem)))))
-
-
 ;; what passes (#139, step 8)
 
 

@@ -15,17 +15,17 @@
 
 
 (defn main
-  "kit start | finish | release | merge | checks | review | board show | board set, by the command's words. A
-  command in the command tree (dev-kit.cli) is given its parsed options, one not yet there its raw arguments.
-  Returns 0 when the command went through; a refusal is thrown as a problem, for kit's one edge to print."
-  [command args opts]
+  "kit start | finish | release | merge | checks | review | board show | board set, by the command's words, given the
+  options the command tree (dev-kit.cli) parsed. Returns 0 when the command went through; a refusal is thrown as a
+  problem, for kit's one edge to print."
+  [command opts]
   (case command
     ["start"]        (start/start! opts)
+    ["finish"]       (finish/finish! opts)
+    ["release"]      (release/release! opts)
+    ["merge"]        (merge/merge! opts)
+    ["checks"]       (checks/checks! opts)
+    ["review"]       (review/review! opts)
     ["board" "set"]  (board/set-field! opts)
-    ["board" "show"] (board/show!)
-    ["finish"]       (finish/finish! args)
-    ["release"]      (release/release! args)
-    ["merge"]        (merge/merge! args)
-    ["checks"]       (checks/checks! args)
-    ["review"]       (review/review! args))
+    ["board" "show"] (board/show!))
   0)

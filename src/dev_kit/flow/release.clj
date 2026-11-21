@@ -12,30 +12,6 @@
 ;; ------------------------------------------------------------------ kit release
 
 
-(def release-usage
-  "Usage: kit release [options]
-
-For a pull request held with the label hold (kit finish --hold), once the PR it waited for has
-merged: removes the label, marks the PR ready (GitHub then asks the owners for a review) and
-turns on auto-merge (ADR-0007). It also frees a draft that was never held but that nothing marked ready. It refuses,
-naming the check and changing nothing, while a required check on the PR's head is not green.
-
-Options:
-  --pr <number|url>             The pull request (default: the open PR of the current branch)
-  --repo <owner/repo>           Default: the folder's origin on GitHub, then GHWF_REPO
-  --help                        Show this help")
-
-
-(def release-spec
-  {"--pr" [:pr :value] "--repo" [:repo :value] "--help" [:help :flag] "-h" [:help :flag]})
-
-
-(defn read-input
-  "The command line as one map. kit release reads no GHWF_* variable, so there is no env."
-  [args]
-  (shell/parse-opts release-spec args))
-
-
 (defn- resolve-repo
   "The repository the run works in."
   [{:keys [repo]}]
@@ -167,10 +143,7 @@ Options:
 
 
 (defn release!
-  "kit release: read the command line, run the recipe on the real GitHub, print what it did, or throw the refusal, which the flow's edge prints."
-  [args]
-  (let [input (read-input args)]
-    (if (:help input)
-      (println release-usage)
-      (let [result (steps/complete! (release input))]
-        (println (format "Released: %s" (:url result)))))))
+  "kit release: run the recipe on the real GitHub for the parsed options, print what it did, or throw the refusal, which the flow's edge prints. kit release reads no GHWF_* variable."
+  [opts]
+  (let [result (steps/complete! (release opts))]
+    (println (format "Released: %s" (:url result)))))

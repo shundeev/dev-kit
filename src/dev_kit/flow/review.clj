@@ -12,47 +12,13 @@
    [dev-kit.problem :as problem]))
 
 
-(def review-usage
-  "Usage: kit review [options]
-
-Prints the owner's latest review of the pull request (its state, time and text) and every review thread that is still
-unresolved: where it is, and each comment as author: text. The owner is GHWF_HUMAN, the person's own login on this
-machine; reviews by anyone else, the agent's own replies included, are not theirs.
-
-With --wait it ends once the owner has a review submitted after the agent last gave the pull request back: the later of
-the head commit's date and the latest review by the account running kit (its thread replies are reviews too). A review
-of the owner's already after that is reported at once, so one submitted before the command started is not missed; any
-state counts (approved, changes requested, commented). It looks every poll period and prints as above. Run it as a
-background command: the agent is woken when it exits. Nothing bounds the wait.
-
-  exit 0  the review was printed (with --wait: a newer one came)
-  exit 1  GHWF_HUMAN is not set, or the pull request merged or closed while waiting: no review is coming
-  exit 2  gh could not be read (its message is printed)
-
-Options:
-  --pr <number>                 The pull request (default: the open one of the current branch)
-  --repo <owner/repo>           Default: the folder's origin on GitHub, then GHWF_REPO
-  --wait                        Wait for a review of the owner's after the last hand-back
-  --help                        Show this help
-
-Environment: GHWF_HUMAN, the owner's login (kit init or kit identity set it); GHWF_MERGE_POLL, seconds between looks
-(default 10).")
-
-
-(def review-spec
-  {"--pr" [:pr :value] "--repo" [:repo :value] "--wait" [:wait :flag] "--help" [:help :flag] "-h" [:help :flag]})
-
-
 (defn read-input
-  "The command line and the GHWF_* variables kit review reads, as one map; env is (fn [name default])."
-  [args env]
-  (let [o (shell/parse-opts review-spec args)]
-    (if (:help o)
-      o
-      (assoc o
-             :human        (env "GHWF_HUMAN" nil)
-             :poll-text    (env "GHWF_MERGE_POLL" "10")
-             :default-base (env "GHWF_DEFAULT_BASE" "main")))))
+  "The options of the command line and the GHWF_* variables kit review reads, as one map; env is (fn [name default])."
+  [opts env]
+  (assoc opts
+         :human        (env "GHWF_HUMAN" nil)
+         :poll-text    (env "GHWF_MERGE_POLL" "10")
+         :default-base (env "GHWF_DEFAULT_BASE" "main")))
 
 
 (defn- check-owner
@@ -282,9 +248,6 @@ Environment: GHWF_HUMAN, the owner's login (kit init or kit identity set it); GH
 
 
 (defn review!
-  [args]
-  (let [input (read-input args shell/env)]
-    (if (:help input)
-      (println review-usage)
-      (let [result (steps/complete! (review input))]
-        (run! println (report-lines result))))))
+  [opts]
+  (let [result (steps/complete! (review (read-input opts shell/env)))]
+    (run! println (report-lines result))))

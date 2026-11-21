@@ -13,43 +13,6 @@
 ;; ------------------------------------------------------------------ kit merge
 
 
-(def merge-usage
-  "Usage: kit merge [options]
-
-Run from the issue branch, as a background command: the agent is woken when it exits. When the pull
-request is open, it needs the owner's Approve of the latest commit. A branch behind the base is
-updated by merging the base into it, which keeps the approval. It turns on auto-merge (squash) and
-waits until GitHub reports the pull request MERGED, or until merging became impossible (closed, a
-required check failed, DIRTY, the approval gone); it then stops and names the reason.
-When GitHub already merged it, only the closeout runs: board Status \"Done\", the branch deleted
-locally and on GitHub, back to the base branch; each issue the PR closes that is still open is closed as completed
-(auto-merge merges as github-actions, and GitHub then closes none). An issue of size L is closed only when the PR's
-body says \"Closes #<issue>\" (kit finish --last writes it); otherwise it stays open, its card keeps its Status, and
-a line says so. A pull request that did not merge keeps its branch.
-
-Options:
-  --repo <owner/repo>           Default: the folder's origin on GitHub, then GHWF_REPO
-  --owner <login>               Board owner (default: GHWF_OWNER)
-  --project-number <number>     Board number (default: GHWF_PROJECT_NUMBER)
-  --base <branch>               Default: GHWF_DEFAULT_BASE or main
-  --status-field <name>         Default: GHWF_STATUS_FIELD or Status
-  --done-status <option>        Default: Done
-  --help                        Show this help
-
-Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else bounds the wait.")
-
-
-(def merge-spec
-  {"--repo"        [:repo :value]
-   "--owner"       [:owner :value]
-   "--project-number" [:project-number :value]
-   "--base"        [:base :value]
-   "--status-field" [:status-field :value]
-   "--done-status" [:done-status :value]
-   "--help"        [:help :flag]
-   "-h"            [:help :flag]})
-
-
 ;; ------------------------------------------------------------------ the branch and its pull request
 
 
@@ -419,18 +382,15 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 
 
 (defn read-input
-  "The command line and the GHWF_* defaults as one map; env is (fn [name default]), shell/env in a run."
-  [args env]
-  (let [opts (shell/parse-opts merge-spec args)]
-    (if (:help opts)
-      opts
-      (assoc opts
-             :owner          (or (:owner opts) (env "GHWF_OWNER" nil))
-             :project-number (or (:project-number opts) (env "GHWF_PROJECT_NUMBER" nil))
-             :base           (or (:base opts) (env "GHWF_DEFAULT_BASE" "main"))
-             :status-field   (or (:status-field opts) (env "GHWF_STATUS_FIELD" "Status"))
-             :done-status    (or (:done-status opts) (env "GHWF_DONE_STATUS" "Done"))
-             :merge-poll     (env "GHWF_MERGE_POLL" "10")))))
+  "The options of the command line and the GHWF_* defaults as one map; env is (fn [name default]), shell/env in a run."
+  [opts env]
+  (assoc opts
+         :owner          (or (:owner opts) (env "GHWF_OWNER" nil))
+         :project-number (or (:project-number opts) (env "GHWF_PROJECT_NUMBER" nil))
+         :base           (or (:base opts) (env "GHWF_DEFAULT_BASE" "main"))
+         :status-field   (or (:status-field opts) (env "GHWF_STATUS_FIELD" "Status"))
+         :done-status    (or (:done-status opts) (env "GHWF_DONE_STATUS" "Done"))
+         :merge-poll     (env "GHWF_MERGE_POLL" "10")))
 
 
 (defn print-result
@@ -442,10 +402,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 
 
 (defn merge!
-  "kit merge: read the command line, run the recipe on the real GitHub, print what it did, or throw the refusal, which the
+  "kit merge: run the recipe on the real GitHub for the parsed options, print what it did, or throw the refusal, which the
   flow's edge prints (a board error comes last, after the closeout)."
-  [args]
-  (let [input (read-input args shell/env)]
-    (if (:help input)
-      (println merge-usage)
-      (print-result (steps/complete! (merge-pr input))))))
+  [opts]
+  (print-result (steps/complete! (merge-pr (read-input opts shell/env)))))

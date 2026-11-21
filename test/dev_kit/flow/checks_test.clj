@@ -25,7 +25,8 @@
   those during the wait and the end) and how it ended: :exit and :text of a refusal (0 and nil when it passed)."
   [world variables & args]
   (let [out     (java.io.StringWriter.)
-        input   (checks/read-input (vec args) (fn [variable default] (get variables variable default)))
+        input   (checks/read-input (fake/options-of "checks" args)
+                                   (fn [variable default] (get variables variable default)))
         result  (binding [*out* out]
                   (fake/with-github world
                                     (fn []

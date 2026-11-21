@@ -745,7 +745,7 @@ grep -q '^  FAIL' <<<"$LAST" && ok "  the gate's lines keep their indent" || bad
 [ "$(head_now)" = "$before" ] && ok "  nothing committed" || bad "  committed anyway"
 printf '## What changed\n- x\n\n## Review\nLooked at it.\n\n## User-level test\nRan it.\n\nADR: none\n' > "$WORK/body.md"
 expect_exit 1 "finish: a type outside Conventional Commits stops before the commit" flow finish --type update --pr-body-file "$WORK/body.md"
-contains "  names the way out" "pass --type" "$LAST"
+contains "  names the choices" "Expected one of: feat" "$LAST"
 [ "$(head_now)" = "$before" ] && ok "  nothing committed" || bad "  committed anyway"
 flow_rh() { GHWF_REVIEWERS=shundeev/owners GHWF_HUMAN=the-human flow "$@"; }
 : > "$FAKE_GH_LOG"
@@ -814,8 +814,8 @@ git ls-remote --exit-code --heads origin 12-landing >/dev/null 2>&1 && bad "  re
 unscript
 git switch -q --detach origin/main
 
-# #137: in dev-kit itself, a branch whose bin/flow.clj is older than the base's runs the base's kit merge, and says so;
-# a project (the kit at .shared, no kit-defaults.edn at its root) runs its own. The marker is printed by the base's version.
+# #137: in dev-kit itself, a branch whose code is older than the base's runs the base's kit merge, and says so;
+# a project (the kit at .shared, no kit-defaults.edn at its root) runs its own. The marker is printed by the base's bin/kit.
 K137="$WORK/k137"; git init -q --bare -b main "$WORK/k137-remote.git"; mkdir -p "$K137"
 git -C "$K137" init -q -b main; git -C "$K137" remote add origin "$WORK/k137-remote.git"
 # The whole code tree, as the base holds it: bin/, src/ (once there) and kit-defaults.edn (#141).
@@ -823,7 +823,7 @@ code137=(bin kit-defaults.edn); [ -d "$KIT/src" ] && code137+=(src)
 (cd "$KIT" && tar -cf - "${code137[@]}") | (cd "$K137" && tar -xf -)
 git -C "$K137" add -A; git -C "$K137" commit -qm "chore: old kit"; git -C "$K137" push -q -u origin main
 git -C "$K137" switch -q -c 137-old
-git -C "$K137" switch -q main; echo '(println "BASE-MARKER 137")' >> "$K137/bin/flow.clj"
+git -C "$K137" switch -q main; sed -i '1a (println "BASE-MARKER 137")' "$K137/bin/kit"
 git -C "$K137" commit -qam "feat: newer flow"; git -C "$K137" push -q origin main; git -C "$K137" switch -q 137-old
 cd "$K137" || exit 1; expect_exit 0 "merge in dev-kit: a branch older than the base runs the base's version" bb bin/kit merge --help; cd "$T" || exit 1
 contains "  the base's code ran" "BASE-MARKER 137" "$LAST"

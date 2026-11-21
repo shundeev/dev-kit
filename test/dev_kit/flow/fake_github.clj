@@ -16,7 +16,8 @@
    [dev-kit.flow.review :as review]
    [dev-kit.flow.shell :as shell]
    [dev-kit.flow.start :as start]
-   [dev-kit.flow.wait :as wait]))
+   [dev-kit.flow.wait :as wait]
+   [dev-kit.main :as main]))
 
 
 (def ^:private known-options
@@ -794,6 +795,12 @@
           [v
            (fn [& args]
              (throw (AssertionError. (str "the story reached the real world: " label " " (str/join " " args)))))])))
+
+
+(defn options-of
+  "The options a flow command receives from the words typed after it, read against the command tree as kit reads them."
+  [command args]
+  (:opts (main/command-line (into [command] args))))
 
 
 (defn with-github

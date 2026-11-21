@@ -41,7 +41,8 @@
   [world env & args]
   (let [out    (java.io.StringWriter.)
         err    (java.io.StringWriter.)
-        input  (merge-cmd/read-input (vec args) (fn [variable default] (get (merge variables env) variable default)))
+        input  (merge-cmd/read-input (fake/options-of "merge" args)
+                                     (fn [variable default] (get (merge variables env) variable default)))
         result (binding [*out* out
                          *err* err]
                  (let [result (fake/with-github world #(merge-cmd/merge-pr input))]
@@ -398,7 +399,7 @@
   "kit merge against the world, where GitHub merges the pull request between its first look and its second."
   [world]
   (let [reads (atom 0)
-        input (merge-cmd/read-input [] (fn [variable default] (get variables variable default)))]
+        input (merge-cmd/read-input {} (fn [variable default] (get variables variable default)))]
     (binding [*out* (java.io.StringWriter.)]
       (fake/with-github world
                         #(let [read-pr github/read-pr]

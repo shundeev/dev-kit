@@ -27,7 +27,8 @@
   and the pauses (:slept)."
   [world variables & args]
   (let [out     (java.io.StringWriter.)
-        input   (review/read-input (vec args) (fn [variable default] (get variables variable default)))
+        input   (review/read-input (fake/options-of "review" args)
+                                   (fn [variable default] (get variables variable default)))
         result  (binding [*out* out]
                   (fake/with-github world #(review/review input)))
         refusal (when (= :fail (::steps/status result))

@@ -206,16 +206,24 @@
   0)
 
 
+(def ^:private merge-spec
+  (:spec (first (filter #(= ["merge"] (:cmds %)) cli/tree))))
+
+
 (defn newer-merge!
   "In dev-kit's own repository (its root holds kit-defaults.edn), a branch's older kit code must not run the closeout
   (#137, #132): when origin's base holds other code (bin/, src/ and kit-defaults.edn, compared as a tree, so a change
   in any module counts, #141), `kit merge` runs the base's, extracted whole to a temporary folder, and says so.
   Projects mount the kit at .shared, pinned on main: nothing changes there. Only a kit run from the repository's own
   checkout compares: the extracted copy runs from its temporary folder, so it runs itself instead of extracting again.
+  The line is the one thing read before this version's tree reads it: the base's kit is what judges a `kit merge` it
+  runs, help and a mistake included, so during the transition an older base reads the line its own way and a newer one
+  against its own tree. Only --base is looked at here, with the tree's spec for merge.
   Returns the exit code of the base's run, or nil when this version is the one to run."
-  [args]
-  (let [top         (base/sh-in (fs/cwd) "git" "rev-parse" "--show-toplevel")
-        base-branch (or (second (drop-while #(not= "--base" %) args)) (System/getenv "GHWF_DEFAULT_BASE") "main")
+  [argv]
+  (let [base        (:base (babashka-cli/parse-opts (rest argv) {:spec merge-spec :error-fn (fn [_] nil)}))
+        top         (base/sh-in (fs/cwd) "git" "rev-parse" "--show-toplevel")
+        base-branch (or base (System/getenv "GHWF_DEFAULT_BASE") "main")
         base-ref    (str "origin/" base-branch)
         code        ["bin" "src" "kit-defaults.edn"]]
     (when (and top
@@ -234,19 +242,16 @@
                         "'s version ("
                         (base/sh-in top "git" "rev-parse" "--short" base-ref)
                         "), newer than this branch's"))
-          (:exit @(apply p/process {:inherit true} "bb" (str (fs/path tmp "bin" "kit")) "merge" args))
+          (:exit @(apply p/process {:inherit true} "bb" (str (fs/path tmp "bin" "kit")) "merge" (rest argv)))
           (finally (fs/delete-tree tmp)))))))
 
 
 (defn flow!
-  "kit start, finish, merge, checks, review and board: the delivery flow's GitHub steps, in bin/flow.clj (#95). The
-  command's words, its raw arguments (for a command not yet in the command tree) and its parsed options. The exit
-  code of the command: the base's run of kit merge (newer-merge!), or the flow's own."
-  [command args opts]
-  (or (when (= ["merge"] command)
-        (newer-merge! args))
-      (do (load-file (str (fs/path base/kit-dir "bin" "flow.clj")))
-          ((resolve 'flow/main) command args opts))))
+  "kit start, finish, release, merge, checks, review and board: the delivery flow's GitHub steps, in bin/flow.clj
+  (#95). The command's words and its parsed options. The exit code of the command."
+  [command opts]
+  (load-file (str (fs/path base/kit-dir "bin" "flow.clj")))
+  ((resolve 'flow/main) command opts))
 
 
 (defn retro!
@@ -273,11 +278,6 @@
     (flush)))
 
 
-(def ^:private flow-commands-outside-the-tree
-  "The flow commands that still read their own command line (step 5 of #139 moves them into the tree)."
-  #{"finish" "merge" "release" "checks" "review"})
-
-
 (defn- run-parsed
   "The command of a parsed command line, called by its words. Returns what the command returns."
   [{:keys [dispatch opts]}]
@@ -288,26 +288,25 @@
      (str "dev-kit must be mounted at <project>/" base/mount "; " base/root " is not a git repository root")
      {:fix (str "run kit from the project's root, where " base/mount " is a submodule")}))
   (case dispatch
-    ["init"]         (if (:local opts)
-                       (commands/init-local)
-                       (commands/init opts))
-    ["doctor"]       (commands/doctor opts)
-    ["modules"]      (let [cfg (config/read-config)]
-                       (println (str "clojure=" (boolean (some-> cfg config/clojure?))))
-                       (println (str "user_test=" (boolean (get-in cfg [:user-test :run]))))
-                       (println (str "user_test_artifacts=" (or (get-in cfg [:user-test :artifacts]) ""))))
-    ["user-test"]    (config/user-test!)
-    ["identity"]     (commands/identity! opts)
-    ["github"]       (github/github! opts)
-    ["gate"]         (gate/gate! opts)
-    ["retro"]        (retro! opts)
-    ["sync"]         (if (:after-git opts)
-                       (after-git!)
-                       (sync!))
-    ["hook"]         (hook! opts)
-    ["start"]        (flow! dispatch nil opts)
-    ["board" "set"]  (flow! dispatch nil opts)
-    ["board" "show"] (flow! dispatch nil opts)))
+    ["init"]      (if (:local opts)
+                    (commands/init-local)
+                    (commands/init opts))
+    ["doctor"]    (commands/doctor opts)
+    ["modules"]   (let [cfg (config/read-config)]
+                    (println (str "clojure=" (boolean (some-> cfg config/clojure?))))
+                    (println (str "user_test=" (boolean (get-in cfg [:user-test :run]))))
+                    (println (str "user_test_artifacts=" (or (get-in cfg [:user-test :artifacts]) ""))))
+    ["user-test"] (config/user-test!)
+    ["identity"]  (commands/identity! opts)
+    ["github"]    (github/github! opts)
+    ["gate"]      (gate/gate! opts)
+    ["retro"]     (retro! opts)
+    ["sync"]      (if (:after-git opts)
+                    (after-git!)
+                    (sync!))
+    ["hook"]      (hook! opts)
+    (["start"] ["finish"] ["release"] ["merge"] ["checks"] ["review"] ["board" "set"] ["board" "show"])
+    (flow! dispatch opts)))
 
 
 (defn run
@@ -316,10 +315,10 @@
   printing it."
   [argv]
   (try
-    (let [result (if (flow-commands-outside-the-tree (first argv))
-                   (flow! [(first argv)] (rest argv) nil)
-                   (some-> (command-line argv)
-                           run-parsed))]
+    (let [result (or (when (= "merge" (first argv))
+                       (newer-merge! argv))
+                     (some-> (command-line argv)
+                             run-parsed))]
       (if (integer? result) result 0))
     (catch clojure.lang.ExceptionInfo e
       (if-let [data (ex-data e)]

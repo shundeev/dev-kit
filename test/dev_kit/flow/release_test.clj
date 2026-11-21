@@ -4,10 +4,11 @@
   (:require
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
+   [dev-kit.fake-project :as project]
    [dev-kit.flow.fake-github :as fake]
-   [dev-kit.flow.main :as flow]
    [dev-kit.flow.release :as release]
-   [dev-kit.flow.steps :as steps]))
+   [dev-kit.flow.steps :as steps]
+   [dev-kit.main :as main]))
 
 
 (def ^:private green [{:name "lint" :bucket "pass" :link "l"} {:name "docs" :bucket "skipping" :link "d"}])
@@ -27,7 +28,7 @@
         err    (java.io.StringWriter.)
         result (binding [*out* out
                          *err* err]
-                 (fake/with-github world #(release/release (release/read-input (vec args)))))]
+                 (fake/with-github world #(release/release (fake/options-of "release" args))))]
     (assoc result
            :printed  (lines out)
            :warnings (lines err))))
@@ -130,17 +131,10 @@
           named))))
 
 
-(deftest the-command-line-names-the-repository-and-asks-for-help
-  (is (= "owner/name" (:repo (release/read-input ["--repo" "owner/name"]))))
-  (is (true? (:help (release/read-input ["--help"]))))
-  (is (true? (:help (release/read-input ["-h"])))))
-
-
 ;; Stories moved from the selftest's flow sections (#139 step 8).
 
 
 (deftest the-help-says-the-release-covers-a-draft-that-was-never-held
-  (let [out  (java.io.StringWriter.)
-        exit (binding [*out* out] (flow/main ["release"] ["--help"] nil))]
-    (is (= 0 exit))
-    (is (str/includes? (str out) "never held"))))
+  (let [{:keys [result out]} (project/captured #(main/run ["release" "--help"]))]
+    (is (= 0 result))
+    (is (str/includes? out "never held"))))

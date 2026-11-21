@@ -15,65 +15,6 @@
 ;; ------------------------------------------------------------------ kit finish
 
 
-(def finish-usage
-  "Usage: kit finish [options]
-
-Run from the issue branch (<number>-<slug>, made by kit start).
-
-Commits what is staged (or the --add paths), pushes, opens the pull request and sets the
-board Status to \"In review\". Never merges: merging is kit merge.
-
-Where main of the repository holds .github/workflows/ready-when-green.yml (ADR-0007), the PR
-opens as a draft: GitHub asks the owners for a review only when that workflow marks it ready,
-once the required checks have passed, and it turns auto-merge on then. Elsewhere the PR opens
-ready, with auto-merge on, and the owners are asked at once.
-
-Subjects follow Conventional Commits with the issue in the scope:
-  feat(GH-12): add landing page
-GitHub appends the PR number on squash: \"feat(GH-12): add landing page (#13)\".
-
-Options:
-  --type <type>                 feat|fix|docs|refactor|test|perf|build|ci|chore (default: the type of
-                                the branch's first commit, else feat)
-  --summary <text>              Subject text after \"type(GH-n): \" (default: the issue title)
-  --commit-message-file <path>  Full commit message (subject, body, trailers); overrides --summary for the commit
-  --pr-body-file <path>         PR description. Required when the PR is opened. Must contain a line
-                                \"ADR: none\" or \"ADR: adr/NNNN-....md\". \"Closes #<issue>\" is added if missing,
-                                \"Part of #<issue>\" for an issue of size L (it has several pull requests)
-  --last                        The last pull request of an issue of size L: it says \"Closes #<issue>\", and kit merge
-                                closes the issue. Harmless on any other size, which says \"Closes\" anyway
-  --add <path>                  Stage this path before committing (repeatable)
-  --hold                        Open the PR with the label hold, for a PR that overlaps one still waiting: the
-                                workflow leaves it a draft until kit release. Needs the ready workflow on main
-  --no-commit                   Commit nothing; push and open the PR for commits already on the branch
-  --repo <owner/repo>           Default: the folder's origin on GitHub, then GHWF_REPO
-  --owner <login>               Board owner (default: GHWF_OWNER)
-  --project-number <number>     Board number (default: GHWF_PROJECT_NUMBER)
-  --base <branch>               Default: GHWF_DEFAULT_BASE or main
-  --status-field <name>         Default: GHWF_STATUS_FIELD or Status
-  --review-status <option>      Default: In review
-  --help                        Show this help")
-
-
-(def finish-spec
-  {"--type"          [:type :value]
-   "--summary"       [:summary :value]
-   "--commit-message-file" [:message-file :value]
-   "--pr-body-file"  [:body-file :value]
-   "--add"           [:add :many]
-   "--no-commit"     [:no-commit :flag]
-   "--hold"          [:hold :flag]
-   "--last"          [:last-pr :flag]
-   "--repo"          [:repo :value]
-   "--owner"         [:owner :value]
-   "--project-number" [:project-number :value]
-   "--base"          [:base :value]
-   "--status-field"  [:status-field :value]
-   "--review-status" [:review-status :value]
-   "--help"          [:help :flag]
-   "-h"              [:help :flag]})
-
-
 (defn- request-auto-merge
   "Auto-merge (squash) on a ready PR; a repository that does not allow it gets a warning with the fix."
   [pr-url]
@@ -132,16 +73,16 @@ Options:
 (defn- check-files
   "Everything that can be wrong with the inputs is checked before the commit and the push: a run that dies after the
   push leaves a branch with no pull request and a confusing rerun."
-  [{:keys [body-file message-file]}]
-  (when (and body-file (not (fs/readable? body-file)))
+  [{:keys [pr-body-file commit-message-file]}]
+  (when (and pr-body-file (not (fs/readable? pr-body-file)))
     (problem/fail! :finish/no-body-file
-                   (format "PR body file '%s' not found" body-file)
+                   (format "PR body file '%s' not found" pr-body-file)
                    {:fix
                     "write the pull request's description to that file, or pass the right path to --pr-body-file"}))
-  (when (and message-file (not (fs/readable? message-file)))
+  (when (and commit-message-file (not (fs/readable? commit-message-file)))
     (problem/fail! :finish/no-message-file
-                   (format "Commit message file '%s' not found" message-file)
-                   {:fix "write the commit message to that file, or pass the right path to --message-file"}))
+                   (format "Commit message file '%s' not found" commit-message-file)
+                   {:fix "write the commit message to that file, or pass the right path to --commit-message-file"}))
   {})
 
 
@@ -153,8 +94,8 @@ Options:
 
 (defn- check-body-file
   "A PR to open needs its description."
-  [{:keys [pr-url body-file]}]
-  (when-not (or pr-url body-file)
+  [{:keys [pr-url pr-body-file]}]
+  (when-not (or pr-url pr-body-file)
     (problem/fail!
      :finish/body-file-required
      "--pr-body-file is required to open the pull request"
@@ -174,23 +115,23 @@ Options:
 
 (defn- make-subject
   "The subject: --summary, else the message file's first line, else the issue's title, after \"type(GH-n): \"."
-  [{:keys [commit-type number summary message-file repo]}]
-  {:subject (cond summary      (format "%s(GH-%s): %s" commit-type number summary)
-                  message-file (first (str/split-lines (slurp message-file)))
-                  :else        (let [title        (issue-title repo number)
-                                     first-letter (min 1 (count title))]
-                                 (format "%s(GH-%s): %s%s"
-                                         commit-type
-                                         number
-                                         (str/lower-case (subs title 0 first-letter))
-                                         (subs title first-letter))))})
+  [{:keys [commit-type number summary commit-message-file repo]}]
+  {:subject (cond summary (format "%s(GH-%s): %s" commit-type number summary)
+                  commit-message-file (first (str/split-lines (slurp commit-message-file)))
+                  :else (let [title        (issue-title repo number)
+                              first-letter (min 1 (count title))]
+                          (format "%s(GH-%s): %s%s"
+                                  commit-type
+                                  number
+                                  (str/lower-case (subs title 0 first-letter))
+                                  (subs title first-letter))))})
 
 
 (defn- check-shape
   "The title and the body pass the rules CI checks on the pull request (#21): one implementation, in kit. The body is
   checked only when it becomes a new PR's body; an open PR keeps its own."
-  [{:keys [branch subject pr-url body-file]}]
-  (let [verdicts (gate/gate-shape {:branch branch :title subject :body-file (when-not pr-url body-file)})]
+  [{:keys [branch subject pr-url pr-body-file]}]
+  (let [verdicts (gate/gate-shape {:branch branch :title subject :body-file (when-not pr-url pr-body-file)})]
     (when (seq verdicts)
       (problem/fail! :finish/shape
                      (format "The pull request would fail CI's shape check; nothing was committed or pushed:\n%s"
@@ -280,14 +221,14 @@ Options:
 
 (defn- commit!
   "git commit with the message file, else with the subject, ending the run when git refuses."
-  [message-file subject]
-  (if message-file
-    (shell/run-on-terminal! "git" "commit" "-F" message-file)
+  [commit-message-file subject]
+  (if commit-message-file
+    (shell/run-on-terminal! "git" "commit" "-F" commit-message-file)
     (shell/run-on-terminal! "git" "commit" "-m" subject)))
 
 
 (defn- commit
-  [{:keys [no-commit add message-file subject]}]
+  [{:keys [no-commit add commit-message-file subject]}]
   (when-not no-commit
     (when (seq add)
       (stage! add))
@@ -295,7 +236,7 @@ Options:
       (problem/fail! :finish/nothing-staged
                      "Nothing staged to commit"
                      {:fix "use --add <path> to stage files, or --no-commit when the work is committed already"}))
-    (commit! message-file subject))
+    (commit! commit-message-file subject))
   {})
 
 
@@ -334,10 +275,11 @@ Options:
 (defn- open-pr
   "The body is the file's, with \"Closes #<issue>\" in front unless it has a closing keyword for that issue; an issue of
   size L gets \"Part of #<issue>\" instead, unless --last says this pull request is its last."
-  [{:keys [repo base branch number subject body-file pr-url base-draft? hold last-pr]}]
+  [{:keys   [repo base branch number subject pr-body-file pr-url base-draft? hold]
+    last-pr :last}]
   (if pr-url
     {}
-    (let [text  (shell/file-text body-file)
+    (let [text  (shell/file-text pr-body-file)
           body  (if (github/closes-issue? text number)
                   text
                   (format "%s\n\n%s" (closing-line repo number last-pr) text))
@@ -450,19 +392,16 @@ Options:
 
 
 (defn read-input
-  "The command line and the GHWF_* defaults as one map; env is (fn [name default]), shell/env in a run."
-  [args env]
-  (let [opts (shell/parse-opts finish-spec args)]
-    (if (:help opts)
-      opts
-      (assoc opts
-             :owner         (or (:owner opts) (env "GHWF_OWNER" nil))
-             :project-number (or (:project-number opts) (env "GHWF_PROJECT_NUMBER" nil))
-             :base          (or (:base opts) (env "GHWF_DEFAULT_BASE" "main"))
-             :status-field  (or (:status-field opts) (env "GHWF_STATUS_FIELD" "Status"))
-             :review-status (or (:review-status opts) (env "GHWF_REVIEW_STATUS" "In review"))
-             :reviewers     (env "GHWF_REVIEWERS" nil)
-             :human         (env "GHWF_HUMAN" nil)))))
+  "The options of the command line and the GHWF_* defaults as one map; env is (fn [name default]), shell/env in a run."
+  [opts env]
+  (assoc opts
+         :owner         (or (:owner opts) (env "GHWF_OWNER" nil))
+         :project-number (or (:project-number opts) (env "GHWF_PROJECT_NUMBER" nil))
+         :base          (or (:base opts) (env "GHWF_DEFAULT_BASE" "main"))
+         :status-field  (or (:status-field opts) (env "GHWF_STATUS_FIELD" "Status"))
+         :review-status (or (:review-status opts) (env "GHWF_REVIEW_STATUS" "In review"))
+         :reviewers     (env "GHWF_REVIEWERS" nil)
+         :human         (env "GHWF_HUMAN" nil)))
 
 
 (defn print-result
@@ -480,9 +419,6 @@ Options:
 
 
 (defn finish!
-  "kit finish: read the command line, run the recipe on the real GitHub, print what it made — or throw the refusal, which the flow's edge prints."
-  [args]
-  (let [input (read-input args shell/env)]
-    (if (:help input)
-      (println finish-usage)
-      (print-result (steps/complete! (finish input))))))
+  "kit finish: run the recipe on the real GitHub for the parsed options, print what it made, or throw the refusal, which the flow's edge prints."
+  [opts]
+  (print-result (steps/complete! (finish (read-input opts shell/env)))))

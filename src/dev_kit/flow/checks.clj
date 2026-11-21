@@ -14,44 +14,14 @@
 ;; ------------------------------------------------------------------ kit checks
 
 
-(def checks-usage
-  "Usage: kit checks [options]
-
-Waits until the checks the base branch requires exist on the pull request's head commit and have
-finished, and, where the base has the ready workflow, until that workflow has decided (ADR-0007). The checks are read from the base's rulesets
-(classic branch protection needs admin to read); a base that requires none ends it at once. Run it as a background command: the agent is woken when it exits.
-
-  exit 0  every required check passed, or the base requires none. Where the base has the ready workflow, it
-          also waits for the completion of that workflow's run for this head (not for the PR to leave draft: its review
-          request and auto-merge come after) and reports the PR's state: ready (owners asked, auto-merge
-          on), held (the label hold: kit release), or still a draft (the run's own decision line)
-  exit 1  a required check failed (or was cancelled): each is named with its link, at once
-  exit 2  no result: the pull request was closed or merged, its head moved (a push: the new
-          commit's checks are the ones to await; run it again), or gh could not be read (its message is printed)
-
-Options:
-  --pr <number>                 The pull request (default: the open one of the current branch)
-  --repo <owner/repo>           Default: the folder's origin on GitHub, then GHWF_REPO
-  --help                        Show this help
-
-Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else bounds the wait.")
-
-
-(def checks-spec
-  {"--pr" [:pr :value] "--repo" [:repo :value] "--help" [:help :flag] "-h" [:help :flag]})
-
-
 (defn read-input
-  "The command line and the GHWF_* variables kit checks reads, as one map; env is (fn [name default]), shell/env in a
-  run. :poll-text is GHWF_MERGE_POLL as written, a step turns it into seconds; :default-base is the branch the command
-  refuses to be run from."
-  [args env]
-  (let [o (shell/parse-opts checks-spec args)]
-    (if (:help o)
-      o
-      (assoc o
-             :poll-text    (env "GHWF_MERGE_POLL" "10")
-             :default-base (env "GHWF_DEFAULT_BASE" "main")))))
+  "The options of the command line and the GHWF_* variables kit checks reads, as one map; env is (fn [name default]),
+  shell/env in a run. :poll-text is GHWF_MERGE_POLL as written, a step turns it into seconds; :default-base is the
+  branch the command refuses to be run from."
+  [opts env]
+  (assoc opts
+         :poll-text    (env "GHWF_MERGE_POLL" "10")
+         :default-base (env "GHWF_DEFAULT_BASE" "main")))
 
 
 ;; ------------------------------------------------------------------ kit checks' steps
@@ -280,8 +250,5 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 
 
 (defn checks!
-  [args]
-  (let [input (read-input args shell/env)]
-    (if (:help input)
-      (println checks-usage)
-      (print-result (steps/complete! (checks input))))))
+  [opts]
+  (print-result (steps/complete! (checks (read-input opts shell/env)))))

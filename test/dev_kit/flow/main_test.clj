@@ -30,7 +30,8 @@
   (let [{:keys [exit out err]} (run {} "checks" "--bogus")]
     (is (= 1 exit))
     (is (= "" out))
-    (is (= "Unknown argument: --bogus. Fix: run the command with --help to see its options\n" err))))
+    (is (str/starts-with? err "Unknown option: --bogus\n\nUsage: kit checks"))
+    (is (str/includes? err "\nFix: correct the command line as the help above shows; kit checks --help"))))
 
 
 (deftest board-show-without-a-board-says-so-and-what-to-add

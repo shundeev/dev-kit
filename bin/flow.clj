@@ -19,5 +19,5 @@
 
 (defn main
   "kit start | finish | release | merge | checks | review | board show | board set."
-  [command args opts]
-  (main/main command args opts))
+  [command opts]
+  (main/main command opts))

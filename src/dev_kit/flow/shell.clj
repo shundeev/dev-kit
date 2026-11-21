@@ -103,26 +103,6 @@
     (str "'" (str/replace s "'" "'\\''") "'")))
 
 
-(defn parse-opts
-  "Options against a spec: {\"--flag\" [:key :value|:flag|:many]}. Unknown ones end the run."
-  [spec args]
-  (loop [[a & more] args
-         opts       {}]
-    (if (nil? a)
-      opts
-      (let [[k kind] (spec a)]
-        (case kind
-          :value (recur (rest more) (assoc opts k (first more)))
-          :many  (recur (rest more) (update opts k (fnil conj []) (first more)))
-          ;; --help answers at once, as the scripts' `case` did, whatever follows it.
-          :flag  (if (= k :help)
-                   {:help true}
-                   (recur more (assoc opts k true)))
-          (problem/fail! :flow/unknown-argument
-                         (str "Unknown argument: " a)
-                         {:fix "run the command with --help to see its options"}))))))
-
-
 (def ^:private folder-config
   "The kit.edn of the folder the flow runs in over the defaults, read once; nil when the folder has none."
   (delay (config/read-config-at (System/getProperty "user.dir"))))

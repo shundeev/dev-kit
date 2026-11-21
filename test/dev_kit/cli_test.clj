@@ -7,6 +7,7 @@
    [clojure.test :refer [deftest is testing]]
    [dev-kit.cli :as cli]
    [dev-kit.fake-project :as fake]
+   [dev-kit.gate :as gate]
    [dev-kit.main :as main]))
 
 
@@ -35,6 +36,15 @@
     {:exit result :out out :err err}))
 
 
+(defn- printed-help
+  "What the tree prints for a command line that asks for help, read as kit reads it before it runs a command: the help,
+  and that nothing was run. (kit merge in dev-kit's own checkout first asks whether the base holds newer code, which
+  looks at the repository's remote, so it is not run here.)"
+  [& argv]
+  (let [{:keys [result out err]} (fake/captured #(main/command-line (vec argv)))]
+    {:exit (if (nil? result) 0 1) :out out :err err}))
+
+
 (deftest every-command-refuses-a-flag-it-does-not-have-and-shows-its-help
   (doseq [{:keys [cmds]} leaves]
     (testing (str "kit " (str/join " " cmds))
@@ -58,7 +68,7 @@
 (deftest every-flag-and-argument-of-a-command-is-in-its-help
   (doseq [{:keys [cmds spec]} leaves]
     (testing (str "kit " (str/join " " cmds))
-      (let [{:keys [exit out err]} (apply help-of (concat cmds ["--help"]))]
+      (let [{:keys [exit out err]} (apply printed-help (concat cmds ["--help"]))]
         (is (= 0 exit))
         (is (= "" err))
         (is (str/starts-with? out (str "Usage: kit " (str/join " " cmds))))
@@ -74,7 +84,7 @@
 
 (deftest help-comes-before-a-mistake-and-with-the-short-flag
   (doseq [argv [["start" "--help" "--bogus"] ["start" "-h"] ["start" "--title" "x" "--help"] ["hook" "-h"]]]
-    (let [{:keys [exit out err]} (apply help-of argv)]
+    (let [{:keys [exit out err]} (apply printed-help argv)]
       (is (= 0 exit) (str argv))
       (is (str/includes? out (str "Usage: kit " (first argv))) (str argv))
       (is (= "" err) (str argv)))))
@@ -116,6 +126,23 @@
                        [["start" "--title" "x" "--body" "-x"] "--body"]]]
     (let [problem (apply mistake argv)]
       (is (str/starts-with? (str (:message problem)) (str "Missing value for option " flag)) (str argv)))))
+
+
+(deftest a-flag-that-may-repeat-collects-its-values-and-needs-one-each-time
+  (is (= {:add ["a" "b"]} (opts-of "finish" "--add" "a" "--add" "b")))
+  (is (str/starts-with? (:message (mistake "finish" "--add" "a" "--add")) "Missing value for option --add")))
+
+
+(deftest the-types-of-a-subject-are-the-types-the-gate-accepts
+  (let [[_ {:keys [enum]}] (->> cli/tree
+                                (filter #(= ["finish"] (:cmds %)))
+                                first
+                                :spec
+                                (filter #(= :type (first %)))
+                                first)]
+    (is (= (set gate/commit-types) (set enum)))
+    (is (str/starts-with? (:message (mistake "finish" "--type" "feature"))
+                          "Invalid value for option --type: feature. Expected one of: feat, fix"))))
 
 
 (deftest an-empty-value-is-a-value
@@ -200,5 +227,32 @@
              :skip-branch       true
              :skip-retro        true}]
            [["start" "--title" "t" "--priority" "High" "--no-checkout"]
-            {:title "t" :priority "High" :no-checkout true}]]]
+            {:title "t" :priority "High" :no-checkout true}]
+           [["finish"] {}]
+           [["finish" "--add" "a" "--add" "b" "--no-commit" "--hold"] {:add ["a" "b"] :no-commit true :hold true}]
+           [["finish" "--type" "fix" "--summary" "s" "--commit-message-file" "m.txt" "--pr-body-file" "b.md" "--last"
+             "--repo" "o/n" "--owner" "o" "--project-number" "3" "--base" "next" "--status-field" "St"
+             "--review-status" "Looked at"]
+            {:type          "fix"
+             :summary       "s"
+             :commit-message-file "m.txt"
+             :pr-body-file  "b.md"
+             :last          true
+             :repo          "o/n"
+             :owner         "o"
+             :project-number "3"
+             :base          "next"
+             :status-field  "St"
+             :review-status "Looked at"}]
+           [["release"] {}]
+           [["release" "--pr" "https://github.com/o/r/pull/4" "--repo" "o/n"]
+            {:pr "https://github.com/o/r/pull/4" :repo "o/n"}]
+           [["merge"] {}]
+           [["merge" "--repo" "o/n" "--owner" "o" "--project-number" "3" "--base" "next" "--status-field" "St"
+             "--done-status" "Shipped"]
+            {:repo "o/n" :owner "o" :project-number "3" :base "next" :status-field "St" :done-status "Shipped"}]
+           [["checks"] {}]
+           [["checks" "--pr" "4" "--repo" "o/n"] {:pr "4" :repo "o/n"}]
+           [["review"] {}]
+           [["review" "--pr" "4" "--repo" "o/n" "--wait"] {:pr "4" :repo "o/n" :wait true}]]]
     (is (= expected (apply opts-of argv)) (str/join " " argv))))

@@ -41,7 +41,7 @@
   result with the warnings under :warnings and what was printed under :printed."
   [world env & args]
   (let [err    (java.io.StringWriter.)
-        input  (finish/read-input (vec args) (fn [variable default] (get env variable default)))
+        input  (finish/read-input (fake/options-of "finish" args) (fn [variable default] (get env variable default)))
         result (binding [*err* err]
                  (fake/with-github world #(finish/finish input)))]
     (assoc result
