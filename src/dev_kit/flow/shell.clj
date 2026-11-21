@@ -56,6 +56,17 @@
                       :fix  "read the message above, remove its cause, then run the same kit command again"}))))
 
 
+(defn passing-github-error?
+  "Whether gh's message is an error that passes: a GitHub server error (HTTP 5xx), a gateway or timeout, a dropped
+  connection or none at all (gh's \"error connecting to api.github.com\"). The same call usually works a moment later;
+  a 404 or an authentication error does not pass."
+  [message]
+  (boolean
+   (re-find
+    #"HTTP 5|Bad Gateway|Service Unavailable|timed out|timeout|connection reset|error connecting to|Something went wrong"
+    (str message))))
+
+
 (defn gh!
   "gh's trimmed stdout, as `$(gh …)` read it: its messages go to our stderr, and a failure stops the step with gh's
   exit code and gh's own message, as it is. A failure that says nothing is named here: the command and its exit code."

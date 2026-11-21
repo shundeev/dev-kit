@@ -248,3 +248,50 @@
       "'main' is not an issue branch. Fix: run from the issue branch, or name the pull request: kit review --pr <number>"
       (:text (kit-review world owner))))
     (is (= 0 (:exit (kit-review world owner "--pr" "1"))))))
+
+
+;; a passing GitHub error in the middle of a wait (#139, step 8)
+
+
+(def ^:private the-owner-answers
+  (becomes {:reviews [(review-by "the-owner" "COMMENTED" "2026-11-18T12:00:00Z" "Look here")]}))
+
+
+(deftest a-passing-github-error-in-a-review-wait-is-asked-again-and-the-wait-ends-with-the-verdict
+  (let [world  (the-pull-request {:committed "2026-11-18T10:30:00Z"}
+                                 :script
+                                 [(fake/github-fails "gh: No server is currently available (HTTP 503)")
+                                  fake/github-recovers
+                                  the-owner-answers])
+        result (kit-review world (assoc owner "GHWF_MERGE_POLL" "20") "--wait")]
+    (is (= 0 (:exit result)))
+    (is (= [20 20 20] (:slept result)))
+    (is (= (str "Waiting for a review by the-owner on https://github.com/o/r/pull/1 since 2026-11-18T10:30:00Z.\n"
+                "GitHub answered HTTP 503; asking again in 20 s\n"
+                "Latest review by the-owner: COMMENTED at 2026-11-18T12:00:00Z.\n"
+                "Look here\n"
+                "No unresolved review threads.")
+           (:printed result)))))
+
+
+(deftest three-passing-github-errors-in-a-row-end-a-review-wait-with-what-to-do
+  (let [world  (the-pull-request {:committed "2026-11-18T10:30:00Z"}
+                                 :script
+                                 [(fake/github-fails "HTTP 503") fake/nothing-happens fake/nothing-happens])
+        result (kit-review world owner "--wait")]
+    (is (= 2 (:exit result)))
+    (is (= (str "GitHub answered with an error 3 times in a row; the last: gh api graphql failed: HTTP 503. "
+                "Fix: check https://www.githubstatus.com, then run the same command again")
+           (:text result)))
+    (is (= "GitHub answered HTTP 503; asking again in 10 s\nGitHub answered HTTP 503; asking again in 10 s"
+           (second (re-find #"(?s)since [^\n]*\n(.*)" (:printed result)))))))
+
+
+(deftest an-error-that-does-not-pass-ends-a-review-wait-at-once
+  (let [world  (the-pull-request {:committed "2026-11-18T10:30:00Z"}
+                                 :script
+                                 [(fake/github-fails "HTTP 404: Not Found") fake/nothing-happens])
+        result (kit-review world owner "--wait")]
+    (is (= 2 (:exit result)))
+    (is (str/starts-with? (:text result) "gh api graphql failed: HTTP 404"))
+    (is (= [10] (:slept result)) "it did not ask again")))

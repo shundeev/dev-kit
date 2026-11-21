@@ -222,15 +222,18 @@ Environment: GHWF_HUMAN, the owner's login (kit init or kit identity set it); GH
 
 (defn- wait-for-review
   "With --wait, looks every poll period until the owner has a review after the hand-back, or the pull request is no
-  longer open; the first look is the one read-reviews made."
+  longer open; the first look is the one read-reviews made. A passing GitHub error is no answer this time: it asks
+  again at the next look (wait/look!)."
   [{waiting? :wait :keys [human poll] :as facts}]
   (when waiting?
-    (loop [seen (:seen facts)]
+    (loop [seen   (:seen facts)
+           errors 0]
       (if (awaited-review seen human)
         {:seen seen}
         (do (end-if-over! facts seen)
             (wait/sleep! poll)
-            (recur (:seen (read-reviews facts))))))))
+            (let [look (wait/look! errors poll #(read-reviews facts))]
+              (recur (or (get-in look [:answer :seen]) seen) (:errors look))))))))
 
 
 (defn- find-the-review
