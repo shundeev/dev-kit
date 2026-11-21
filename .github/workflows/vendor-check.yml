@@ -1,0 +1,30 @@
+name: Vendor check
+
+# The vendored safety-net against npm (`bb vendor-check`, #20), weekly on main. A pull request that touches vendor/ is
+# checked by the selftest workflow; this run is for what moves without a pull request: npm's side. It is scheduled
+# because a push to main starts no workflow once an auto-merge made it: events made with the Actions token start no new
+# workflow run, except workflow_dispatch and repository_dispatch
+# (https://docs.github.com/en/actions/using-workflows/triggering-a-workflow#triggering-a-workflow-from-a-workflow).
+# Not a required check. workflow_dispatch runs it by hand.
+on:
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vendor-check:
+    name: vendor-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: DeLaGuardo/setup-clojure@6d46099eae24853c33c0482f2bb54edf4f1a4c74 # 13.7.0
+        with:
+          bb: 1.13.229
+
+      - name: Vendored safety-net against npm
+        run: bb vendor-check
