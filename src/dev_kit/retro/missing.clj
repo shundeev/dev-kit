@@ -3,6 +3,7 @@
   (:require
    [cheshire.core :as json]
    [clojure.string :as str]
+   [dev-kit.base :as base]
    [dev-kit.problem :as problem]
    [dev-kit.retro.github :as github]
    [dev-kit.retro.log :as log])
@@ -23,9 +24,11 @@
 
 (defn missing
   "[number title] of the issues closed as completed by a merged PR since `since` that lack a retrospective."
-  [gh repo ^Instant since]
+  [repo ^Instant since]
   (let [q (str "repo:" repo " is:issue is:closed reason:completed closed:>=" (subs (str since) 0 10))]
-    (for [i     (get-in (json/parse-string (gh "api" "graphql" "-f" (str "query=" missing-query) "-f" (str "q=" q)))
+    (for [i     (get-in (json/parse-string (base/gh! "api" "graphql"
+                                             "-f" (str "query=" missing-query)
+                                             "-f" (str "q=" q)))
                         ["data" "search" "nodes"])
           :when (and (some #(get % "mergedAt") (github/nodes i "closedByPullRequestsReferences"))
                      (not-any? #(str/starts-with? (str/trim (str (get % "body"))) "## Retrospective")
@@ -36,11 +39,11 @@
 (defn run-missing
   "The list of merged issues without a retrospective, with what to do, on stdout, and 1: an answer, not a problem.
   Nil and silence when every merged issue has its retrospective. When GitHub cannot be asked, a problem with exit 2."
-  [{:keys [repo gh now]}]
+  [{:keys [repo now]}]
   (let [now   (if now
                 (log/parse-time "--now" now)
                 (Instant/now))
-        found (try (doall (missing gh repo (.minus ^Instant now (Duration/ofDays 14))))
+        found (try (doall (missing repo (.minus ^Instant now (Duration/ofDays 14))))
                    (catch Exception e
                      (problem/fail! :retro/github-unavailable
                                     (str "retro: GitHub not available: " (ex-message e))

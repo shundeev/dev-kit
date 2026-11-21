@@ -3,6 +3,7 @@
   (:require
    [cheshire.core :as json]
    [clojure.string :as str]
+   [dev-kit.base :as base]
    [dev-kit.retro.log :as log]))
 
 
@@ -27,13 +28,13 @@
 
 
 (defn github-lines
-  [gh repo n agent]
+  [repo n agent]
   (let [[o r]     (str/split repo #"/")
-        issue     (or (get-in (json/parse-string (gh "api" "graphql"
-                                                     "-f"  (str "query=" query)
-                                                     "-f"  (str "o=" o)
-                                                     "-f"  (str "n=" r)
-                                                     "-F"  (str "i=" n)))
+        issue     (or (get-in (json/parse-string (base/gh! "api" "graphql"
+                                                   "-f" (str "query=" query)
+                                                   "-f" (str "o=" o)
+                                                   "-f" (str "n=" r)
+                                                   "-F" (str "i=" n)))
                               ["data" "repository" "issue"])
                       (throw (ex-info (str repo "#" n " not found") {})))
         size      (some #(second (re-matches #"size:(XS|S|M|L|XL)" (get % "name"))) (nodes issue "labels"))

@@ -6,6 +6,7 @@
    [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
+   [dev-kit.base :as base]
    [dev-kit.fake-project :as fake]
    [dev-kit.main :as main]
    [dev-kit.retro.log :as log]
@@ -81,7 +82,8 @@
 (defn- run-missing
   "run-missing against the fake gh, at the edge."
   [gh]
-  (at-the-edge #(missing/run-missing {:repo "u473t8/fake" :gh gh :now now})))
+  (with-redefs-fn {#'base/gh! gh}
+    #(at-the-edge (fn [] (missing/run-missing {:repo "u473t8/fake" :now now})))))
 
 
 (deftest new-work-waits-for-the-retrospective-of-a-merged-task
@@ -118,8 +120,7 @@
 
 
 (deftest a-now-that-is-not-a-time-names-the-format
-  (let [{:keys [code err]} (at-the-edge #(missing/run-missing
-                                          {:repo "u473t8/fake" :gh (fn [& _] "") :now "yesterday"}))]
+  (let [{:keys [code err]} (at-the-edge #(missing/run-missing {:repo "u473t8/fake" :now "yesterday"}))]
     (is (= 1 code))
     (is (str/starts-with? err "retro: --now yesterday : not a time. Fix: write it as 2026-11-12T10:00:00Z"))))
 
@@ -170,6 +171,6 @@
 
 (deftest a-days-that-is-not-a-number-names-the-fix
   (let [{:keys [code err]} (at-the-edge #(report/run
-                                          {:repo "u473t8/fake" :issue 55 :days "many" :now now :gh (fn [& _] "")}))]
+                                          {:repo "u473t8/fake" :issue 55 :days "many" :now now}))]
     (is (= 1 code))
     (is (= "retro: --days many : not a number of days. Fix: write a whole number above 0, e.g. --days 30\n" err))))

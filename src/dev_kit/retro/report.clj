@@ -157,7 +157,7 @@
 (defn run
   "Prints the friction data of one issue. Throws a usage problem for a --now that is not a time and for a --days that
   is not a number."
-  [{:keys [issue repo agent gh now days] :as opts}]
+  [{:keys [issue repo agent now days] :as opts}]
   (let [now  (if now
                (log/parse-time "--now" now)
                (Instant/now))
@@ -174,6 +174,6 @@
     (doseq [l (log-lines (assoc opts :now now :days days))] (println l))
     (println)
     (println "### GitHub")
-    (doseq [l (try (github/github-lines gh repo issue agent)
+    (doseq [l (try (github/github-lines repo issue agent)
                    (catch Exception e [(str "GitHub: not available (" (ex-message e) ")")]))]
       (println l))))
