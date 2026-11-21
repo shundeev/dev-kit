@@ -5,7 +5,8 @@
    [clojure.string :as str]
    [dev-kit.flow.github :as github]
    [dev-kit.flow.shell :as shell]
-   [dev-kit.flow.steps :as steps]))
+   [dev-kit.flow.steps :as steps]
+   [dev-kit.problem :as problem]))
 
 
 ;; ------------------------------------------------------------------ kit release
@@ -49,7 +50,7 @@ Options:
      (or
       pr
       (github/open-pr-url repo branch "open")
-      (steps/fail!
+      (problem/fail!
        :release/no-open-pr
        (format
         "No open pull request for branch '%s' in %s. Fix: run it from the held PR's branch, or name it with --pr <number>"
@@ -83,16 +84,16 @@ Options:
   "Refuses a pull request that is not open: there is nothing to release."
   [{:keys [state url]}]
   (when-not (= state "OPEN")
-    (steps/fail! :release/not-open (format "%s is %s, not open: nothing to release." url state)))
+    (problem/fail! :release/not-open (format "%s is %s, not open: nothing to release." url state)))
   nil)
 
 
 (defn- check-checks-passed
   "Refuses while GitHub reports no required check, or one that is not green; nothing has been changed yet."
   [{:keys [pr repo url]}]
-  (let [checks (github/required-checks pr repo #(steps/fail! :release/checks-unreadable %))]
+  (let [checks (github/required-checks pr repo #(problem/fail! :release/checks-unreadable %))]
     (when (empty? checks)
-      (steps/fail!
+      (problem/fail!
        :release/no-required-check
        (format
         "GitHub reports no required check on %s, so none can be called green. Fix: run it again once CI has started, or gh pr ready %s"
@@ -102,7 +103,7 @@ Options:
                    (remove #(#{"pass" "skipping"} (:bucket %)))
                    (map #(str (:name %) " (" (:bucket %) ")")))]
       (when (seq bad)
-        (steps/fail!
+        (problem/fail!
          :release/check-not-green
          (format
           "A required check of %s is not green: %s. Nothing was changed: wait for it (kit checks, in the background), then run kit release again; a failed check is fixed first."

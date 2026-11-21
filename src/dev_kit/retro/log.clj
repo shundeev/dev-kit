@@ -4,18 +4,11 @@
    [babashka.fs :as fs]
    [cheshire.core :as json]
    [clojure.java.io :as io]
-   [clojure.string :as str])
+   [clojure.string :as str]
+   [dev-kit.problem :as problem])
   (:import
    (java.time Duration Instant OffsetDateTime)
    (java.util.regex Pattern)))
-
-
-(defn fail!
-  [& msg]
-  (binding [*out* *err*]
-    (println (str "kit: retro: " (str/join " " msg)))
-    (flush))
-  (System/exit 1))
 
 
 ;; ------------------------------------------------------------------ time
@@ -26,7 +19,8 @@
   [opt s]
   (or (try (Instant/parse s) (catch Exception _ nil))
       (try (.toInstant (OffsetDateTime/parse s)) (catch Exception _ nil))
-      (fail! opt s ": not a time; write it as 2026-11-12T10:00:00Z or 2026-11-12T11:00:00+01:00")))
+      (problem/fail! :retro/bad-time
+                     (str opt " " s " : not a time; write it as 2026-11-12T10:00:00Z or 2026-11-12T11:00:00+01:00"))))
 
 
 (defn instant

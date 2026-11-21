@@ -7,7 +7,8 @@
    [clj-yaml.core :as yaml]
    [clojure.string :as str]
    [dev-kit.base :as base]
-   [dev-kit.config :as config]))
+   [dev-kit.config :as config]
+   [dev-kit.problem :as problem]))
 
 
 ;; The agent works under its own GitHub account (kit.edn :agent), so the main ruleset's required
@@ -82,7 +83,8 @@
   (let [f (str (fs/path dir local-settings))
         m (read-json-object f)]
     (when (= ::invalid m)
-      (config/fail! local-settings "is not a JSON object; fix or remove it, then run again"))
+      (problem/fail! :identity/settings-not-object
+                     (str local-settings " is not a JSON object; fix or remove it, then run again")))
     (fs/create-dirs (fs/parent f))
     (spit f
           (config/json-text (update m

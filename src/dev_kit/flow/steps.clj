@@ -1,18 +1,9 @@
 (ns dev-kit.flow.steps
   "A command as a list of named steps (ADR-0008). A step is (fn [facts]) and
-  returns the facts it adds; what it needs from the outside it calls directly (step 7b of #139). A step that cannot go on throws a problem with fail!, and the run stops there: the
+  returns the facts it adds; what it needs from the outside it calls directly (step 7b of #139). A step that cannot go on throws a problem with dev-kit.problem/fail!, and the run stops there: the
   result keeps every fact gathered before it and names the step. The run's own keys are namespaced (::status,
   ::done, ::stopped-at, ::problem), so no fact of a command can collide with them: kit start has a :status of its
   own, the board's Status.")
-
-
-(defn fail!
-  "Stops the step: a problem keyword, the text the person reads, and any facts that explain it. Two facts say how the
-  run ends, read by `refusal`: :exit, the exit code (1 when absent), and :plain, true to print the text without
-  \"Error: \"."
-  ([problem message] (fail! problem message {}))
-  ([problem message facts]
-   (throw (ex-info message (assoc facts :problem problem :message message)))))
 
 
 (defn run

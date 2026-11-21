@@ -7,6 +7,7 @@
    [clojure.edn :as edn]
    [clojure.string :as str]
    [dev-kit.base :as base]
+   [dev-kit.problem :as problem]
    [rewrite-clj.parser :as rewrite-parser]))
 
 
@@ -14,12 +15,6 @@
 
 
 (defn read-defaults [] (edn/read-string (slurp (str (fs/path base/kit-dir "kit-defaults.edn")))))
-
-
-(defn fail!
-  "A problem the person fixes: kit prints the message, without a stack trace, and exits 1."
-  [& msg]
-  (throw (ex-info (str/join " " msg) {:kit/problem true})))
 
 
 (defn merge-config
@@ -38,14 +33,16 @@
                  (let [why (or (try (rewrite-parser/parse-string-all s) nil (catch Exception e2 (ex-message e2)))
                                (ex-message e))
                        [_ msg line] (re-find #"(.*) \[at line (\d+), column \d+\]" why)]
-                   (fail! (str label
-                               (when line
-                                 (str " line " line))
-                               " cannot be read ("
-                               (or msg why)
-                               "): fix it by hand")))))]
+                   (problem/fail! :config/unreadable
+                                  (str label
+                                       (when line
+                                         (str " line " line))
+                                       " cannot be read ("
+                                       (or msg why)
+                                       "): fix it by hand")))))]
     (when-not (map? m)
-      (fail! (str label " is not a map: make it {:repo \"owner/name\" :showcase \"…\" :modules #{}}")))
+      (problem/fail! :config/not-a-map
+                     (str label " is not a map: make it {:repo \"owner/name\" :showcase \"…\" :modules #{}}")))
     m))
 
 
@@ -150,12 +147,14 @@
   "Runs the project's user-level test, :user-test :run in kit.edn, from the project's root, and exits with its code
   (#27). CI runs it inside the `checks` job, after the other checks."
   []
-  (let [cfg (or (read-config) (fail! "no kit.edn: run .shared/bin/kit init first"))
-        _ (some->> (seq (config-problems cfg)) (map #(str "kit.edn: " %)) (str/join "; ") fail!)
+  (let [cfg (or (read-config) (problem/fail! :config/no-kit-edn "no kit.edn: run .shared/bin/kit init first"))
+        _
+        (some->> (seq (config-problems cfg)) (map #(str "kit.edn: " %)) (str/join "; ") (problem/fail! :config/invalid))
         run (get-in cfg [:user-test :run])]
     (when-not run
-      (fail! "kit.edn has no :user-test: add :user-test {:run \"<the command of the user-level test>\""
-             ":artifacts \"<the folder it writes>\"} (docs/user-level-tests.md in dev-kit)"))
+      (problem/fail! :config/no-user-test
+                     (str "kit.edn has no :user-test: add :user-test {:run \"<the command of the user-level test>\" "
+                          ":artifacts \"<the folder it writes>\"} (docs/user-level-tests.md in dev-kit)")))
     (println (str "user-level test: " run))
     (flush)
     (System/exit (:exit @(p/process {:dir (str base/root) :inherit true} "bash" "-c" run)))))

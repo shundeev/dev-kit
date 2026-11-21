@@ -5,8 +5,8 @@
   (:require
    [dev-kit.flow.github :as github]
    [dev-kit.flow.shell :as shell]
-   [dev-kit.flow.steps :as steps]
-   [dev-kit.flow.wait :as wait]))
+   [dev-kit.flow.wait :as wait]
+   [dev-kit.problem :as problem]))
 
 
 (defn read-repo
@@ -31,7 +31,7 @@
   "--pr names the pull request by its number."
   [{:keys [pr]}]
   (when (and pr (not (re-matches #"\d+" pr)))
-    (steps/fail! :pr/bad-number (format "--pr is '%s': give the pull request's number" pr))))
+    (problem/fail! :pr/bad-number (format "--pr is '%s': give the pull request's number" pr))))
 
 
 (defn find-pr
@@ -41,13 +41,13 @@
   {:pr (or
         pr
         (do (when (#{default-base "HEAD"} branch)
-              (steps/fail! :branch/not-an-issue-branch
-                           (format
-                            "Run from the issue branch, not '%s', or name the pull request: kit %s --pr <number>"
-                            branch
-                            command)))
+              (problem/fail! :branch/not-an-issue-branch
+                             (format
+                              "Run from the issue branch, not '%s', or name the pull request: kit %s --pr <number>"
+                              branch
+                              command)))
             (github/open-pr-url repo branch "open"))
-        (steps/fail!
+        (problem/fail!
          :pr/no-open-pr
          (format
           "No open pull request for branch '%s' in %s. Fix: open it with kit finish, or name it: kit %s --pr <number>"
@@ -59,4 +59,4 @@
 (defn no-result
   "The failure of a read of GitHub that gave no answer: gh's message as it is, exit 2."
   [message]
-  (steps/fail! :github/no-answer message {:exit 2 :plain true}))
+  (problem/fail! :github/no-answer message {:exit 2 :plain true}))

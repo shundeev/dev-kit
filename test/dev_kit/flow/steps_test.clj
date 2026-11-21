@@ -2,13 +2,14 @@
   "How a recipe ends (#139): the steps done, or the refusal with its text and exit code."
   (:require
    [clojure.test :refer [deftest is]]
-   [dev-kit.flow.steps :as steps]))
+   [dev-kit.flow.steps :as steps]
+   [dev-kit.problem :as problem]))
 
 
 (defn- refused
   [& fail-args]
   (steps/refusal (steps/run {}
-                   :check (fn [_] (apply steps/fail! fail-args)))))
+                   :check (fn [_] (apply problem/fail! fail-args)))))
 
 
 (deftest a-refusal-prints-error-and-exits-1
@@ -23,7 +24,7 @@
 (deftest the-run-stops-at-the-first-refusal-and-keeps-what-it-gathered
   (let [result (steps/run {:args []}
                  :read  (fn [_] {:branch "7-fix"})
-                 :check (fn [facts] (steps/fail! :x/bad (str "bad " (:branch facts))))
+                 :check (fn [facts] (problem/fail! :x/bad (str "bad " (:branch facts))))
                  :never (fn [_] {:never true}))]
     (is (= :fail (::steps/status result)))
     (is (= [:read] (::steps/done result)))
