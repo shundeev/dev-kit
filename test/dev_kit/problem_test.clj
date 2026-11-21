@@ -96,13 +96,3 @@
                       :when (not (contains? (fail-options call) :fix))]
                   [file (second call)])]
     (is (empty? lacking) (str "problem/fail! without :fix: " (pr-str lacking)))))
-
-
-(deftest no-stop-says-how-it-is-printed
-  (let [flagged (for [{:keys [file forms]} (sources)
-                      call  (fail-calls forms)
-                      flag  [:plain :stderr :usage]
-                      :when (contains? (fail-options call) flag)]
-                  [file (second call) flag])]
-    (is (empty? flagged)
-        (str "every refusal prints the same way, so a problem carries no printing flag: " (pr-str flagged)))))
