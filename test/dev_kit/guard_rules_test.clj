@@ -349,6 +349,13 @@
       [c {:background? true} nil]))))
 
 
+(deftest the-refusal-of-a-wait-names-the-allowed-ways
+  (let [reason (:reason (decision "sleep 5" {:background? false}))]
+    (is (str/includes? reason "run_in_background"))
+    (is (str/includes? reason "`kit checks`"))
+    (is (str/includes? reason "`kit review --wait`"))))
+
+
 (deftest a-poll-loop-is-not-a-wait-for-one-event
   (check-rows
    (for [c poll-loops
