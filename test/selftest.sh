@@ -674,7 +674,7 @@ passes "  (the bare 'git reset --hard' in a linked worktree is cc-safety-net's o
 git worktree remove --force "$WT"; git branch -q -D scratch-107
 # an existing project's policy gets the setting on the next init and keeps what the project added
 printf '{"version":1,"safety":{"level":"standard"},"secret_protection":{"deny_paths":["x.txt"]}}\n' > .cc-safety-net/policy.json
-expect_exit 1 "doctor names a policy without worktree_mode" bb $kit doctor --local
+expect_exit 1 "doctor names a policy without worktree_mode" bb $kit doctor
 contains "  naming the key" "workflow.worktree_mode" "$LAST"
 bb $kit init >/dev/null 2>&1
 jq -e '.workflow.worktree_mode == true and .secret_protection.deny_paths == ["x.txt"] and .safety.level == "standard"' .cc-safety-net/policy.json >/dev/null \
@@ -690,7 +690,7 @@ jq -e '.destructive_command_protection.allow_paths == ["~/.claude/jobs"]' .cc-sa
 passes "rm -rf inside ~/.claude/jobs/<x> is allowed" "$(call Bash '{"command":"rm -rf ~/.claude/jobs/x"}')"
 refused "rm -rf outside that folder stays refused" "$(call Bash '{"command":"rm -rf ~/Projects/y"}')"
 jq 'del(.destructive_command_protection)' .cc-safety-net/policy.json > "$WORK/p.json" && cp "$WORK/p.json" .cc-safety-net/policy.json
-expect_exit 1 "doctor names a policy without allow_paths" bb $kit doctor --local
+expect_exit 1 "doctor names a policy without allow_paths" bb $kit doctor
 contains "  naming the key" "allow_paths" "$LAST"
 bb $kit init >/dev/null 2>&1
 jq -e '.destructive_command_protection.allow_paths == ["~/.claude/jobs"] and .workflow.worktree_mode == true' .cc-safety-net/policy.json >/dev/null \
@@ -1631,7 +1631,7 @@ XDG_STATE_HOME="$WORK/fry" call Bash '{"command":"git reset --hard"}' >/dev/null
 touch "$WORK/kit-hook-ran"; khook "rm $WORK/kit-hook-ran" >/dev/null
 [ -e "$WORK/kit-hook-ran" ] && ok "  the command is never run" || bad "  the command ran"
 expect_exit 1 "kit hook: no command says what to pass" bb $kit hook
-contains "  names the usage" "kit hook '<command>'" "$LAST"
+contains "  names the usage" "Usage: kit hook" "$LAST"
 
 # #129: kit sync brings the owner's checkout and its .shared up to the remote, and never changes anything it cannot
 # fast-forward. A scratch project with local bare remotes for the project and for dev-kit.

@@ -15,73 +15,6 @@
    (java.time Instant)))
 
 
-(def start-usage
-  "Usage: kit start --title <title> [options]
-
-Create work in GitHub Project, assign fields, ensure issue exists, and create/checkout dev branch.
-
-Options:
-  --title <text>                Required issue or draft title
-  --body <text>                 Body text
-  --body-file <path>            Body file path
-  --labels <csv>                Comma-separated labels
-  --assignees <csv>             Comma-separated assignees (supports @me)
-  --issue <number>              Reuse existing issue number instead of creating one
-  --showcase <option>           Showcase field option (default: GHWF_SHOWCASE)
-  --priority <option>           Required. Priority field option: Urgent|High|Medium|Low
-  --size <option>               Size field option to set
-  --milestone <title>           Open milestone to put the issue in (must already exist)
-  --status <option>             Status field option to set (default: In progress with --issue, else
-                                GHWF_DEFAULT_STATUS or Backlog)
-  --mode <issue|draft-convert>  Default: issue
-  --owner <login>               Project owner (default: GHWF_OWNER)
-  --repo <owner/repo>           Repo (default: the folder's origin on GitHub, then GHWF_REPO)
-  --project-number <number>     Project number (default: GHWF_PROJECT_NUMBER)
-  --showcase-field <name>       Field name (default: GHWF_SHOWCASE_FIELD or Showcase)
-  --priority-field <name>       Field name (default: GHWF_PRIORITY_FIELD or Priority)
-  --size-field <name>           Field name (default: GHWF_SIZE_FIELD or Size)
-  --status-field <name>         Field name (default: GHWF_STATUS_FIELD or Status)
-  --base <branch>               Base branch for dev branch (default: GHWF_DEFAULT_BASE or main)
-  --branch-name <name>          Override branch name
-  --no-reuse-existing           Do not reuse exact-title project item or issue
-  --skip-branch                 Do not create the development branch at all
-  --no-checkout                 Create and link the branch, leave the calling worktree alone
-                                (mutually exclusive with --skip-branch)
-  --skip-retro                  Start although a merged issue lacks its retrospective. Only the owner
-                                waives this: a permission rule asks them first (#56)
-  --help                        Show this help")
-
-
-(def start-spec
-  {"--title"          [:title :value]
-   "--body"           [:body :value]
-   "--body-file"      [:body-file :value]
-   "--labels"         [:labels :value]
-   "--assignees"      [:assignees :value]
-   "--issue"          [:issue :value]
-   "--showcase"       [:showcase :value]
-   "--priority"       [:priority :value]
-   "--size"           [:size :value]
-   "--milestone"      [:milestone :value]
-   "--status"         [:status :value]
-   "--mode"           [:mode :value]
-   "--owner"          [:owner :value]
-   "--repo"           [:repo :value]
-   "--project-number" [:project-number :value]
-   "--showcase-field" [:showcase-field :value]
-   "--priority-field" [:priority-field :value]
-   "--size-field"     [:size-field :value]
-   "--status-field"   [:status-field :value]
-   "--base"           [:base :value]
-   "--branch-name"    [:branch-name :value]
-   "--no-reuse-existing" [:no-reuse :flag]
-   "--skip-branch"    [:skip-branch :flag]
-   "--no-checkout"    [:no-checkout :flag]
-   "--skip-retro"     [:skip-retro :flag]
-   "--help"           [:help :flag]
-   "-h"               [:help :flag]})
-
-
 ;; ------------------------------------------------------------------ checks, before anything exists
 
 
@@ -89,7 +22,7 @@ Options:
   "What the flags alone can refuse: a run that files the issue and then stops on the priority leaves half-tracked
   work behind. It also names the repository the run works in (:repo), between the owner and the project, as the
   refusals have always come in that order."
-  [{:keys [title owner project-number mode skip-branch no-checkout priority] :as input}]
+  [{:keys [title owner project-number skip-branch no-checkout priority] :as input}]
   (when (str/blank? title)
     (problem/fail! :start/no-title "--title is required" {:fix "pass --title \"<what the work is>\""}))
   (when (str/blank? owner)
@@ -101,10 +34,6 @@ Options:
       (problem/fail! :start/no-project
                      "no board number"
                      {:fix "pass --project-number, or add a kit.edn to this project (run kit init)"}))
-    (when-not (#{"issue" "draft-convert"} mode)
-      (problem/fail! :start/bad-mode
-                     "--mode must be 'issue' or 'draft-convert'"
-                     {:fix "pass --mode issue, or --mode draft-convert, or leave --mode out"}))
     (when (and skip-branch no-checkout)
       (problem/fail!
        :start/branch-flags-conflict
@@ -456,7 +385,7 @@ Options:
   and :url; :item-id when it came from a card; :filed? when this run filed it."
   [facts]
   (or (issue-named-by-flag facts)
-      (when-not (:no-reuse facts)
+      (when-not (:no-reuse-existing facts)
         (or (card-with-title facts)
             (open-issue-with-title facts)))
       (file-new facts)))
@@ -621,26 +550,23 @@ Options:
 
 
 (defn read-input
-  "The command line and the GHWF_* defaults as one map; env is (fn [name default]), shell/env in a run."
-  [args env]
-  (let [o (shell/parse-opts start-spec args)]
-    (if (:help o)
-      o
-      (assoc o
-             :owner          (or (:owner o) (env "GHWF_OWNER" nil))
-             :project-number (or (:project-number o) (env "GHWF_PROJECT_NUMBER" nil))
-             :showcase-field (or (:showcase-field o) (env "GHWF_SHOWCASE_FIELD" "Showcase"))
-             :priority-field (or (:priority-field o) (env "GHWF_PRIORITY_FIELD" "Priority"))
-             :size-field     (or (:size-field o) (env "GHWF_SIZE_FIELD" "Size"))
-             :status-field   (or (:status-field o) (env "GHWF_STATUS_FIELD" "Status"))
-             :base           (or (:base o) (env "GHWF_DEFAULT_BASE" "main"))
-             :assignees      (or (:assignees o) (env "GHWF_DEFAULT_ASSIGNEES" "@me"))
-             :showcase       (or (:showcase o) (env "GHWF_SHOWCASE" nil))
-             :priority       (or (:priority o) (env "GHWF_DEFAULT_PRIORITY" nil))
-             :size           (or (:size o) (env "GHWF_DEFAULT_SIZE" nil))
-             :status         (or (:status o) (when (:issue o) "In progress") (env "GHWF_DEFAULT_STATUS" "Backlog"))
-             :mode           (or (:mode o) "issue")
-             :done-status    (env "GHWF_DONE_STATUS" "Done")))))
+  "The options of the command line and the GHWF_* defaults as one map; env is (fn [name default]), shell/env in a run."
+  [o env]
+  (assoc o
+         :owner          (or (:owner o) (env "GHWF_OWNER" nil))
+         :project-number (or (:project-number o) (env "GHWF_PROJECT_NUMBER" nil))
+         :showcase-field (or (:showcase-field o) (env "GHWF_SHOWCASE_FIELD" "Showcase"))
+         :priority-field (or (:priority-field o) (env "GHWF_PRIORITY_FIELD" "Priority"))
+         :size-field     (or (:size-field o) (env "GHWF_SIZE_FIELD" "Size"))
+         :status-field   (or (:status-field o) (env "GHWF_STATUS_FIELD" "Status"))
+         :base           (or (:base o) (env "GHWF_DEFAULT_BASE" "main"))
+         :assignees      (or (:assignees o) (env "GHWF_DEFAULT_ASSIGNEES" "@me"))
+         :showcase       (or (:showcase o) (env "GHWF_SHOWCASE" nil))
+         :priority       (or (:priority o) (env "GHWF_DEFAULT_PRIORITY" nil))
+         :size           (or (:size o) (env "GHWF_DEFAULT_SIZE" nil))
+         :status         (or (:status o) (when (:issue o) "In progress") (env "GHWF_DEFAULT_STATUS" "Backlog"))
+         :mode           (or (:mode o) "issue")
+         :done-status    (env "GHWF_DONE_STATUS" "Done")))
 
 
 (defn- print-result
@@ -659,8 +585,5 @@ Options:
 (defn start!
   "kit start: read the command line, run the recipe on the real GitHub, print what it made — or throw the refusal, which the
   flow's edge prints."
-  [args]
-  (let [input (read-input args shell/env)]
-    (if (:help input)
-      (println start-usage)
-      (print-result (steps/complete! (start input))))))
+  [opts]
+  (print-result (steps/complete! (start (read-input opts shell/env)))))

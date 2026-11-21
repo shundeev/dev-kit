@@ -1,28 +1,9 @@
 #!/usr/bin/env bb
 ;; dev-kit: lays out and checks the shared setup of a project that mounts dev-kit at .shared
 ;;
-;;   .shared/bin/kit init     [--repo owner/name] [--showcase NAME] [--modules clojure] [--scaffold]
-;;   .shared/bin/kit init     --local   per-machine items only (the SessionStart hook runs it)
-;;   .shared/bin/kit doctor   [--ci] [--quiet]
-;;   .shared/bin/kit modules
-;;   .shared/bin/kit sync --after-git   what the git hooks run after a pull, rebase or branch switch (#135)
-;;   .shared/bin/kit sync     the main checkout after a merge: fast-forward the base, set .shared to its pin, run doctor (#129)
-;;   .shared/bin/kit start | finish | release | merge | checks | review   the delivery flow's GitHub steps (#95); --help on each
-;;   .shared/bin/kit board set <project-number> <owner> <issue-url> <field> <option>   one card's field (#41)
-;;   .shared/bin/kit board show   the folder's board from its kit.edn, as JSON (the project-link plugin asks it, #139)
-;;   .shared/bin/kit user-test   the project's user-level test, :user-test in kit.edn (#27)
-;;   .shared/bin/kit identity [--dir PATH]   the agent's GitHub identity alone, for any repository
-;;   .shared/bin/kit github   [--check NAME] [--yes] [--repo R]   the repository's main ruleset and access, set up by
-;;                            the owner in their own terminal (#33); --check defaults to checks
-;;   .shared/bin/kit gate     --branch B --pr N | --g1 N | --hook   the pull request gate (ADR-0002, #21)
-;;                            | --shape --branch B --title T [--body-file F]   its shape rules, offline
-;;   .shared/bin/kit hook     '<command>'   what the project's entry hook says to one Bash command, in Claude Code's input
-;;                            shape, without running it: allowed (exit 0), refused (2) or asks (3), with the reason (#98)
-;;   .shared/bin/kit retro    N [--repo R] [--messages] [--days D]   friction data of merged issue N for its
-;;                            retrospective: the friction log the hooks keep on this machine, and GitHub (#55);
-;;                            with the refusals counted per rule, in the task and in the last D days (14)
-;;   .shared/bin/kit retro    --missing [--repo R]   merged issues of the last 14 days without a retrospective;
-;;                            exit 1 when there are some (#56)
+;; The commands and their options are the tree in src/dev_kit/cli.clj, and `kit --help` and `kit <command> --help`
+;; print them from it. finish, release, merge, checks and review still read their own command line (#139); each
+;; prints its help with --help.
 ;;
 ;; Two kinds of files:
 ;;   scaffold — created once if missing, then owned by the project (kit.edn, LICENSE, the

@@ -1,12 +1,14 @@
 (ns dev-kit.main
   "kit's dispatch: the arguments, the commands that run git, the flow and retro; a problem ends here as its message and its exit code (1 when it names none)."
   (:require
+   [babashka.cli :as babashka-cli]
    [babashka.fs :as fs]
    [babashka.process :as p]
    [cheshire.core :as json]
    [clojure.edn :as edn]
    [clojure.string :as str]
    [dev-kit.base :as base]
+   [dev-kit.cli :as cli]
    [dev-kit.commands :as commands]
    [dev-kit.config :as config]
    [dev-kit.gate :as gate]
@@ -14,52 +16,44 @@
    [dev-kit.problem :as problem]))
 
 
-(defn parse-args
-  [args]
-  (loop [[a & more] args
-         opts       {}]
-    (case a
-      nil           opts
-      "--repo"      (recur (rest more) (assoc opts :repo (first more)))
-      "--showcase"  (recur (rest more) (assoc opts :showcase (first more)))
-      "--modules"   (recur (rest more) (assoc opts :modules (first more)))
-      "--scaffold"  (recur more (assoc opts :scaffold true))
-      "--ci"        (recur more (assoc opts :ci true))
-      "--quiet"     (recur more (assoc opts :quiet true))
-      "--dir"       (recur (rest more) (assoc opts :dir (first more)))
-      "--local"     (recur more (assoc opts :local true))
-      "--branch"    (recur (rest more) (assoc opts :branch (first more)))
-      "--pr"        (recur (rest more) (assoc opts :pr (first more)))
-      "--g1"        (recur (rest more) (assoc opts :g1 (first more)))
-      "--hook"      (recur more (assoc opts :hook true))
-      "--shape"     (recur more (assoc opts :shape true))
-      "--title"     (recur (rest more) (assoc opts :title (first more)))
-      "--body-file" (recur (rest more) (assoc opts :body-file (first more)))
-      "--now"       (recur (rest more) (assoc opts :now (first more)))
-      "--days"      (recur (rest more) (assoc opts :days (first more)))
-      "--messages"  (recur more (assoc opts :messages true))
-      "--check"     (recur (rest more) (assoc opts :check (first more)))
-      "--yes"       (recur more (assoc opts :yes true))
-      "--edn"       (recur more (assoc opts :edn true))
-      (problem/fail! :usage/unknown-option
-                     (str "unknown option " a)
-                     {:fix "see the commands and their options: kit"}))))
+(def ^:private table
+  "The command tree as babashka.cli reads it: a command that is no group answers with its words and options."
+  (let [groups (set (mapcat #(butlast (reductions conj [] (:cmds %))) cli/tree))]
+    (mapv #(cond-> %
+             (not (contains? groups (:cmds %))) (assoc :fn identity))
+          cli/tree)))
 
 
-(defn usage
-  []
-  (println (str/join "\n"
-                     (->> (str/split-lines (slurp (str (fs/path base/kit-dir "bin" "kit"))))
-                          (drop 1)
-                          (take-while #(str/starts-with? % ";;"))
-                          (map #(str/replace % #"^;; ?" ""))))))
+(defn- mistake!
+  "A mistake on the command line as a problem: what is wrong, then the help of the command it was made in."
+  [{:keys [cause msg dispatch value] :as data}]
+  (let [unknown (and (empty? dispatch) (#{:restrict-args :no-match} cause))
+        command (str/join " " dispatch)]
+    (problem/fail!
+     :usage/command-line
+     (str (if unknown
+            (str "Unknown command: " value)
+            msg)
+          "\n\n"
+          (babashka-cli/format-command-help {:table table :cmds dispatch :prog "kit"}))
+     {:fix (if (empty? dispatch)
+             "pick one of the commands above"
+             (str "correct the command line as the help above shows; kit " command " --help prints it again"))})))
+
+
+(defn command-line
+  "The command line read against the command tree: {:dispatch the command's words, :opts its options}. -h and
+  --help print the help and return nil. A mistake (an unknown command or flag, a word the command does not take,
+  a flag without its value, a missing argument) is a problem with the command's help."
+  [argv]
+  (babashka-cli/dispatch table argv (assoc cli/dispatch-options :error-fn mistake!)))
 
 
 (defn hook!
   "kit hook '<command>': the project's entry hook's verdict on one Bash command, fed in Claude Code's input shape,
   never run. The recorder writes under XDG_STATE_HOME, a throwaway directory here: a hand check is no friction.
   Prints the verdict and returns its code: 0 allowed, 2 refused, 3 asks."
-  [[command]]
+  [{:keys [command]}]
   (let [entry (base/rel ".claude" "hooks" "pretooluse.sh")]
     (when (str/blank? command)
       (problem/fail! :hook/no-command
@@ -245,30 +239,30 @@
 
 
 (defn flow!
-  "kit start, finish, merge, checks, review and board set: the delivery flow's GitHub steps, in bin/flow.clj (#95).
-  The exit code of the command: the base's run of kit merge (newer-merge!), or the flow's own."
-  [cmd args]
-  (or (when (= "merge" cmd)
+  "kit start, finish, merge, checks, review and board: the delivery flow's GitHub steps, in bin/flow.clj (#95). The
+  command's words, its raw arguments (for a command not yet in the command tree) and its parsed options. The exit
+  code of the command: the base's run of kit merge (newer-merge!), or the flow's own."
+  [command args opts]
+  (or (when (= ["merge"] command)
         (newer-merge! args))
       (do (load-file (str (fs/path base/kit-dir "bin" "flow.clj")))
-          ((resolve 'flow/main) cmd args))))
+          ((resolve 'flow/main) command args opts))))
 
 
 (defn retro!
-  "kit retro N … and kit retro --missing …: the code lives in bin/retro.clj, loaded only for this command. The exit
+  "kit retro N and kit retro --missing: the code lives in bin/retro.clj, loaded only for this command. The exit
   code of the command, nil when all is well."
-  [[n & more]]
-  (when-not (and n (or (= n "--missing") (re-matches #"\d+" n)))
+  [{:keys [issue missing] :as opts}]
+  (when-not (or missing (and issue (re-matches #"\d+" issue)))
     (problem/fail! :retro/no-issue
                    "retro: name the issue"
                    {:fix "e.g. kit retro 55, or kit retro --missing"}))
   (load-file (str (fs/path base/kit-dir "bin" "retro.clj")))
-  (let [opts (parse-args more)
-        opts (assoc opts :repo (gate/gate-repo opts (gate/gate-config)))]
-    (if (= n "--missing")
+  (let [opts (assoc opts :repo (gate/gate-repo opts (gate/gate-config)))]
+    (if missing
       ((resolve 'retro/run-missing) opts)
       ((resolve 'retro/run)
-       (assoc opts :issue (parse-long n) :agent (get-in (config/read-defaults) [:agent :login]))))))
+       (assoc opts :issue (parse-long issue) :agent (get-in (config/read-defaults) [:agent :login]))))))
 
 
 (defn report-problem
@@ -279,51 +273,60 @@
     (flush)))
 
 
+(def ^:private flow-commands-outside-the-tree
+  "The flow commands that still read their own command line (step 5 of #139 moves them into the tree)."
+  #{"finish" "merge" "release" "checks" "review"})
+
+
+(defn- run-parsed
+  "The command of a parsed command line, called by its words. Returns what the command returns."
+  [{:keys [dispatch opts]}]
+  (when (and (#{["init"] ["doctor"] ["modules"] ["sync"]} dispatch)
+             (not= (str base/root) (base/sh "git" "rev-parse" "--show-toplevel")))
+    (problem/fail!
+     :usage/not-mounted
+     (str "dev-kit must be mounted at <project>/" base/mount "; " base/root " is not a git repository root")
+     {:fix (str "run kit from the project's root, where " base/mount " is a submodule")}))
+  (case dispatch
+    ["init"]         (if (:local opts)
+                       (commands/init-local)
+                       (commands/init opts))
+    ["doctor"]       (commands/doctor opts)
+    ["modules"]      (let [cfg (config/read-config)]
+                       (println (str "clojure=" (boolean (some-> cfg config/clojure?))))
+                       (println (str "user_test=" (boolean (get-in cfg [:user-test :run]))))
+                       (println (str "user_test_artifacts=" (or (get-in cfg [:user-test :artifacts]) ""))))
+    ["user-test"]    (config/user-test!)
+    ["identity"]     (commands/identity! opts)
+    ["github"]       (github/github! opts)
+    ["gate"]         (gate/gate! opts)
+    ["retro"]        (retro! opts)
+    ["sync"]         (if (:after-git opts)
+                       (after-git!)
+                       (sync!))
+    ["hook"]         (hook! opts)
+    ["start"]        (flow! dispatch nil opts)
+    ["board" "set"]  (flow! dispatch nil opts)
+    ["board" "show"] (flow! dispatch nil opts)))
+
+
 (defn run
   "Runs the command the arguments name and returns the exit code: the code the command returns, 0 when it returns
-  none, and for a problem thrown on the way, its :exit (1 when it names none) after printing it."
+  none (or when it printed its help), and for a problem thrown on the way, its :exit (1 when it names none) after
+  printing it."
   [argv]
-  (let [[cmd & args] argv]
-    (try
-      (when (and (#{"init" "doctor" "modules" "sync"} cmd)
-                 (not= (str base/root) (base/sh "git" "rev-parse" "--show-toplevel")))
-        (problem/fail!
-         :usage/not-mounted
-         (str "dev-kit must be mounted at <project>/" base/mount "; " base/root " is not a git repository root")
-         {:fix (str "run kit from the project's root, where " base/mount " is a submodule")}))
-      (let [result (case cmd
-                     "init"      (let [opts (parse-args args)]
-                                   (if (:local opts)
-                                     (commands/init-local)
-                                     (commands/init opts)))
-                     "doctor"    (commands/doctor (parse-args args))
-                     "modules"   (let [cfg (config/read-config)]
-                                   (println (str "clojure=" (boolean (some-> cfg config/clojure?))))
-                                   (println (str "user_test=" (boolean (get-in cfg [:user-test :run]))))
-                                   (println (str "user_test_artifacts="
-                                                 (or (get-in cfg [:user-test :artifacts]) ""))))
-                     "user-test" (config/user-test!)
-                     "identity"  (commands/identity! (parse-args args))
-                     "github"    (github/github! (parse-args args))
-                     "gate"      (gate/gate! (parse-args args))
-                     "retro"     (retro! args)
-                     "sync"      (if (some #{"--after-git"} args)
-                                   (after-git!)
-                                   (sync!))
-                     "hook"      (hook! args)
-                     ("start" "finish" "release" "merge" "checks" "review" "board") (flow! cmd args)
-                     nil         (usage)
-                     (do (usage)
-                         (problem/fail! :usage/unknown-command
-                                        (str "unknown command " cmd)
-                                        {:fix "pick one of the commands listed above"})))]
-        (if (integer? result) result 0))
-      (catch clojure.lang.ExceptionInfo e
-        (if-let [data (ex-data e)]
-          (if (:problem data)
-            (do (report-problem data) (or (:exit data) 1))
-            (throw e))
-          (throw e))))))
+  (try
+    (let [result (if (flow-commands-outside-the-tree (first argv))
+                   (flow! [(first argv)] (rest argv) nil)
+                   (some-> (command-line argv)
+                           run-parsed))]
+      (if (integer? result) result 0))
+    (catch clojure.lang.ExceptionInfo e
+      (if-let [data (ex-data e)]
+        (if (:problem data)
+          (do (report-problem data) (or (:exit data) 1))
+          (throw e))
+        (throw e)))))
 
 
 (defn -main

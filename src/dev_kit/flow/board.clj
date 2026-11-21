@@ -113,8 +113,8 @@
   (str/join " " (map shell/shell-quote ["bb" kit-script "board" "set" (str number) owner url field option])))
 
 
-(defn- show!
-  "The folder's board: its kit.edn, then the environment."
+(defn show!
+  "kit board show: the folder's board, its kit.edn then the environment, as JSON."
   []
   (let [owner  (shell/env "GHWF_OWNER" nil)
         number (shell/env "GHWF_PROJECT_NUMBER" nil)]
@@ -125,21 +125,9 @@
                      {:fix "add :board to kit.edn (run kit init), or set GHWF_OWNER and GHWF_PROJECT_NUMBER"}))))
 
 
-(defn- set-field!
-  [[_ number owner url field option]]
-  (when-let [e (board-set-field number owner url field option)]
+(defn set-field!
+  "kit board set: one field of one card. A refusal is thrown for the flow's edge."
+  [{:keys [project-number owner issue-url field option]}]
+  (when-let [e (board-set-field project-number owner issue-url field option)]
     (problem/fail! :board/refused e {:fix "read the reason above; kit board set can be run again alone"}))
   (println (str field ": " option)))
-
-
-(defn board!
-  "kit board show | set: the folder's board as JSON, or one field of one card. A refusal is thrown for the flow's edge."
-  [args]
-  (cond
-    (= ["show"] args) (show!)
-    (and (= "set" (first args)) (= 6 (count args))) (set-field! args)
-    :else
-    (problem/fail!
-     :board/usage
-     "Usage: kit board set <project-number> <owner> <issue-url> <field> <option>\n       kit board show   the folder's board as JSON, {\"owner\": ..., \"number\": ...}"
-     {:exit 2 :fix "give the arguments as shown"})))

@@ -9,12 +9,19 @@
    [dev-kit.flow.fake-github :as fake]
    [dev-kit.flow.shell :as shell]
    [dev-kit.flow.start :as start]
-   [dev-kit.flow.steps :as steps]))
+   [dev-kit.flow.steps :as steps]
+   [dev-kit.main :as main]))
 
 
 (def ^:private variables
   {"GHWF_OWNER" "u473t8"
    "GHWF_PROJECT_NUMBER" "3"})
+
+
+(defn- start-options
+  "The options of a kit start command line, read against the command tree as kit reads them."
+  [args]
+  (:opts (main/command-line (into ["start"] args))))
 
 
 (defn- kit-start
@@ -23,7 +30,7 @@
   [world & args]
   (let [out    (java.io.StringWriter.)
         err    (java.io.StringWriter.)
-        input  (start/read-input (vec args) (fn [variable default] (get variables variable default)))
+        input  (start/read-input (start-options args) (fn [variable default] (get variables variable default)))
         result (binding [*out* out
                          *err* err]
                  (fake/with-github world #(start/start input)))]
@@ -88,10 +95,14 @@
     (is (nothing-exists? world) "no issue, card or branch exists")))
 
 
-(deftest a-missing-priority-and-one-off-the-scale-stop-before-anything-exists
+(deftest a-missing-priority-and-a-default-off-the-scale-stop-before-anything-exists
   (let [world   (fake/new-world {})
         missing (kit-start world "--title" "Add landing page")
-        off     (kit-start world "--title" "Add landing page" "--priority" "Critical")]
+        off-env (assoc variables "GHWF_DEFAULT_PRIORITY" "Critical")
+        off     (fake/with-github world
+                                  #(start/start (start/read-input {:title "Add landing page"}
+                                                                  (fn [variable default]
+                                                                    (get off-env variable default)))))]
     (is (= :start/no-priority (get-in missing [::steps/problem :problem])) "no priority is refused")
     (is (str/includes? (said missing) "Urgent|High|Medium|Low") "and the answer lists the scale")
     (is (= :start/off-scale-priority (get-in off [::steps/problem :problem])) "a priority off the scale is refused")
@@ -101,7 +112,7 @@
 
 (deftest a-start-without-a-title-stops-before-anything-exists
   (let [world  (fake/new-world {})
-        result (kit-start world "--priority" "High")]
+        result (kit-start world "--title" "" "--priority" "High")]
     (is (= :start/no-title (get-in result [::steps/problem :problem])) "no title is refused")
     (is (str/includes? (said result) "--title is required") "in today's words")
     (is (nothing-exists? world) "no issue, card or branch exists")))
@@ -286,7 +297,7 @@
   [world change & args]
   (let [out    (java.io.StringWriter.)
         err    (java.io.StringWriter.)
-        input  (start/read-input (vec args) (fn [variable default] (get variables variable default)))
+        input  (start/read-input (start-options args) (fn [variable default] (get variables variable default)))
         result (binding [*out* out
                          *err* err]
                  (fake/with-github world #(change (fn [] (start/start input)))))]

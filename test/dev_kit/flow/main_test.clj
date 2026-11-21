@@ -47,11 +47,12 @@
     (is (= "{\"owner\":\"o\",\"number\":\"3\"}\n" out))))
 
 
-(deftest board-set-without-its-six-words-shows-the-usage-with-exit-2
+(deftest board-set-without-its-five-arguments-says-what-is-missing-and-shows-the-help-with-exit-1
   (let [{:keys [exit err]} (run {} "board" "set" "3")]
-    (is (= 2 exit))
-    (is (str/starts-with? err "Usage: kit board set <project-number> <owner> <issue-url> <field> <option>"))
-    (is (str/includes? err "\nFix: give the arguments as shown"))))
+    (is (= 1 exit))
+    (is (str/starts-with? err "Required argument: <issue-url>"))
+    (is (str/includes? err "Usage: kit board set <project-number> <owner> <issue-url> <field> <option>"))
+    (is (str/includes? err "\nFix: "))))
 
 
 ;; Stories moved from the selftest's flow sections (#139 step 8).

@@ -16,16 +16,19 @@
     (let [{:keys [result out err]} (fake/captured #(main/run ["github" "--bogus"]))]
       (is (= 1 result))
       (is (= "" out))
-      (is (str/starts-with? err "unknown option --bogus. Fix: "))))
-  (testing "an unknown command, after the usage"
+      (is (str/starts-with? err "Unknown option: --bogus\n\nUsage: kit github"))
+      (is (str/includes? err "\nFix: correct the command line as the help above shows; kit github --help"))))
+  (testing "an unknown command, with the list of commands"
     (let [{:keys [result out err]} (fake/captured #(main/run ["frobnicate"]))]
       (is (= 1 result))
-      (is (str/includes? out "kit doctor"))
-      (is (str/starts-with? err "unknown command frobnicate. Fix: "))))
+      (is (= "" out))
+      (is (str/starts-with? err "Unknown command: frobnicate\n\nUsage: kit <command>"))
+      (is (str/includes? err "  doctor "))
+      (is (str/includes? err "\nFix: pick one of the commands above"))))
   (testing "kit hook with no command"
     (let [{:keys [result err]} (fake/captured #(main/run ["hook"]))]
       (is (= 1 result))
-      (is (str/includes? err "kit hook '<command>'"))))
+      (is (str/starts-with? err "Required argument: <command>\n\nUsage: kit hook <command>"))))
   (testing "kit retro with no issue"
     (let [{:keys [result out err]} (fake/captured #(main/run ["retro"]))]
       (is (= 1 result))
@@ -74,7 +77,7 @@
 
 (deftest kit-hook-without-the-entry-hook-says-to-run-init
   (let [dir     (fake/new-project)
-        problem (fake/with-project dir (fake/thrown #(main/hook! ["ls"])))]
+        problem (fake/with-project dir (fake/thrown #(main/hook! {:command "ls"})))]
     (is (= :hook/no-entry (:problem problem)))
     (is (str/includes? (:fix problem) "bin/kit init"))))
 

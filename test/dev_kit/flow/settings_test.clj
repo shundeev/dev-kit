@@ -11,7 +11,8 @@
    [dev-kit.config :as config]
    [dev-kit.flow.fake-github :as fake]
    [dev-kit.flow.start :as start]
-   [dev-kit.flow.steps :as steps]))
+   [dev-kit.flow.steps :as steps]
+   [dev-kit.main :as main]))
 
 
 (defn- git [folder & args] (apply p/shell {:dir (str folder) :out :string :err :string} "git" args))
@@ -52,7 +53,7 @@
   "kit start run in dir, in a session with that environment, against an empty GitHub; the world afterwards."
   [dir session & args]
   (let [world (fake/new-world {})
-        input (start/read-input (vec args) (lookup-in dir session))
+        input (start/read-input (:opts (main/command-line (into ["start"] args))) (lookup-in dir session))
         done  (binding [*err* (java.io.StringWriter.)]
                 (fake/with-github world #(start/start input)))]
     {:world world :result done}))
@@ -77,7 +78,7 @@
            (map #(lookup % nil)
                 ["GHWF_OWNER" "GHWF_PROJECT_NUMBER" "GHWF_DEFAULT_BASE" "GHWF_SHOWCASE" "GHWF_REVIEWERS" "GHWF_REPO"]))
         "owner, number, base, Showcase, reviewers and repository come from the file")
-    (is (= "5" (:project-number (start/read-input ["--title" "x"] lookup))) "kit start takes the board from it")))
+    (is (= "5" (:project-number (start/read-input {:title "x"} lookup))) "kit start takes the board from it")))
 
 
 (deftest a-board-missing-from-kit-edn-is-the-default-board
@@ -87,8 +88,7 @@
 
 (deftest a-flag-beats-kit-edn
   (let [dir   (folder dev-kit-edn)
-        input (start/read-input ["--title" "x" "--showcase" "Site" "--base" "next" "--owner" "someone"]
-                                (lookup-in dir {}))]
+        input (start/read-input {:title "x" :showcase "Site" :base "next" :owner "someone"} (lookup-in dir {}))]
     (is (= ["Site" "next" "someone"] ((juxt :showcase :base :owner) input)))))
 
 

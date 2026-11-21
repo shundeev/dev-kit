@@ -14,20 +14,18 @@
 ;; ------------------------------------------------------------------ entry
 
 
-(defn- run-command
-  [cmd args]
-  (case cmd
-    "start"   (start/start! args)
-    "finish"  (finish/finish! args)
-    "release" (release/release! args)
-    "merge"   (merge/merge! args)
-    "checks"  (checks/checks! args)
-    "review"  (review/review! args)
-    "board"   (board/board! args)))
-
-
 (defn main
-  "kit start | finish | release | merge | checks | review | board. Returns 0 when the command went through; a refusal is thrown as a problem, for kit's one edge to print."
-  [cmd args]
-  (run-command cmd args)
+  "kit start | finish | release | merge | checks | review | board show | board set, by the command's words. A
+  command in the command tree (dev-kit.cli) is given its parsed options, one not yet there its raw arguments.
+  Returns 0 when the command went through; a refusal is thrown as a problem, for kit's one edge to print."
+  [command args opts]
+  (case command
+    ["start"]        (start/start! opts)
+    ["board" "set"]  (board/set-field! opts)
+    ["board" "show"] (board/show!)
+    ["finish"]       (finish/finish! args)
+    ["release"]      (release/release! args)
+    ["merge"]        (merge/merge! args)
+    ["checks"]       (checks/checks! args)
+    ["review"]       (review/review! args))
   0)
