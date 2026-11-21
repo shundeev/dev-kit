@@ -66,7 +66,9 @@ From the issue branch:
 - Every input is checked before the commit and the push (body file, `ADR:` line, subject).
 - Only an open pull request counts as the branch's PR.
 - The PR body must contain an `ADR:` line (`ADR: none` or `ADR: adr/NNNN-....md`) and states
-  what was verified and what was not. `Closes #<issue>` is added when missing.
+  what was verified and what was not. `Closes #<issue>` is added when missing; for an issue of
+  size L (one issue, several PRs) it is `Part of #<issue>`, and `--last` on the last PR of the
+  issue makes it `Closes #<issue>`.
 - `--no-commit` pushes and opens the PR for commits already on the branch.
 - Requests a review from the code owners (`:owners` in `kit.edn`; not on a draft, which
   asks nobody) and assigns the PR to
@@ -113,6 +115,8 @@ woken when it exits. Never wait for it, or for checks, with `sleep` or `--watch`
 - Closeout after a confirmed `MERGED`: card **Done**, each issue the PR closes that is still open
   closed as completed (auto-merge merges as `github-actions`, and GitHub then closes none), branch deleted locally and on GitHub,
   back to `main` (or detached on `origin/main` when `main` is checked out in another worktree).
+  An issue of size L is closed only when the PR's body says `Closes #<issue>` (`kit finish --last`);
+  after any other PR of it, merge prints that the issue stays open, and its card keeps its Status.
   A PR that did not merge keeps its branch.
 
 It runs without a permission prompt: the server enforces the approval, and the `main` ruleset

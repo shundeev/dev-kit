@@ -201,7 +201,9 @@ component is an M: stop, resize it and ask for G1.
   Never write an ad-hoc wait script for it.
 - The agent never approves a pull request.
 - An owner step still open after the merge: reopen the issue and keep its card **In progress**.
-  A branch from `gh issue develop` closes its issue on merge, whatever the PR body says.
+  An issue of size M or smaller is closed by `kit merge`. An L issue has several PRs: each opens with
+  `Part of #<issue>`, the last with `kit finish --last` (`Closes #<issue>`), and `kit merge` closes the
+  issue only for that one; after the others it says the issue stays open and leaves the card alone.
 
 ## 11. Retrospective
 
