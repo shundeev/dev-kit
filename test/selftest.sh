@@ -927,6 +927,8 @@ contains "  with the way out" "pass --repo owner/name" "$LAST"
 cd "$P" || exit 1
 
 echo "- design approval gate (fake gh)"
+# What the gate says in each case is told in test/dev_kit/gate_test.clj (bb test). Here the real entries stay: `kit gate`
+# as CI runs it, and `kit gate --hook` as Claude Code runs it, a tool call on stdin.
 G="$WORK/gate"; mkdir -p "$G"
 gate() { PATH="$KIT/test/fake-gh:$PATH" FAKE_GH_DIR="$G" FAKE_GH_LOG="$G/log" GITHUB_REPOSITORY=u473t8/fake bb "$KIT/bin/kit" gate "$@"; }
 # issue <labels as JSON> <labeled by> <labeled at> <body edited at|null> <design comment created> <design comment edited|null>
@@ -943,224 +945,39 @@ issue() {
 # pr-files.json holds what `gh api --paginate …/files --jq '.[]'` prints: one file per line.
 files() { jq -nc --argjson n "$1" '{filename: "src/a.clj", status: "modified", additions: $n, deletions: 0},
                                    {filename: "package-lock.json", status: "modified", additions: 900, deletions: 0}' > "$G/pr-files.json"; }
-SIZE_LINE='Size: 400 → 300 lines after simplify'
 GOOD_BODY=$'## What changed\n- x\nSize: 400 → 300 lines after simplify\n\n## Review\n<!-- hint -->\nSelf-review: fine.\n\n## User-level test\nRan it.\n\nADR: none'
 # pr <title> [body]: what `gh api …/pulls/<n>` prints after the gate's filter
 pr() { jq -nc --arg t "$1" --arg b "${2-$GOOD_BODY}" '{title: $t, body: $b}' > "$G/pr.json"; }
 echo admin > "$G/perm-the-owner"; echo write > "$G/perm-$default_login"; files 50; pr "feat(GH-26): add x"
-T0=2026-11-12T10:00:00Z; T1=2026-11-12T11:00:00Z; T2=2026-11-12T12:00:00Z
+T0=2026-11-12T10:00:00Z; T1=2026-11-12T11:00:00Z
 issue '["design-approved","size:M"]' the-owner $T1 null $T0 null
 expect_exit 0 "gate: an approved M issue passes" gate --branch 26-x --pr 7
 contains "  names who approved" "approved by the-owner" "$LAST"
 issue '["size:M"]' the-owner $T1 null $T0 null
 expect_exit 1 "gate: an M issue without design-approved fails" gate --branch 26-x --pr 7
 contains "  says what to do" "design-approved" "$LAST"
-issue '["design-approved","size:M"]' "$default_login" $T1 null $T0 null
-expect_exit 1 "gate: a label set by the agent does not count" gate --branch 26-x --pr 7
-contains "  names the agent" "set by the agent" "$LAST"
-issue '["design-approved","size:M"]' the-owner $T1 $T2 $T0 null
-expect_exit 1 "gate: the issue body edited after the approval fails" gate --branch 26-x --pr 7
-contains "  says the approval is stale" "after the approval" "$LAST"
-issue '["design-approved","size:M"]' the-owner $T1 null $T0 $T2
-expect_exit 1 "gate: a design comment edited after the approval fails" gate --branch 26-x --pr 7
-issue '["design-approved"]' the-owner $T1 null $T0 null
-expect_exit 0 "gate: no size label counts as M" gate --branch 26-x --pr 7
-contains "  says so" "no size label" "$LAST"
-issue '["size:S"]' the-owner $T1 null $T0 null; files 150
-expect_exit 0 "gate: an S PR within the threshold passes without approval" gate --branch 26-x --pr 7
-contains "  lock files are not counted" "150 lines" "$LAST"
-files 250
-expect_exit 1 "gate: an S PR over the threshold fails" gate --branch 26-x --pr 7
-contains "  says to resize" "size:M" "$LAST"
-
-echo "- pull request shape and accepted ADRs (#21)"
-issue '["size:S"]' the-owner $T1 null $T0 null; files 10
-expect_exit 0 "pr gate: a well-formed S PR passes" gate --branch 26-x --pr 7
-grep -q -- '--paginate' "$G/log" && ok "  reads every page of the file list" || bad "  one page only" "$(grep files "$G/log")"
-expect_exit 1 "pr gate: a branch without an issue number fails" gate --branch feature-x --pr 7
-contains "  names the way out" "kit start" "$LAST"
-jq '.data.repository.issue.state = "CLOSED"' "$G/gate-issue.json" > "$G/i" && mv "$G/i" "$G/gate-issue.json"
-expect_exit 1 "pr gate: a closed issue fails" gate --branch 26-x --pr 7
-contains "  says the issue is closed" "#26 is closed" "$LAST"
-issue '["size:S"]' the-owner $T1 null $T0 null
-pr "add x"; expect_exit 1 "pr gate: a title without type(GH-n) fails" gate --branch 26-x --pr 7
-contains "  with the command that renames it" "gh pr edit 7 --title" "$LAST"
-pr "feat(GH-25): add x"; expect_exit 1 "pr gate: a title naming another issue fails" gate --branch 26-x --pr 7
-pr "update(GH-26): add x"; expect_exit 1 "pr gate: a type outside Conventional Commits fails" gate --branch 26-x --pr 7
-pr "feat(GH-26): add x" "${GOOD_BODY%ADR: none}"; expect_exit 1 "pr gate: a body without an ADR line fails" gate --branch 26-x --pr 7
-contains "  names the line" "ADR: none" "$LAST"
-pr "feat(GH-26): add x" "${GOOD_BODY/ADR: none/ADR: none — a process change, decided in ADR-0001}"
-expect_exit 0 "pr gate: an ADR line with a reason after it passes" gate --branch 26-x --pr 7
-pr "feat(GH-26): add x" "${GOOD_BODY/ADR: none/ADR: maybe}"; expect_exit 1 "pr gate: an ADR line that names no ADR fails" gate --branch 26-x --pr 7
-pr "feat(GH-26): add x" "${GOOD_BODY/Self-review: fine./}"; expect_exit 1 "pr gate: a Review section with only the hint fails" gate --branch 26-x --pr 7
-contains "  names the section" "Review" "$LAST"
-pr "feat(GH-26): add x" "${GOOD_BODY/\#\# User-level test/\#\# Testing}"; expect_exit 1 "pr gate: a missing User-level test section fails" gate --branch 26-x --pr 7
-contains "  names the section" "User-level test" "$LAST"
-# #117: an M PR (or one whose issue has no size label) says how much the simplify pass removed
-for t in '["design-approved","size:M"]||1' '["design-approved","size:M"]|Size: M → M after simplify|1' \
-         '["design-approved","size:M"]|Size: 164 → 164 lines after simplify|0' '["design-approved","size:M"]|Size: 164 -> 150|0' \
-         '["design-approved","size:M"]|same|0' '["design-approved"]||1' '["size:S"]||0'; do
-  IFS='|' read -r labels line want <<<"$t"; issue "$labels" the-owner $T1 null $T0 null
-  case "$line" in same) body="$GOOD_BODY";; *) body="${GOOD_BODY/$SIZE_LINE/$line}";; esac
-  pr "feat(GH-26): add x" "$body"; expect_exit "$want" "pr gate: $labels, Size line '${line:-none}': exit $want" gate --branch 26-x --pr 7
-done
-contains "  a line without numbers is named with its fix" "Size: 164 → 150 lines after simplify" "$(pr "feat(GH-26): add x" "${GOOD_BODY/$SIZE_LINE/Size: M → M after simplify}"; issue '["size:M"]' the-owner $T1 null $T0 null; gate --branch 26-x --pr 7 2>&1)"
-contains "  a missing line is named with its fix" "Size: 164 → 150 lines after simplify" "$(pr "feat(GH-26): add x" "${GOOD_BODY/$SIZE_LINE/}"; issue '["size:M"]' the-owner $T1 null $T0 null; gate --branch 26-x --pr 7 2>&1)"
-issue '["size:S"]' the-owner $T1 null $T0 null; pr "feat(GH-26): add x"
-pr "add x" "no sections"; expect_exit 1 "pr gate: every problem is listed, not only the first" gate --branch 26-x --pr 7
-[ "$(grep -c '  FAIL  ' <<<"$LAST")" -ge 4 ] && ok "  four problems, four lines" || bad "  lines" "$LAST"
-pr "feat(GH-26): add x"
-# #117: a rule line removed from rules/shared.md is quoted in the PR body, next to its replacement
-rule() { jq -nc --arg p "$1" '{filename: "rules/shared.md", status: "modified", additions: 1, deletions: 1, patch: $p}' > "$G/pr-files.json"; }
-OLD='old rule that wraps'
-rule $'@@ -1,3 +1,3 @@\n keep\n-old rule\n-  that wraps\n+new rule\n'
-pr "feat(GH-26): add x"; expect_exit 1 "pr gate: a removed rule line that the body does not quote fails" gate --branch 26-x --pr 7
-contains "  names the line and the fix" "'old rule'. Fix: quote the old line in the PR body, next to the new one" "$LAST"
-pr "feat(GH-26): add x" "${GOOD_BODY/- x/- was: $OLD, now: new rule}"
-expect_exit 0 "pr gate: the removed line quoted on one line passes (a wrapped line)" gate --branch 26-x --pr 7
-rule $'@@ -1,2 +1,3 @@\n keep\n+new rule\n'
-pr "feat(GH-26): add x"; expect_exit 0 "pr gate: a rule line only added passes" gate --branch 26-x --pr 7
-adr() { jq -nc --arg s "$1" --arg f "${2:-adr/0001-a.md}" --arg p "${3:-}" \
-  '{filename: $f, status: $s, additions: 1, deletions: 1} + (if $p == "" then {} else {previous_filename: $p} end)' > "$G/pr-files.json"; }
-adr added adr/0005-new.md; expect_exit 0 "pr gate: a new ADR passes" gate --branch 26-x --pr 7
-adr modified; expect_exit 1 "pr gate: an edited accepted ADR fails" gate --branch 26-x --pr 7
-contains "  says what to do instead" "Supersedes: ADR-0001" "$LAST"
-adr removed; expect_exit 1 "pr gate: a deleted accepted ADR fails" gate --branch 26-x --pr 7
-adr renamed adr/0001-b.md adr/0001-a.md; expect_exit 1 "pr gate: a renamed accepted ADR fails" gate --branch 26-x --pr 7
-adr modified adr/README.md; expect_exit 0 "pr gate: the ADR index is not an ADR" gate --branch 26-x --pr 7
-echo '{"data":{"repository":{"issue":null}}}' > "$G/gate-issue.json"; files 10
-expect_exit 1 "pr gate: a branch number that is no issue fails" gate --branch 26-x --pr 7
-contains "  says so" "#26 is not an issue" "$LAST"
-touch "$G/gh-fails"; expect_exit 1 "pr gate: GitHub unreachable fails" gate --branch 26-x --pr 7
-grep -qE "Exception|----- Error" <<<"$LAST" && bad "  with a stack trace" "$LAST" || contains "  with what to do" "rerun the job" "$LAST"
-rm -f "$G/gh-fails"; issue '["size:S"]' the-owner $T1 null $T0 null
-for i in $(seq 1 101); do jq -nc --arg f "src/f$i.clj" '{filename: $f, status: "modified", additions: 2, deletions: 0}'; done > "$G/pr-files.json"
-expect_exit 1 "pr gate: 101 files are counted in full" gate --branch 26-x --pr 7
-contains "  202 lines" "202 lines" "$LAST"
 
 echo "- design approval hook (fake gh)"
 H="$WORK/hookrepo"; git init -q -b main "$H"; cd "$H" || exit 1
 echo '{}' > kit.edn; git add kit.edn; git commit -q -m "chore: base"; git switch -q -c 26-gate
 git remote add origin https://github.com/u473t8/fake.git
 hook() { jq -nc --arg p "$H/$1" '{tool_name: "Edit", tool_input: {file_path: $p}}' | gate --hook; }
-issue '["size:M"]' the-owner $T1 null $T0 null; : > "$G/log"
+issue '["size:M"]' the-owner $T1 null $T0 null
 contains "hook: an edit on an unapproved M branch is refused" '"permissionDecision":"deny"' "$(hook src/a.clj)"
-[ -z "$(hook adr/0004-x.md)" ] && ok "hook: adr/ may be written before the approval" || bad "hook refused adr/"
-n=$(wc -l < "$G/log"); hook src/b.clj >/dev/null
-[ "$(wc -l < "$G/log")" = "$n" ] && ok "hook: the verdict is cached" || bad "hook asked GitHub again"
+# An input without a path is judged by the session's folder, as before (#99): the real process's folder.
+rm -rf "$(git rev-parse --git-path kit)"
+contains "hook: an input with no file is judged by the session's branch" '"permissionDecision":"deny"' "$(printf '' | gate --hook)"
 rm -rf "$(git rev-parse --git-path kit)"; issue '["design-approved","size:M"]' the-owner $T1 null $T0 null
 [ -z "$(hook src/a.clj)" ] && ok "hook: an approved branch may be edited" || bad "hook refused an approved branch"
-rm -rf "$(git rev-parse --git-path kit)"; touch "$G/gh-fails"
-contains "hook: GitHub unreachable means refused, with the retry" "gate --g1 26" "$(hook src/a.clj)"
-rm "$G/gh-fails"; git switch -q main
-[ -z "$(hook src/a.clj)" ] && ok "hook: a branch without an issue is not gated" || bad "hook gated main"
-
-# The hook judges the edited file's repository and branch, not the session's folder (#99). The session is in
-# $H; B is another repository on dev-kit (kit.edn at its root) on the branch of an M issue.
-echo "- design approval hook: the edited file's repository (#99, fake gh)"
-B="$WORK/hookB"; git init -q -b main "$B"; echo '{}' > "$B/kit.edn"; git -C "$B" add kit.edn
-git -C "$B" commit -q -m "chore: base"; git -C "$B" switch -q -c 26-other; git -C "$B" remote add origin https://github.com/u473t8/fake.git
-hookf() { jq -nc --arg p "$1" '{tool_name: "Edit", tool_input: {file_path: $p}}' | (cd "$H" && gate --hook); } # hookf <abs path>
-nocache() { rm -rf "$(git -C "$1" rev-parse --absolute-git-dir)/kit"; }
-issue '["size:M"]' the-owner $T1 null $T0 null; nocache "$B"; nocache "$H"
-contains "hook: a file in another repository on an unapproved M branch is refused" '"permissionDecision":"deny"' "$(hookf "$B/src/a.clj")"
-nocache "$B"
-contains "hook: a new file in a directory that does not exist yet is refused too" '"permissionDecision":"deny"' "$(hookf "$B/new/deep/dir/a.clj")"
-mkdir -p "$B/src"; : > "$B/src/a.clj"; ln -s "$B/src" "$WORK/skill-dir"; ln -s "$B/src/a.clj" "$H/link.clj"
-nocache "$B"
-contains "hook: a file reached through a symlinked folder is judged by its repository" '"permissionDecision":"deny"' "$(hookf "$WORK/skill-dir/a.clj")"
-nocache "$B"
-contains "hook: a symlinked file is judged by the repository it points into" '"permissionDecision":"deny"' "$(hookf "$H/link.clj")"
-nocache "$B"; issue '["design-approved","size:M"]' the-owner $T1 null $T0 null
-[ -z "$(hookf "$B/src/a.clj")" ] && ok "hook: with the approval, the other repository may be edited" || bad "hook refused an approved branch of another repository"
-nocache "$B"; touch "$G/gh-fails"
-contains "hook: another repository, GitHub unreachable: refused, with the retry" "gate --g1 26" "$(hookf "$B/src/a.clj")"
-rm "$G/gh-fails"
-# From here the session's own branch is an unapproved M branch: nothing below may be judged by it.
-issue '["size:M"]' the-owner $T1 null $T0 null; nocache "$B"; nocache "$H"; git switch -q 26-gate; : > "$G/log"
-mkdir "$WORK/plain"
-[ -z "$(hookf "$WORK/plain/notes.txt")" ] && ok "hook: a file outside any repository is allowed" || bad "hook gated a file outside a repository"
-N="$WORK/hookN"; git init -q -b main "$N"; git -C "$N" commit -q --allow-empty -m "chore: base"; git -C "$N" switch -q -c 26-n
-[ -z "$(hookf "$N/src/a.clj")" ] && ok "hook: a repository without kit.edn or kit-defaults.edn is not on dev-kit, so allowed" || bad "hook gated a repository not on dev-kit"
-D="$WORK/hookD"; git init -q -b main "$D"; echo '{}' > "$D/kit.edn"; git -C "$D" add kit.edn; git -C "$D" commit -q -m "chore: base"
-git -C "$D" switch -q --detach
-[ -z "$(hookf "$D/src/a.clj")" ] && ok "hook: a detached HEAD (the .shared submodule) is not gated" || bad "hook gated a detached HEAD"
-[ -z "$(hookf "$B/adr/0009-x.md")" ] && ok "hook: adr/ of the other repository keeps its exception" || bad "hook refused adr/ of another repository"
-[ ! -s "$G/log" ] && ok "hook: none of these asked GitHub" || bad "hook asked GitHub" "$(cat "$G/log")"
-# dev-kit itself has kit-defaults.edn at its root, not kit.edn
-K="$WORK/hookK"; git init -q -b main "$K"; echo '{}' > "$K/kit-defaults.edn"; git -C "$K" add kit-defaults.edn
-git -C "$K" commit -q -m "chore: base"; git -C "$K" switch -q -c 26-k; git -C "$K" remote add origin https://github.com/u473t8/fake.git
-contains "hook: dev-kit itself (kit-defaults.edn) is gated" '"permissionDecision":"deny"' "$(hookf "$K/bin/a.clj")"
-
-# An input without a path is judged by the session's folder, as before (#99): an unknown field name must not open the gate.
-: > "$G/log"; nocache "$H"
-for in in '{"tool_name":"MultiEdit","tool_input":{"path":"X"}}' '{"tool_name":"Edit","tool_input":{}}' '{"tool_name":"Edit"}' ''; do
-  contains "hook: no file_path or notebook_path, judged by the session's branch: ${in:-empty input}" '"permissionDecision":"deny"' \
-    "$(cd "$H" && printf '%s' "$in" | gate --hook)"
-  nocache "$H"
-done
-contains "hook: no path, the folder named by the input's cwd is judged" '"permissionDecision":"deny"' \
-  "$(cd "$WORK" && jq -nc --arg d "$H" '{tool_name:"Edit",tool_input:{},cwd:$d}' | gate --hook)"
-
-# The repository is the edited file's own: its origin, else :repo of its kit.edn. Never the session's, never GITHUB_REPOSITORY.
-echo "- design approval hook: the repository to ask (#99)"
-issue '["size:M"]' the-owner $T1 null $T0 null
-O="$WORK/hookO"; git init -q -b main "$O"; echo '{}' > "$O/kit.edn"; git -C "$O" add kit.edn; git -C "$O" commit -q -m "chore: base"; git -C "$O" switch -q -c 26-o
-: > "$G/log"
-out="$(hookf "$O/src/a.clj")"
-contains "hook: a repository with no GitHub origin and no :repo is refused" '"permissionDecision":"deny"' "$out"
-contains "  and the refusal names the fix" ':repo in that repository' "$out"
-[ ! -s "$G/log" ] && ok "  and GitHub is not asked about another repository" || bad "  GitHub was asked" "$(cat "$G/log")"
-git -C "$O" remote add origin https://gitlab.com/someone/o-repo.git; nocache "$O"
-contains "hook: a gitlab origin counts as none" ':repo in that repository' "$(hookf "$O/src/a.clj")"
-echo '{:repo "u473t8/from-kit-edn"}' > "$O/kit.edn"; nocache "$O"
-contains "hook: :repo of its kit.edn is used" '"permissionDecision":"deny"' "$(hookf "$O/src/a.clj")"
-grep -q 'n=from-kit-edn' "$G/log" && ok "  and that repository is asked" || bad "  the kit.edn repository was not asked" "$(cat "$G/log")"
-git -C "$O" remote remove origin; git -C "$O" remote add origin https://github.com/u473t8/o-repo.git; nocache "$O"; : > "$G/log"; hookf "$O/src/a.clj" >/dev/null
-grep -q 'n=o-repo' "$G/log" && ! grep -q 'n=fake' "$G/log" && ok "hook: its origin comes before :repo and before GITHUB_REPOSITORY" || bad "hook asked the wrong repository" "$(cat "$G/log")"
-
-# Two repositories with the same issue number keep separate verdicts.
-nocache "$B"; nocache "$H"
-contains "hook: the session repository's refusal of #26" '"permissionDecision":"deny"' "$(hookf "$H/src/a.clj")"
-issue '["design-approved","size:M"]' the-owner $T1 null $T0 null
-[ -z "$(hookf "$B/src/a.clj")" ] && ok "hook: its cached refusal does not reach another repository's #26" || bad "hook leaked a verdict across repositories"
-contains "hook: nor does the other's approval reach it" '"permissionDecision":"deny"' "$(hookf "$H/src/a.clj")"
-git switch -q main; rm -f "$H/link.clj"
+git switch -q main
 cd "$P" || exit 1
 
 echo "- user-level test in CI (#27)"
+# The :user-test key's problems, what modules prints, the project's root and the CI step are told in config_test, main_test,
+# doctor_test and docs_test (bb test). Here the real entries: kit modules, and kit user-test from a subfolder.
 fresh "$WORK/ut"; bb $kit init --showcase Site >/dev/null 2>&1
 ut() { bb -e "(spit \"kit.edn\" (pr-str (assoc (clojure.edn/read-string (slurp \"kit.edn\")) :user-test $1)))"; }
-expect_exit 0 "modules: a project without :user-test" bb $kit modules
-grep -qx 'user_test=false' <<<"$LAST" && ok "  leaves the step off" || bad "  user_test" "$LAST"
-expect_exit 1 "user-test: without :user-test it says what to add" bb $kit user-test
-contains "  the key and its shape" ":user-test {:run" "$LAST"
-ut '{:artifacts "out"}'
-expect_exit 1 "doctor: :user-test without :run fails" bb $kit doctor --ci
-contains "  names the key" ":user-test" "$LAST"
-expect_exit 1 "user-test: refuses it too" bb $kit user-test
-contains "  with the same reason" ":user-test" "$LAST"
-ut '{:run "true" :artifacts "../elsewhere"}'
-expect_exit 1 "doctor: artifacts outside the project fail" bb $kit doctor --ci
-contains "  says where they belong" "inside the project" "$LAST"
-ut '{:run "true" :artifacts "/tmp/out"}'
-expect_exit 1 "doctor: an absolute artifacts path fails" bb $kit doctor --ci
-accepted=""
-# shellcheck disable=SC2088 # a literal ~ is the case: kit.edn holds it as text
-for a in . '*' '!x' 'a b' '~/x' './x'; do
-  ut "{:run \"true\" :artifacts \"$a\"}"
-  bb $kit doctor --ci >/dev/null 2>&1 && accepted="$accepted [$a]"
-done
-[ -z "$accepted" ] && ok "doctor: artifacts upload-artifact would read as a pattern fail (. * !x, a space, ~, ./)" \
-  || bad "doctor accepted artifacts" "$accepted"
-accepted=""
-for u in '"npm test"' '{:run 5}' '{:run "  "}' '[1]'; do
-  ut "$u"
-  bb $kit doctor --ci >/dev/null 2>&1 && accepted="$accepted [$u]"
-done
-[ -z "$accepted" ] && ok "doctor: a :user-test that is not {:run \"<command>\"} fails" || bad "doctor accepted :user-test" "$accepted"
 ut '{:run "mkdir -p out && echo seen > out/shot.txt && echo visitor-ok" :artifacts "out"}'
-expect_exit 0 "doctor: a declared user-level test passes" bb $kit doctor --ci
 expect_exit 0 "modules: a declared user-level test" bb $kit modules
 grep -qx 'user_test=true' <<<"$LAST" && ok "  turns the step on" || bad "  user_test" "$LAST"
 grep -qx 'user_test_artifacts=out' <<<"$LAST" && ok "  names the folder to keep" || bad "  artifacts" "$LAST"
@@ -1168,39 +985,11 @@ mkdir -p sub
 expect_exit 0 "user-test: runs the project's command" bash -c "cd sub && bb ../$kit user-test"
 contains "  shows its output" "visitor-ok" "$LAST"
 [ "$(cat out/shot.txt 2>/dev/null)" = seen ] && ok "  from the project's root" || bad "  not from the root" "$(find . -name shot.txt)"
-ut '{:run "echo broken-page >&2; exit 3"}'
-expect_exit 3 "user-test: a failing test fails with its own exit code" bb $kit user-test
-contains "  and shows why" "broken-page" "$LAST"
-expect_exit 0 "modules: without :artifacts" bb $kit modules
-grep -qx 'user_test_artifacts=' <<<"$LAST" && ok "  there is nothing to upload" || bad "  artifacts" "$LAST"
-steps="$(bb -e "
-(require '[clj-yaml.core :as y] '[clojure.string :as str])
-(let [steps (vec (get-in (y/parse-string (slurp \"$KIT/ci/action.yml\")) [:runs :steps]))
-      i (first (keep-indexed (fn [i s] (when (= \"user-test\" (:id s)) i)) steps))
-      run (when i (get steps i)) up (when i (get steps (inc i)))]
-  (println (str \"last=\" (= i (- (count steps) 2))))
-  (println (str \"gated=\" (= (:if run) \"steps.kit.outputs.user_test == 'true'\")))
-  (println (str \"runs=\" (boolean (some-> (:run run) (str/includes? \"user-test\")))))
-  (println (str \"upload=\" (boolean (some-> (:uses up) (str/starts-with? \"actions/upload-artifact@\")))))
-  (println (str \"on-failure=\" (boolean (some-> (:if up) (str/includes? \"!cancelled()\")))))
-  (println (str \"after-it=\" (boolean (some-> (:if up) (str/includes? \"steps.user-test.outcome != 'skipped'\")))))
-  (println (str \"path=\" (get-in up [:with :path]))))" 2>&1)"
-grep -qx 'last=true' <<<"$steps" && grep -qx 'gated=true' <<<"$steps" && grep -qx 'runs=true' <<<"$steps" \
-  && ok "CI: the user-level test runs after every other check, only when kit.edn declares it" || bad "CI user-level test step" "$steps"
-grep -qx 'upload=true' <<<"$steps" && grep -qx 'on-failure=true' <<<"$steps" && grep -qx 'after-it=true' <<<"$steps" \
-  && grep -qxF 'path=${{ steps.kit.outputs.user_test_artifacts }}' <<<"$steps" \
-  && ok "CI: its artifacts are uploaded even when it fails" || bad "CI artifacts step" "$steps"
 cd "$P" || exit 1
 
 echo "- the GitHub side: kit github and the doctor check (#33, fake gh)"
-rs="$KIT/managed/github/ruleset.json"
-pr_rule() { jq -c --arg k "$2" '.rules[] | select(.type == "pull_request") | .parameters[$k]' "$1"; }
-[ "$(pr_rule "$rs" required_approving_review_count)/$(pr_rule "$rs" dismiss_stale_reviews_on_push)/$(pr_rule "$rs" require_code_owner_review)/$(pr_rule "$rs" required_review_thread_resolution)/$(pr_rule "$rs" allowed_merge_methods)" \
-  = '1/true/true/true/["squash"]' ] \
-  && [ "$(jq -c '[.enforcement, .conditions.ref_name.include, ([.rules[].type] | sort)]' "$rs")" \
-       = '["active",["~DEFAULT_BRANCH"],["deletion","non_fast_forward","pull_request","required_status_checks"]]' ] \
-  && ok "the managed ruleset: one approval, stale ones dismissed, code owners, threads resolved, squash only, on the default branch" \
-  || bad "managed ruleset" "$(jq -c . "$rs")"
+# What kit github asks of GitHub and writes, case by case, is told in github_test; what doctor finds of the GitHub side, in
+# doctor_test (bb test). Here the real entries on the fake gh: kit github, kit github at a terminal, kit doctor.
 fresh "$WORK/gh33"; git remote set-url origin https://github.com/shundeev/kit-selftest.git
 GD="$WORK/gh33-fake"; AC="$WORK/gh33-agent"; OC="$WORK/gh33-owner"; mkdir -p "$GD" "$AC" "$OC"
 printf 'github.com:\n    user: kit-agent\n' > "$AC/hosts.yml"; printf 'github.com:\n    user: kit-owner\n' > "$OC/hosts.yml"
@@ -1214,118 +1003,32 @@ echo '[{"id":5,"repository":{"full_name":"shundeev/kit-selftest"}}]' > "$GD/agen
 expect_exit 0 "github: a repository without the main ruleset gets it" ghk --yes
 contains "  says so" "ruleset main: created" "$LAST"
 p="$GD/posted-ruleset.json"
-[ "$(pr_rule "$p" required_approving_review_count)" = 1 ] && ok "  one approving review" || bad "  review count" "$(cat "$p" 2>/dev/null)"
 [ "$(jq -c '[.rules[] | select(.type == "pull_request") | .parameters.required_reviewers[] | [.reviewer.type, .reviewer.id, .minimum_approvals]]' "$p" 2>/dev/null)" = '[["Team",42,1]]' ] \
-  && grep -qx "api orgs/shundeev/teams/owners" "$GD/log" && ok "  the owners team of kit.edn is the required reviewer" || bad "  required reviewers" "$(cat "$p" 2>/dev/null)"
-[ "$(jq -r '.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[0].context' "$p" 2>/dev/null)" = checks ] \
-  && ok "  the project's check, checks, is required" || bad "  required check" "$(cat "$p" 2>/dev/null)"
-[ "$(jq -c .bypass_actors "$p" 2>/dev/null)" = '[{"actor_type":"User","actor_id":1,"bypass_mode":"pull_request"}]' ] \
-  && ok "  only the owner who runs it may bypass, in pull-request mode" || bad "  bypass" "$(jq -c .bypass_actors "$p" 2>/dev/null)"
-grep -qx "api repos/$repo/collaborators/kit-agent -X PUT -f permission=push" "$GD/log" && ok "  the agent is invited with Write" || bad "  agent invite" "$(cat "$GD/log")"
-grep -qx "api orgs/shundeev/teams/owners/repos/$repo -X PUT -f permission=push" "$GD/log" && ok "  the owners team gets Write" || bad "  team access" "$(cat "$GD/log")"
+  && grep -qx "api orgs/shundeev/teams/owners" "$GD/log" && ok "  the ruleset reaches GitHub on stdin, the owners team of kit.edn the required reviewer" || bad "  required reviewers" "$(cat "$p" 2>/dev/null)"
 grep -qx "api user/repository_invitations/5 -X PATCH" "$GD/log" && [ "$(sort -u "$GD/invitations-as")" = "$AC|" ] \
   && ok "  the invitation is accepted as the agent, from its gh config" || bad "  accept" "$(cat "$GD/log"; cat "$GD/invitations-as" 2>/dev/null)"
 jq '. + {id: 7, current_user_can_bypass: "always"} | .rules |= map(if .type == "pull_request" then .parameters.automatic_copilot_code_review_enabled = false else . end)' \
-  "$p" > "$GD/ruleset.json"
-echo '[{"id":7,"name":"main"}]' > "$GD/rulesets.json"; echo write > "$GD/perm-kit-agent"
-echo '[{"slug":"owners","permission":"push"}]' > "$GD/teams.json"; echo '[]' > "$GD/agent-invitations.json"
-expect_exit 0 "github: a rerun" ghk
-contains "  changes nothing" "nothing to change" "$LAST"
-grep -qE -- '-X (PUT|POST|PATCH)' "$GD/log" && bad "  wrote to GitHub" "$(cat "$GD/log")" || ok "  writes nothing, whatever fields GitHub adds"
-cp "$GD/ruleset.json" "$WORK/gh33-same.json"
-jq '(.rules |= map(if .type == "pull_request" then .parameters.required_approving_review_count = 0 else . end)) | .rules += [{"type":"required_signatures"}]' \
-  "$WORK/gh33-same.json" > "$GD/ruleset.json"
-expect_exit 1 "github: a different ruleset is not changed without --yes" ghk
-contains "  names the difference" "required_approving_review_count" "$LAST"
-contains "  and the rule dev-kit lacks" "required_signatures" "$LAST"
-contains "  says how to apply it" "--yes" "$LAST"
-[ ! -e "$GD/put-ruleset.json" ] && ok "  nothing is written" || bad "  wrote" "$(cat "$GD/put-ruleset.json")"
-expect_exit 0 "github: --yes brings it back" ghk --yes
-[ "$(pr_rule "$GD/put-ruleset.json" required_approving_review_count)/$(jq -c '[.rules[].type] | index("required_signatures")' "$GD/put-ruleset.json" 2>/dev/null)" = 1/null ] \
-  && grep -qx "api repos/$repo/rulesets/7 -X PUT --input -" "$GD/log" && ok "  in place, as dev-kit has it" || bad "  update" "$(cat "$GD/log")"
-rm "$GD/rulesets.json" "$GD/ruleset.json"
-expect_exit 0 "github: --check names the required check" ghk --yes --check selftest
-[ "$(jq -r '.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[0].context' "$GD/posted-ruleset.json" 2>/dev/null)" = selftest ] \
-  && ok "  selftest, as in dev-kit itself" || bad "  check" "$(cat "$GD/posted-ruleset.json" 2>/dev/null)"
-echo '{"permissions":{"admin":false}}' > "$GD/repo.json"
-expect_exit 1 "github: without admin rights it is refused" ghk --yes
-contains "  says who can run it" "admin" "$LAST"
-grep -qE -- '-X (PUT|POST|PATCH)' "$GD/log" && bad "  wrote to GitHub" "$(cat "$GD/log")" || ok "  and writes nothing"
-rm "$GD/repo.json"
+  "$p" > "$WORK/gh33-same.json"
 : > "$GD/log"
 expect_exit 1 "github: an agent session never runs it" fgh CLAUDECODE=1 GH_CONFIG_DIR="$AC" bb $kit github --yes
 contains "  says where to run it" "your own terminal" "$LAST"
 [ ! -s "$GD/log" ] && ok "  without calling GitHub" || bad "  called" "$(cat "$GD/log")"
-echo '[{"id":6,"invitee":{"login":"kit-agent"}}]' > "$GD/invitations.json"; echo none > "$GD/perm-kit-agent"
-echo '[{"id":6,"repository":{"full_name":"shundeev/kit-selftest"}}]' > "$GD/agent-invitations.json"; mv "$AC/hosts.yml" "$WORK/gh33-hosts"
-expect_exit 0 "github: with the agent logged out" ghk --yes
-grep -q 'collaborators/kit-agent -X PUT' "$GD/log" && bad "  invited the agent again" "$(cat "$GD/log")" || ok "  a pending invitation is not sent again"
-contains "  says how to accept it" "invitation to accept: in this terminal" "$LAST"
-grep -q 'repository_invitations/6' "$GD/log" && bad "  accepted as someone else" "$(cat "$GD/log")" || ok "  and accepts nothing"
-mv "$WORK/gh33-hosts" "$AC/hosts.yml"; echo '[]' > "$GD/agent-invitations.json"; rm "$GD/invitations.json"; echo write > "$GD/perm-kit-agent"
-echo '[{"id":7,"name":"main"}]' > "$GD/rulesets.json"
-jq '.rules |= map(if .type == "required_status_checks" then .parameters.required_status_checks[0].context = "selftest" else . end)' \
-  "$WORK/gh33-same.json" > "$GD/ruleset.json"
-expect_exit 0 "github: without --check, an existing ruleset keeps its required check" ghk
-contains "  so dev-kit's own selftest stays required" "nothing to change" "$LAST"
-echo '[{"id":8,"name":"protect main"}]' > "$GD/rulesets.json"
-expect_exit 1 "github: a ruleset under another name is not doubled" ghk --yes
-contains "  says what to rename" "none named main" "$LAST"
-grep -q -- '-X POST' "$GD/log" && bad "  created a second one" "$(cat "$GD/log")" || ok "  and creates none"
-echo '[{"id":7,"name":"main"},{"id":9,"name":"main"}]' > "$GD/rulesets.json"
-expect_exit 1 "github: two rulesets named main are refused" ghk --yes
-contains "  naming both" "7, 9" "$LAST"
-echo '[{"id":7,"name":"main"}]' > "$GD/rulesets.json"; cp "$WORK/gh33-same.json" "$GD/ruleset.json"; echo admin > "$GD/perm-kit-agent"
-expect_exit 1 "github: an agent with more than Write is refused" ghk --yes
-contains "  says why" "more than Write" "$LAST"
-grep -qE -- '-X (PUT|POST|PATCH)' "$GD/log" && bad "  wrote" "$(cat "$GD/log")" || ok "  before any change"
-echo none > "$GD/perm-kit-agent"; touch "$GD/write-fails"
-expect_exit 1 "github: a failed write names the step" ghk --yes
-contains "  and says a rerun is safe" "safe to repeat" "$LAST"
-grep -q 'ExceptionInfo' <<<"$LAST" && bad "  with a stack trace" "$LAST" || ok "  without a stack trace"
-rm "$GD/write-fails"; echo write > "$GD/perm-kit-agent"
-echo '[{"id":5,"repository":{"full_name":"shundeev/kit-selftest"}}]' > "$GD/agent-invitations.json"; touch "$GD/accept-fails"
-expect_exit 1 "github: a failed accept is no success" ghk --yes
-contains "  says where to accept it" "github.com/$repo/invitations" "$LAST"
-rm "$GD/accept-fails"; : > "$GD/log"; rm -f "$GD/invitations-as"
+: > "$GD/log"; rm -f "$GD/invitations-as"
 fgh GH_CONFIG_DIR="$OC" GH_TOKEN=owner-token bb $kit github --yes >/dev/null 2>&1
 [ "$(sort -u "$GD/invitations-as" 2>/dev/null)" = "$AC|" ] && ok "github: the agent's calls use its config, never a GH_TOKEN of the shell" \
   || bad "agent calls" "$(cat "$GD/invitations-as" 2>/dev/null)"
-echo '[]' > "$GD/agent-invitations.json"; cp kit.edn "$WORK/gh33-kit.edn"
-owners() { bb -e "(spit \"kit.edn\" (pr-str (assoc (clojure.edn/read-string (slurp \"kit.edn\")) :owners $1)))"; }
-owners '["kit-owner"]'
-expect_exit 1 "github: a reviewer dev-kit no longer sets is shown before it goes" ghk
-contains "  as a change" "required_reviewers" "$LAST"
-owners '["other-org/owners"]'
-expect_exit 1 "github: a team of another organization is refused" ghk --yes
-contains "  names it" "other-org" "$LAST"
-cp "$WORK/gh33-kit.edn" kit.edn
-# At a terminal (#91): the answer typed at "Apply these changes?", through a pseudo-terminal. Yes is read as
-# Linux's rpmatch(3) reads it: ^[yY] always, and the locale's yesexpr. A fake `locale` stands in for a Russian
-# one, which CI does not have.
+# At a terminal (#91): the answer typed at "Apply these changes?", through a pseudo-terminal. A fake `locale` stands in for a
+# Russian one, which CI does not have. Which answers count as yes is told in github_test.
 RUL="$WORK/ru-locale"; mkdir -p "$RUL"; printf '#!/bin/sh\necho "^[+1yYДд]"\n' > "$RUL/locale"; chmod +x "$RUL/locale"
 pty() { # pty <answer> [dir put first on PATH]
   : > "$GD/log"; rm -f "$GD/posted-ruleset.json"
   printf '%s\n' "$1" | script -qec "env -u CLAUDECODE -u GH_TOKEN -u GITHUB_TOKEN -u GITHUB_REPOSITORY -u GHWF_REPO LC_ALL=C.UTF-8 TERM=xterm PATH='${2:+$2:}$KIT/test/fake-gh:$PATH' FAKE_GH_DIR='$GD' FAKE_GH_LOG='$GD/log' GH_CONFIG_DIR='$OC' bb $kit github" /dev/null 2>&1
 }
-answers() { # answers <want: yes|no> <locale dir or ""> <answer…>: the answers that came out otherwise
-  local want="$1" dir="$2" a odd=""; shift 2
-  for a in "$@"; do
-    out="$(pty "$a" "$dir")"
-    if [ -s "$GD/posted-ruleset.json" ]; then [ "$want" = yes ] || odd="$odd [$a]"; else [ "$want" = no ] || odd="$odd [$a]"; fi
-  done
-  echo "$odd"
-}
 rm -f "$GD/rulesets.json" "$GD/ruleset.json"
-odd="$(answers yes "" y Y yes Yeah)"; [ -z "$odd" ] && ok "github: y, Y, yes, Yeah apply, in any locale" || bad "github: not taken as yes:$odd"
-odd="$(answers no "" у д да n x)"; [ -z "$odd" ] && ok "github: у, д, да, n, x apply nothing in a C locale" || bad "github: taken as yes:$odd"
-odd="$(answers yes "$RUL" д Да + 1 y)"; [ -z "$odd" ] && ok "github: in a Russian locale д, Да, +, 1 and y apply, as its yesexpr says" || bad "github ru: not taken:$odd"
-odd="$(answers no "$RUL" у н нет)"; [ -z "$odd" ] && ok "github: у, н, нет apply nothing in a Russian locale either" || bad "github ru: taken as yes:$odd"
-out="$(pty у)"
-grep -q '«у»' <<<"$out" && grep -q 'nothing was changed' <<<"$out" \
-  && ok "github: an answer it did not take is named" || bad "github: unnamed answer" "$out"
+pty y >/dev/null; [ -s "$GD/posted-ruleset.json" ] && ok "github: a y at the terminal applies" || bad "github: y was not taken at the terminal"
+pty д "$RUL" >/dev/null; [ -s "$GD/posted-ruleset.json" ] && ok "github: in a Russian locale (the system's own yesexpr) д applies" || bad "github ru: д was not taken"
 
-echo '[{"id":7,"name":"main"}]' > "$GD/rulesets.json"
+echo '[{"id":7,"name":"main"}]' > "$GD/rulesets.json"; echo write > "$GD/perm-kit-agent"
 jq '. + {current_user_can_bypass: "never"}' "$WORK/gh33-same.json" > "$GD/ruleset.json"
 dk() { : > "$GD/log"; fgh GH_CONFIG_DIR="${1:-$AC}" bb $kit doctor 2>&1; }
 out="$(dk)"
@@ -1333,21 +1036,6 @@ grep -q "api repos/$repo/rulesets" "$GD/log" && ! grep -q 'kit github' <<<"$out"
   && ok "doctor: as the agent, a repository with the ruleset and Write passes" || bad "doctor GitHub side" "$out"
 jq '. + {current_user_can_bypass: "always"}' "$WORK/gh33-same.json" > "$GD/ruleset.json"
 out="$(dk)"; grep -E '^  FAIL .*can bypass' <<<"$out" | grep -q 'kit github' && ok "doctor: a bypass for the agent fails, with kit github as the fix" || bad "doctor bypass" "$out"
-jq '. + {current_user_can_bypass: "never"} | .rules |= map(select(.type != "pull_request"))' "$WORK/gh33-same.json" > "$GD/ruleset.json"
-out="$(dk)"; grep -qE '^  FAIL .*approving review' <<<"$out" && ok "doctor: a ruleset without the review rule fails" || bad "doctor review rule" "$out"
-echo '[]' > "$GD/rulesets.json"
-out="$(dk)"; grep -qE '^  FAIL .*no main ruleset' <<<"$out" && ok "doctor: a repository without the ruleset fails" || bad "doctor no ruleset" "$out"
-echo '[{"id":7,"name":"main"}]' > "$GD/rulesets.json"; jq '. + {current_user_can_bypass: "never"}' "$WORK/gh33-same.json" > "$GD/ruleset.json"
-echo read > "$GD/perm-kit-agent"
-out="$(dk)"; grep -qE '^  FAIL .*permission is read' <<<"$out" && ok "doctor: an agent without Write fails" || bad "doctor permission" "$out"
-echo write > "$GD/perm-kit-agent"; touch "$GD/gh-fails"
-out="$(dk)"; grep -qE '^  WARN .*could not be read' <<<"$out" && ! grep -qE '^  FAIL .*ruleset' <<<"$out" \
-  && ok "doctor: offline, the GitHub side is a warning" || bad "doctor offline" "$out"
-rm "$GD/gh-fails"
-out="$(dk "$OC")"; grep -q rulesets "$GD/log" && bad "doctor: checked the GitHub side as the owner" "$(cat "$GD/log")" \
-  || ok "doctor: as anyone but the agent, the GitHub side is not judged"
-: > "$GD/log"; fgh GH_CONFIG_DIR="$AC" bb $kit doctor --ci >/dev/null 2>&1
-grep -q rulesets "$GD/log" && bad "doctor --ci read the rulesets" || ok "doctor --ci skips it"
 cd "$P" || exit 1
 
 echo "- formatting hook (#61)"
@@ -1438,6 +1126,8 @@ contains "the entry hook still prints the refusal" '"permissionDecision":"deny"'
 contains "a hook's refusal is recorded with its call" '"event":"HookDenied"' "$(grep '"t9"' <<<"$(flog)")"
 
 echo "- retrospective gate (#56, fake gh)"
+# The gate's list, its silence, GitHub unreachable, and what kit start does with them: retro_test and start_test (bb test).
+# Here the real entries: kit retro --missing, and the session start naming the issues.
 MG="$WORK/missing"; mkdir -p "$MG"
 missing() { jq -n '{data: {search: {nodes: [
   {number: 31, title: "Has its retro", comments: {nodes: [{body: "## Retrospective\n\nx"}]},
@@ -1451,28 +1141,12 @@ expect_exit 1 "retro --missing names a merged issue without its retrospective" f
 contains "  the issue" "#32 Lacks its retro" "$LAST"
 contains "  the command that collects its data" "kit retro 32" "$LAST"
 if grep -qE '#31|#33' <<<"$LAST"; then bad "  named one with a retrospective or without a PR" "$LAST"; else ok "  not those with a retrospective or without a PR"; fi
-jq '.data.search.nodes |= map(select(.number != 32))' "$MG/missing.json" > "$MG/m" && mv "$MG/m" "$MG/missing.json"
-expect_exit 0 "retro --missing: every merged issue has its retrospective" fake bb "$KIT/bin/kit" retro --missing --repo u473t8/fake
-if [ -z "$LAST" ]; then ok "  prints nothing"; else bad "  printed" "$LAST"; fi
-missing; : > "$MG/log"
-expect_exit 1 "start refuses new work while a merged issue lacks its retrospective" \
-  fake bb .shared/bin/kit start --title x --priority High
-contains "  names it" "#32" "$LAST"
-contains "  names the owner's waiver" "--skip-retro" "$LAST"
-if grep -q '^issue create' "$MG/log"; then bad "  created an issue"; else ok "  created nothing"; fi
-: > "$MG/log"
-fake bb .shared/bin/kit start --title x --priority High --skip-retro >/dev/null 2>&1
-if grep -q 'search(' "$MG/log"; then bad "--skip-retro still checked"; else ok "--skip-retro passes the check"; fi
-touch "$MG/gh-fails"
-out="$(fake bb .shared/bin/kit start --title x --priority High 2>&1)"
-contains "GitHub unreachable: the start script says it could not check" "could not check" "$out"
-rm "$MG/gh-fails"
 contains "a session starts by naming merged issues without a retrospective" "#32" \
   "$(fake bash .shared/claude/hooks/session-start.sh 2>&1)"
-if jq -e '.permissions.ask | index("Bash(* --skip-retro*)")' .claude/settings.json >/dev/null; then ok "--skip-retro asks the owner"
-else bad "no ask rule for --skip-retro"; fi
 
 echo "- retrospective data (fake gh, friction log)"
+# Every row of the report, its GitHub side, and what happens without the log or GitHub: retro_test (bb test). Here the real
+# entry, kit retro: the log read from XDG_STATE_HOME, GitHub through gh, and the flags --now and --messages.
 RT="$WORK/retro"; mkdir -p "$RT/state/dev-kit"; cp -r "$KIT/test/fixtures/retro/friction" "$RT/state/dev-kit/"
 retro() { PATH="$KIT/test/fake-gh:$PATH" FAKE_GH_DIR="$RT" FAKE_GH_LOG="$RT/log" GITHUB_REPOSITORY=u473t8/fake \
             XDG_STATE_HOME="$RT/state" bb "$KIT/bin/kit" retro "$@"; }
@@ -1496,68 +1170,10 @@ jq -n --arg agent "$default_login" '{data: {repository: {issue: {
                         body: "## Что сделать руками (владелец)\n\n1. Открой\n2. Нажми\n3. Проверь"}]}}]}}}}}' > "$RT/retro.json"
 expect_exit 0 "retro: prints the friction data of a merged issue" retro 55 --now 2026-11-12T17:00:00Z
 out="$LAST"
-contains "  the span of the task's events, its later messages included" "2026-11-12 10:00 → 2026-11-12 15:00 UTC" "$out"
-contains "  windows by their ask rule: own branch, own turn, own subagent; not another task's, not a turn naming none" \
-  "| Confirmation: yes | ask rule: Bash(gh api *) | 4 | 7 |" "$out"
-contains "  a Read rule matches by path, printed without it" "| Confirmation: yes | ask rule: Read(…) | 1 | 1 |" "$out"
-touch "$RT/silent-fail"; sil="$(retro 55 2>&1)"; rm "$RT/silent-fail"
-contains "kit's own gh!: a silent failure names the call and the exit code (#95)" "gh api graphql failed with exit code 3" "$sil"
-contains "  a window no ask rule explains" "| Confirmation: yes | Read (no ask rule matches) | 1 | 1 |" "$out"
-contains "  a window and no run: the owner said no; Esc on a window is that no, not an interruption too" "| Confirmation: no | ask rule: Bash(rm *) | 2 | 2 |" "$out"
-contains "  a question" "| Question to the owner | AskUserQuestion | 1 | 1 |" "$out"
-contains "  needs input at the end of a turn" "| Question to the owner | needs input in chat | 1 | 1 |" "$out"
-contains "  a plan that never ran" "| Plan for approval | declined | 1 | 1 |" "$out"
-contains "  a turn without its Stop, followed by another: Esc" "| Owner interrupted (Esc) | — | 1 | 1 |" "$out"
-contains "  a hook's refusal" "| Refused by a hook | gh issue create | 1 | 1 |" "$out"
-contains "  the classifier's refusal, with its category" "| Refused by the classifier | git push — git_destructive | 1 | 1 |" "$out"
-contains "  no run in a turn that ended normally: a deny rule; a lone echo is named" "| Refused by a rule | echo | 1 | 1 |" "$out"
-contains "  each refusal of the task listed for a verdict (#107)" "Refusals of the task, each needs a verdict" "$out"
-contains "  the classifier's refusal in that list" "Refused by the classifier · git push — git_destructive" "$out"
-contains "  a failed command" "| Tool error | bb kit gate | 1 | 1 |" "$out"
-contains "  gh's flag values stay out of the shape" "| Tool error | gh pr view | 1 | 1 |" "$out"
-contains "  inline code stays out of the shape" "| Tool error | python3 -c | 1 | 1 |" "$out"
-contains "  the same command within minutes" "| Same command 3+ times | gh pr view | 3 | 3 |" "$out"
-# The second review of #55: each case below broke the first hook-based version.
-contains "  a stale identical call from an earlier turn keeps no window of a later one" "| Refused by a rule | gh api (REST) | 1 | 1 |" "$out"
-contains "  a rule naming a URL prints without it" "| Confirmation: yes | ask rule: Bash(…) | 1 | 1 |" "$out"
-contains "  a turn that failed is no Esc" "| Turn failed (API error) | — | 1 | 1 |" "$out"
-contains "  the repository's case does not matter" "| Tool error | make | 1 | 1 |" "$out"
-if grep -qF "git status" <<<"$out"; then bad "  a command 30 min apart counted as a repeat"; else ok "  repeats are runs within 10 minutes"; fi
-contains "  recurring: all tasks and projects of the last 14 days, not October" "Confirmation: yes · ask rule: Bash(gh api *): 7" "$out"
-contains "  another project's friction counts in the 14 days" "Tool error · npm: 3" "$out"
-contains "  the owner's mark, on one line" "трение: ссылка открылась в двух браузерах" "$out"
-# #65: where the task's time went. Turns run from the owner's message to Stop, StopFailure or the turn's
-# last event; a Stop without a turn id is no turn.
-contains "  time: the task's turns" "Time of the task: 10 turns, 42m in all" "$out"
-contains "  time: waiting on the owner, windows and questions" "waiting on the owner: 7 confirmation windows, 5m; 2 questions, 24m" "$out"
-contains "  time: commands, and the longest" "commands: 2m; the longest: bb kit gate 1m, git log 1m" "$out"
-expect_exit 0 "retro: a task worked on only in a turn that served two tasks" retro 62 --now 2026-11-12T17:00:00Z
-contains "  says the turn time is not split" "its turns also served other tasks" "$LAST"
-contains "  still counts its commands" "commands: 1m; the longest: make 1m" "$LAST"
-contains "  under a minute reads in seconds" "waiting on the owner: 0 confirmation windows, 0s" "$LAST"
-contains "  the owner's messages: the mid-turn one, and those of turns naming no task go to the last task" "Owner messages: 10" "$out"
-if grep -qE "почему так|secret|import|/w/|/tmp/|host/tok" <<<"$out"; then bad "  printed a message, a path, a flag value or code" "$out"
-else ok "  no messages, paths, flag values or code"; fi
-contains "GitHub: the design approval" "Design approval: 1, 20m after the first \`## Design\` comment" "$out"
-contains "GitHub: the diff" "PR #58: +120 −10 in 4 files, 2 commits; Size M" "$out"
-contains "GitHub: reviews by the owner" "Review rounds with comments: 1; approvals: 1; dismissed: 0" "$out"
-contains "GitHub: waiting on the owner" "PR opened → Approve 1h 00m; Approve → merged 30m" "$out"
-contains "GitHub: CI" "CI: 1 of 2 commits failed" "$out"
-contains "GitHub: the owner's manual steps" "Owner steps: 1 comment, 3 steps" "$out"
+contains "  the span of the task's events, from the log on this machine" "2026-11-12 10:00 → 2026-11-12 15:00 UTC" "$out"
+contains "GitHub: the diff, through gh" "PR #58: +120 −10 in 4 files, 2 commits; Size M" "$out"
 expect_exit 0 "retro --messages lists the owner's messages locally" retro 55 --messages --now 2026-11-12T17:00:00Z
 contains "  the mid-turn one too" "я про план 55" "$LAST"
-expect_exit 0 "retro: a machine with no friction log" \
-  env PATH="$KIT/test/fake-gh:$PATH" FAKE_GH_DIR="$RT" FAKE_GH_LOG="$RT/log" GITHUB_REPOSITORY=u473t8/fake \
-  XDG_STATE_HOME="$WORK/none" bb "$KIT/bin/kit" retro 55 --now 2026-11-12T17:00:00Z
-contains "  says so, GitHub still prints" "Friction log: not available" "$LAST"
-contains "  GitHub's part" "PR #58" "$LAST"
-touch "$RT/gh-fails"
-expect_exit 0 "retro: GitHub unreachable" retro 55 --now 2026-11-12T17:00:00Z
-contains "  says so" "GitHub: not available" "$LAST"
-contains "  the log still counts" "| Tool error | bb kit gate | 1 | 1 |" "$LAST"
-rm "$RT/gh-fails"
-expect_exit 1 "retro: a --now that is not a time names the format" retro 55 --now yesterday
-contains "  names the format" "2026-11-12T10:00:00Z" "$LAST"
 
 echo "- the selftest cannot hang, and has no time limit (#98, #109)"
 # #109: a hang is made impossible instead of cut off by a clock. No wait lacks its event, and nothing reads a terminal.
