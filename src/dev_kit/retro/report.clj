@@ -3,6 +3,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str]
+   [dev-kit.problem :as problem]
    [dev-kit.retro.github :as github]
    [dev-kit.retro.log :as log])
   (:import
@@ -71,8 +72,27 @@
 (defn mark? [text] (re-find #"(?iu)^\s*(трение|friction)\s*:" (str text)))
 
 
+(defn rule-lines
+  "The refusals that name their rule (a `Rule: <name>` line in the refusal: cc-safety-net, the delivery guard, the
+  edit gate), counted per rule: in the task's own items, and in the last `days` days in every task on this machine."
+  [items own now days]
+  (let [named  (filter :why items)
+        since  (.minus ^Instant now (Duration/ofDays days))
+        recent (frequencies (map :why (remove #(log/before? (:at %) since) named)))
+        mine   (frequencies (keep :why own))
+        rules  (sort-by (fn [rule] [(- (get recent rule 0)) rule]) (set (concat (keys recent) (keys mine))))]
+    (if (seq rules)
+      (concat
+       [""
+        "Refusals by rule (only a refusal that names its rule is counted: cc-safety-net, the delivery guard, the edit gate):"
+        (str "| Rule | This task | " days " days |")
+        "|---|---|---|"]
+       (for [rule rules] (str "| " rule " | " (get mine rule 0) " | " (get recent rule 0) " |")))
+      ["" (str "Refusals by rule: none named its rule, in this task or in the last " days " days.")])))
+
+
 (defn log-lines
-  [{:keys [repo issue now messages]}]
+  [{:keys [repo issue now messages days]}]
   (let [dir (log/log-dir)]
     (if-not (seq (fs/glob dir "*.jsonl"))
       ["Friction log: not available — the recorder (dev-kit #55) has written nothing on this machine yet."]
@@ -114,6 +134,7 @@
                    (one-line (:cause r))
                    (when (:why r)
                      (str " (rule " (:why r) ")"))))))
+         (rule-lines items own now (or days 14))
          (time-lines spans)
          (when-let [recurring (seq (ordered (filter #(>= (val %) 3) fortnight)))]
            (concat ["" "Recurring in the last 14 days (3 or more, whichever task):"]
@@ -134,15 +155,24 @@
 
 
 (defn run
-  "Prints the friction data of one issue; nil, or the exit code of a problem (a --now that is not a time)."
-  [{:keys [issue repo agent gh now] :as opts}]
+  "Prints the friction data of one issue; nil, or the exit code of a problem (a --now that is not a time, a --days
+  that is not a number)."
+  [{:keys [issue repo agent gh now days] :as opts}]
   (try
-    (let [now (if now
-                (log/parse-time "--now" now)
-                (Instant/now))]
+    (let [now  (if now
+                 (log/parse-time "--now" now)
+                 (Instant/now))
+          days (if days
+                 (let [n (parse-long days)]
+                   (if (and n (pos? n))
+                     n
+                     (problem/fail! :retro/bad-days
+                                    (str "--days " days " : not a number of days")
+                                    {:fix "write a whole number above 0, e.g. --days 30" :join "; "})))
+                 14)]
       (println (str "## Friction data: " repo "#" issue))
       (println)
-      (doseq [l (log-lines (assoc opts :now now))] (println l))
+      (doseq [l (log-lines (assoc opts :now now :days days))] (println l))
       (println)
       (println "### GitHub")
       (doseq [l (try (github/github-lines gh repo issue agent)

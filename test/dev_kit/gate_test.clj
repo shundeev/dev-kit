@@ -1,8 +1,11 @@
 (ns dev-kit.gate-test
   "The gate, told as stories (#139, step 4): what a pull request's author reads when the shape is wrong, what the
-  owner's design approval must look like, and what the user-level test section must hold. The verdicts are data; a
-  story reads the data and the sentence a person gets."
+  owner's design approval must look like, what the user-level test section must hold, and what the edit hook says
+  when it refuses. The verdicts are data; a story reads the data and the sentence a person gets."
   (:require
+   [babashka.fs :as fs]
+   [babashka.process :as p]
+   [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
    [dev-kit.base :as base]
@@ -159,3 +162,43 @@
         out  (with-out-str (reset! code (gate/print-verdicts! [{:level :ok :message "fine"}])))]
     (is (= "  ok    fine\n" out))
     (is (nil? @code) "all well: no exit code")))
+
+
+(defn- hook-answer
+  "What the edit hook prints for an edit of a file in a repository on branch 5-x whose root holds `files`, when the
+  design approval is judged by `g1`: the refusal's reason, or nil when there is none."
+  [files g1]
+  (let [dir (str (fs/create-temp-dir))]
+    (try (doseq [args [["init" "-q" "-b" "5-x"]
+                       ["-c" "user.name=t" "-c" "user.email=t@t" "commit" "-q" "--allow-empty" "-m" "i"]]]
+           (apply p/shell {:dir dir :out :string :err :string} "git" args))
+         (doseq [[file text] files]
+           (spit (str (fs/path dir file)) text))
+         (let [input  (json/generate-string {:tool_input {:file_path (str (fs/path dir "a.txt"))}})
+               output (with-redefs-fn {#'gate/gate-g1 g1}
+                        #(with-out-str (binding [*in* (java.io.StringReader. input)]
+                                         (gate/gate-hook! {}))))]
+           (some-> (not-empty output)
+                   json/parse-string
+                   (get-in ["hookSpecificOutput" "permissionDecisionReason"])))
+         (finally (fs/delete-tree dir)))))
+
+
+(def ^:private a-project {"kit-defaults.edn" "{}" "kit.edn" "{:repo \"o/r\"}"})
+
+
+(deftest the-edit-hook-names-the-rule-it-refuses-by
+  (testing "no approval: the reason says what to do and ends with the rule"
+    (is (= "Refused: #5 has no `design-approved`: wait\n\nRule: gate.design-approval"
+           (hook-answer a-project
+                        (fn [_ _] {:level :fail :message "#5 has no `design-approved`" :fix "wait" :join ": "})))))
+  (testing "GitHub cannot be asked: refused, with its own rule"
+    (let [reason (hook-answer a-project (fn [_ _] (throw (ex-info "no network" {}))))]
+      (is (str/starts-with? reason "Refused: could not check the design approval of #5 (no network)"))
+      (is (str/ends-with? reason "\n\nRule: gate.approval-unreadable"))))
+  (testing "no repository to ask"
+    (let [reason (hook-answer {"kit-defaults.edn" "{}"} (fn [_ _] (throw (AssertionError. "not asked"))))]
+      (is (str/starts-with? reason "Refused: cannot tell which GitHub repository holds #5"))
+      (is (str/ends-with? reason "\n\nRule: gate.no-repository"))))
+  (testing "an approved design: no answer"
+    (is (nil? (hook-answer a-project (fn [_ _] {:level :ok :message "fine"}))))))

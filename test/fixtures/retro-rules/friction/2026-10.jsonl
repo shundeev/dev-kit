@@ -1,0 +1,5 @@
+{"at": "2026-10-20T10:01:00Z", "event": "PreToolUse", "session": "c", "turn": "c-t", "tool": "Bash", "id": "c-0", "input": {"command": "git reset --hard"}, "branch": "61-other-task", "origin": "u473t8/fake"}
+{"at": "2026-10-20T10:01:00Z", "event": "HookDenied", "session": "c", "turn": "c-t", "tool": "Bash", "id": "c-0", "reason": "Refused: git reset --hard destroys uncommitted work.\n\nRule: git.reset-hard"}
+{"at": "2026-10-20T10:02:00Z", "event": "PreToolUse", "session": "c", "turn": "c-t", "tool": "Bash", "id": "c-1", "input": {"command": "git reset --hard HEAD"}, "branch": "61-other-task", "origin": "u473t8/fake"}
+{"at": "2026-10-20T10:02:00Z", "event": "HookDenied", "session": "c", "turn": "c-t", "tool": "Bash", "id": "c-1", "reason": "Refused: git reset --hard destroys uncommitted work.\n\nRule: git.reset-hard"}
+{"at": "2026-10-20T11:00:00Z", "event": "Stop", "session": "c", "turn": "c-t", "needs_input": false}

@@ -113,3 +113,56 @@
                (missing/run-missing {:repo "u473t8/fake" :gh (fn [& _] "") :now "yesterday"}))]
     (is (= 1 code))
     (is (str/starts-with? (str err) "kit: retro: --now yesterday : not a time; write it as 2026-11-12T10:00:00Z"))))
+
+
+(defn- rule-block
+  "The refusals-by-rule block of the report for issue 55, read off the rules fixture, for a window of `days` days."
+  [days]
+  (let [lines (with-redefs-fn {#'log/log-dir (fn [] "test/fixtures/retro-rules/friction")}
+                #(vec (report/log-lines {:repo "u473t8/fake" :issue 55 :days days :now (log/parse-time "--now" now)})))]
+    (->> lines
+         (drop-while #(not (str/starts-with? % "| Rule |")))
+         (take-while #(str/starts-with? % "|"))
+         vec)))
+
+
+(deftest a-rule-that-refused-three-times-is-counted-three-times
+  (testing "the task's count and the count of every task on this machine in the last 14 days, most refusals first"
+    (is (= ["| Rule | This task | 14 days |"
+            "|---|---|---|"
+            "| git.reset-hard | 2 | 3 |"
+            "| foreground-wait | 1 | 2 |"
+            "| gate.design-approval | 1 | 1 |"]
+           (rule-block nil)))
+    (is (= "| git.reset-hard | 2 | 3 |" (nth (rule-block 14) 2))
+        "the refusals of 20 October are outside 14 days"))
+  (testing "--days widens the window; the task's own count does not depend on it"
+    (is (= ["| Rule | This task | 30 days |"
+            "|---|---|---|"
+            "| git.reset-hard | 2 | 5 |"
+            "| foreground-wait | 1 | 2 |"
+            "| gate.design-approval | 1 | 1 |"]
+           (rule-block 30)))))
+
+
+(deftest a-refusal-that-names-no-rule-is-listed-but-not-counted-by-rule
+  (let [lines (with-redefs-fn {#'log/log-dir (fn [] "test/fixtures/retro-rules/friction")}
+                #(vec (report/log-lines {:repo "u473t8/fake" :issue 55 :now (log/parse-time "--now" now)})))]
+    (is (some #{"- 2026-11-12 10:05 Refused by a hook · gh issue create"} lines) "it is one of the task's refusals")
+    (is (= 3 (count (filter #(re-matches #"\| (git|gate|foreground)\S* \| \d+ \| \d+ \|" %) lines)))
+        "the task had five refusals; the table has a row for each of the three rules and none for this one")))
+
+
+(deftest a-task-with-no-rule-refusals-says-so
+  (let [lines (with-redefs-fn {#'log/log-dir (fn [] "test/fixtures/retro/friction")}
+                #(vec (report/log-lines {:repo "u473t8/fake" :issue 55 :now (log/parse-time "--now" now)})))]
+    (is (some #{"Refusals by rule: none named its rule, in this task or in the last 14 days."} lines))))
+
+
+(deftest a-days-that-is-not-a-number-names-the-fix
+  (let [err  (java.io.StringWriter.)
+        code (binding [*err* err]
+               (report/run {:repo "u473t8/fake" :issue 55 :days "many" :now now :gh (fn [& _] "")}))]
+    (is (= 1 code))
+    (is (= "kit: retro: --days many : not a number of days; write a whole number above 0, e.g. --days 30\n"
+           (str err)))))

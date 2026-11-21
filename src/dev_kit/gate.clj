@@ -416,18 +416,20 @@
   the session's folder; an input with no path is judged by the session's folder (the input's cwd, else .). In a
   repository on dev-kit, on an issue branch, outside adr/, refuses an edit while the design approval is missing.
   The repository asked is the file's own (its origin, else :repo of its kit.edn). Verdicts are cached for 10
-  minutes in that repository; GitHub unreachable means refused."
+  minutes in that repository; GitHub unreachable means refused. A refusal ends with a `Rule: <name>` line, the
+  line kit retro counts (gate.design-approval, gate.approval-unreadable, gate.no-repository, gate.kit-edn-unreadable)."
   [opts]
   (let [input (try (json/parse-string (slurp *in*)) (catch Exception _ nil))
         file  (or (get-in input ["tool_input" "file_path"]) (get-in input ["tool_input" "notebook_path"]))
         {:keys [top branch path dir]} (edited-file-repo (or file (get input "cwd") "."))
         path  (when file path)
         n     (branch-issue branch)
-        deny! (fn [reason]
+        deny! (fn [rule reason]
                 (println (json/generate-string
                           {:hookSpecificOutput {:hookEventName      "PreToolUse"
                                                 :permissionDecision "deny"
-                                                :permissionDecisionReason (str "Refused: " reason)}})))]
+                                                :permissionDecisionReason (str "Refused: "  reason
+                                                                               "\n\nRule: " rule)}})))]
     (when (and n (on-dev-kit? top) (not (some-> path (str/starts-with? "adr/"))))
       (let [cfg   (try (repo-config top) (catch Exception _ nil))
             repo  (when cfg
@@ -437,10 +439,11 @@
             [t level reason] (some-> (base/slurp-if cache) (str/split #" " 3))]
         (cond
           (nil? cfg)
-          (deny! (str "kit.edn of " top " cannot be read: fix it by hand, then retry"))
+          (deny! "gate.kit-edn-unreadable" (str "kit.edn of " top " cannot be read: fix it by hand, then retry"))
 
           (nil? repo)
-          (deny! (str "cannot tell which GitHub repository holds #" n
+          (deny! "gate.no-repository"
+                 (str "cannot tell which GitHub repository holds #" n
                       " for " top
                       ": set :repo in that repository's kit.edn, "
                       "or add its GitHub origin (git remote add origin https://github.com/<owner>/<name>.git)"))
@@ -463,7 +466,7 @@
                                " (" (ex-message e)
                                "); retry, or check by hand: kit gate --g1 " n)])))]
             (when (not= level :ok)
-              (deny! reason))))))))
+              (deny! (if (= level :error) "gate.approval-unreadable" "gate.design-approval") reason))))))))
 
 
 (defn gate!

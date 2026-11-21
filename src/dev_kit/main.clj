@@ -35,6 +35,7 @@
       "--title"     (recur (rest more) (assoc opts :title (first more)))
       "--body-file" (recur (rest more) (assoc opts :body-file (first more)))
       "--now"       (recur (rest more) (assoc opts :now (first more)))
+      "--days"      (recur (rest more) (assoc opts :days (first more)))
       "--messages"  (recur more (assoc opts :messages true))
       "--check"     (recur (rest more) (assoc opts :check (first more)))
       "--yes"       (recur more (assoc opts :yes true))
