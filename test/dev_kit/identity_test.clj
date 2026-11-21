@@ -23,12 +23,11 @@
     (is (str/includes? (:out again) "nothing to change"))))
 
 
-(deftest a-folder-that-is-not-a-repository-root-is-a-usage-error-with-its-fix
+(deftest a-folder-that-is-not-a-repository-root-is-refused-with-its-fix
   (let [dir     (fake/new-folder)
         inside  (str (fs/create-dirs (fs/path dir "sub")))
         problem (fake/with-project dir (fake/thrown #(commands/identity! {:dir inside})))]
     (is (= :identity/not-a-root (:problem problem)))
-    (is (:usage problem))
     (is (str/ends-with? (:message problem) "is not the root of a git repository"))
     (is (str/includes? (:fix problem) "--dir"))))
 

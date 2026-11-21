@@ -121,7 +121,7 @@
                       (= (str (fs/real-path dir)) (base/sh-in dir "git" "rev-parse" "--show-toplevel")))
          (problem/fail! :identity/not-a-root
                         (str dir " is not the root of a git repository")
-                        {:usage true :fix "name the folder that holds .git with --dir, or run kit identity there"}))
+                        {:fix "name the folder that holds .git with --dir, or run kit identity there"}))
      cfg (merge (config/read-defaults) (some-> (base/slurp-if (str (fs/path dir "kit.edn"))) edn/read-string))
      agent
      (or
@@ -129,8 +129,7 @@
       (problem/fail!
        :identity/no-agent
        "no :agent in kit.edn or dev-kit's defaults"
-       {:usage true
-        :fix
+       {:fix
         "add :agent {:login \"<the agent's GitHub login>\" :email \"<its noreply email>\" :gh-config-dir \"~/.config/gh-agent\"} to kit.edn"}))
      env (ident/agent-env agent)
      done (cond-> []

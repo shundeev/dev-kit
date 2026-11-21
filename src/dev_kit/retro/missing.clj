@@ -34,8 +34,8 @@
 
 
 (defn run-missing
-  "Nil and silence when every merged issue has its retrospective; otherwise throws the plain problem with the list and the
-  fix (exit 1), or, when GitHub cannot be asked, the problem with exit 2."
+  "The list of merged issues without a retrospective, with what to do, on stdout, and 1: an answer, not a problem.
+  Nil and silence when every merged issue has its retrospective. When GitHub cannot be asked, a problem with exit 2."
   [{:keys [repo gh now]}]
   (let [now   (if now
                 (log/parse-time "--now" now)
@@ -44,18 +44,17 @@
                    (catch Exception e
                      (problem/fail! :retro/github-unavailable
                                     (str "retro: GitHub not available: " (ex-message e))
-                                    {:fix    "check gh auth status and the network, then run kit retro --missing again"
-                                     :stderr true
-                                     :exit   2})))]
+                                    {:fix  "check gh auth status and the network, then run kit retro --missing again"
+                                     :exit 2})))]
     (when (seq found)
-      (problem/fail!
-       :retro/missing-retrospective
+      (println
        (str "Merged in the last 14 days without a `## Retrospective` comment: "
             (str/join ", " (for [[n t] found] (str "#" n " " t)))
-            ".")
-       {:fix   (str
-                "Post each one's retrospective before new work (repo-task-delivery, stage 11); its data comes from"
-                " kit retro <n>, e.g. kit retro "
-                (ffirst found)
-                ".\nOnly the owner can waive this: the same start command with --skip-retro asks the owner first.")
-        :plain true}))))
+            "."))
+      (println
+       (str
+        "Post each one's retrospective before new work (repo-task-delivery, stage 11); its data comes from"
+        " kit retro <n>, e.g. kit retro "
+        (ffirst found)
+        ".\nOnly the owner can waive this: the same start command with --skip-retro asks the owner first."))
+      1)))

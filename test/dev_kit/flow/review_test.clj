@@ -214,7 +214,8 @@
     (let [world  (the-pull-request {} :script [fake/nothing-happens (fake/pr-becomes 1 {:state state})])
           result (kit-review world owner "--wait")]
       (is (= 1 (:exit result)) state)
-      (is (= (format "Error: The pull request is %s, so no review is coming: https://github.com/o/r/pull/1"
+      (is (= (format (str "The pull request is %s, so no review is coming: https://github.com/o/r/pull/1. "
+                          "Fix: open a new pull request with kit finish, or name another one: kit review --pr <number>")
                      (str/lower-case state))
              (:text result))
           state))))
@@ -229,7 +230,7 @@
 (deftest without-the-owners-login-it-refuses-with-the-fix
   (let [result (kit-review (the-pull-request {}) {} "--wait")]
     (is (= 1 (:exit result)))
-    (is (= (str "Error: GHWF_HUMAN is not set, so the owner's reviews cannot be told from anyone else's. "
+    (is (= (str "GHWF_HUMAN is not set, so the owner's reviews cannot be told from anyone else's. "
                 "Fix: run 'kit init' (or 'kit identity') on this machine; it reads your own gh login.")
            (:text result)))))
 
@@ -242,6 +243,8 @@
 
 (deftest it-is-run-from-the-issue-branch-or-names-the-pull-request
   (let [world (the-pull-request {} :current-branch "main")]
-    (is (= "Error: Run from the issue branch, not 'main', or name the pull request: kit review --pr <number>"
-           (:text (kit-review world owner))))
+    (is
+     (=
+      "'main' is not an issue branch. Fix: run from the issue branch, or name the pull request: kit review --pr <number>"
+      (:text (kit-review world owner))))
     (is (= 0 (:exit (kit-review world owner "--pr" "1"))))))

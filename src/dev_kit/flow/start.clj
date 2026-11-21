@@ -88,25 +88,34 @@ Options:
   refusals have always come in that order."
   [{:keys [title owner project-number mode skip-branch no-checkout priority] :as input}]
   (when (str/blank? title)
-    (problem/fail! :start/no-title "--title is required"))
+    (problem/fail! :start/no-title "--title is required" {:fix "pass --title \"<what the work is>\""}))
   (when (str/blank? owner)
-    (problem/fail! :start/no-owner "no board owner: pass --owner, or add a kit.edn to this project (run kit init)"))
+    (problem/fail! :start/no-owner
+                   "no board owner"
+                   {:fix "pass --owner, or add a kit.edn to this project (run kit init)"}))
   (let [repo (shell/resolve-repo (:repo input))]
     (when (str/blank? project-number)
       (problem/fail! :start/no-project
-                     "no board number: pass --project-number, or add a kit.edn to this project (run kit init)"))
+                     "no board number"
+                     {:fix "pass --project-number, or add a kit.edn to this project (run kit init)"}))
     (when-not (#{"issue" "draft-convert"} mode)
-      (problem/fail! :start/bad-mode "--mode must be 'issue' or 'draft-convert'"))
+      (problem/fail! :start/bad-mode
+                     "--mode must be 'issue' or 'draft-convert'"
+                     {:fix "pass --mode issue, or --mode draft-convert, or leave --mode out"}))
     (when (and skip-branch no-checkout)
       (problem/fail!
        :start/branch-flags-conflict
-       "--skip-branch and --no-checkout are mutually exclusive: one creates no branch, the other creates one without touching the working tree"))
+       "--skip-branch and --no-checkout are mutually exclusive: one creates no branch, the other creates one without touching the working tree"
+       {:fix "pass only one of them"}))
     (cond (str/blank? priority)
-          (problem/fail! :start/no-priority "--priority is required: Urgent|High|Medium|Low")
+          (problem/fail! :start/no-priority
+                         "--priority is required: Urgent|High|Medium|Low"
+                         {:fix "pass --priority Urgent|High|Medium|Low"})
 
           (not (#{"Urgent" "High" "Medium" "Low"} priority))
           (problem/fail! :start/off-scale-priority
-                         (str "Priority '" priority "' is not on the scale Urgent|High|Medium|Low")))
+                         (str "Priority '" priority "' is not on the scale Urgent|High|Medium|Low")
+                         {:fix "pass --priority Urgent|High|Medium|Low"}))
     {:repo repo}))
 
 
@@ -122,10 +131,17 @@ Options:
   (when milestone
     (let [open (open-milestones repo)]
       (when-not (some #{milestone} open)
-        (problem/fail!
-         :start/unknown-milestone
-         (str "Milestone '" milestone "' is not an open milestone of '" repo "'. Open: " (str/join "/" open))
-         {:milestone milestone}))))
+        (let [open-ones (if (seq open)
+                          (str "Open: " (str/join "/" open))
+                          "It has no open milestone")
+              fix (if (seq open)
+                    "name one of the open milestones, or leave --milestone out; milestones are not created here"
+                    "leave --milestone out, or create the milestone on GitHub first; milestones are not created here")]
+          (problem/fail!
+           :start/unknown-milestone
+           (format "Milestone '%s' is not an open milestone of '%s'. %s" milestone repo open-ones)
+           {:milestone milestone
+            :fix       fix})))))
   {})
 
 
@@ -144,7 +160,10 @@ Options:
           said (str/trim (str out err))]
       (case (int exit)
         0 nil
-        1 (problem/fail! :start/retro-missing said)
+        1 (problem/fail! :start/retro-missing
+                         said
+                         {:fix
+                          "post the retrospective of each issue listed (kit retro <number>), or pass --skip-retro"})
         (shell/warn "Warning: could not check for merged issues without a retrospective:" said))))
   {})
 
@@ -200,7 +219,8 @@ Options:
                       label
                       "' does not exist in "
                       repo
-                      " and could not be created: create it on GitHub (Issues > Labels), or drop it from --labels")))
+                      " and could not be created")
+                 {:fix "create it on GitHub (Issues > Labels), or drop it from --labels"}))
               {:known-labels (conj known-labels label) :args (conj args flag label)}))
           {:known-labels known-labels :args []}
           (csv labels)))
@@ -220,7 +240,8 @@ Options:
               repo
               " ("
               (str/trim (str out err))
-              "): check the number, start without --issue, or pass --repo owner/name if that is the wrong repository")))
+              ")")
+         {:fix "check the number, start without --issue, or pass --repo owner/name if that is the wrong repository"}))
       {:number number :url (str/trim out)})))
 
 
@@ -263,10 +284,15 @@ Options:
   [repo item-id]
   (let [id (repo-id repo)]
     (when (str/blank? id)
-      (problem/fail! :start/no-repo-id "Failed to resolve repository id"))
+      (problem/fail!
+       :start/no-repo-id
+       "Failed to resolve repository id"
+       {:fix "check that the repository exists and that gh may read it (gh auth status), then run kit start again"}))
     (let [{:keys [number url]} (convert-draft! item-id id)]
       (when-not (and number url)
-        (problem/fail! :start/draft-not-converted "Draft item conversion to issue failed"))
+        (problem/fail! :start/draft-not-converted
+                       "Draft item conversion to issue failed"
+                       {:fix "run kit start again; the draft card on the board is found and converted then"}))
       {:number (str number) :url url :item-id item-id})))
 
 
@@ -332,14 +358,22 @@ Options:
              (some #(when (and (= title (:title %)) (open-work? % repo done-status)) %)
                    (project-items owner project-number status-field))]
     (when-not id
-      (problem/fail! :start/card-without-id "Existing project item has no id"))
+      (problem/fail! :start/card-without-id
+                     "Existing project item has no id"
+                     {:fix "open the card on the board and check that it is not archived, then run kit start again"}))
     (case (:type content)
-      "Issue"      (do (when-not (and (:number content) (:url content))
-                         (problem/fail! :start/card-without-issue "Existing issue item is missing issue data"))
-                       {:number (str (:number content)) :url (:url content) :item-id id})
+      "Issue"      (do
+                     (when-not (and (:number content) (:url content))
+                       (problem/fail!
+                        :start/card-without-issue
+                        "Existing issue item is missing issue data"
+                        {:fix
+                         "open the card on the board and check that its issue still exists, then run kit start again"}))
+                     {:number (str (:number content)) :url (:url content) :item-id id})
       "DraftIssue" (convert-draft repo id)
       (problem/fail! :start/card-not-an-issue
-                     (str "Existing project item '" title "' is not an issue or draft issue")))))
+                     (str "Existing project item '" title "' is not an issue or draft issue")
+                     {:fix "rename or remove that card on the board, or use another title"}))))
 
 
 (defn- open-issues-titled
@@ -359,7 +393,9 @@ Options:
   [{:keys [repo title]}]
   (when-let [issue (some #(when (= title (:title %)) %) (open-issues-titled repo title))]
     (when (str/blank? (:url issue))
-      (problem/fail! :start/issue-without-data "Existing issue is missing issue data"))
+      (problem/fail! :start/issue-without-data
+                     "Existing issue is missing issue data"
+                     {:fix "open the issue on GitHub and check that it still exists, then run kit start again"}))
     {:number (str (:number issue)) :url (:url issue)}))
 
 
@@ -399,14 +435,19 @@ Options:
                            args
                            (mapcat (fn [a] ["--assignee" a]) (csv assignees)))]
       (when (str/blank? url)
-        (problem/fail! :start/issue-not-filed "Issue creation failed"))
+        (problem/fail! :start/issue-not-filed
+                       "Issue creation failed"
+                       {:fix "check on GitHub that no half-made issue exists, then run kit start again"}))
       {:number (last (str/split url #"/")) :url url :filed? true :known-labels known-labels})
     (let [body (if body-file
                  (shell/file-text body-file)
                  (not-empty body))
           id   (not-empty (create-draft! project-number owner title body))]
       (when-not id
-        (problem/fail! :start/draft-not-created "Draft item creation failed"))
+        (problem/fail!
+         :start/draft-not-created
+         "Draft item creation failed"
+         {:fix "check the board number and owner, and that gh has the project scope, then run kit start again"}))
       (convert-draft repo id))))
 
 
@@ -443,10 +484,11 @@ Options:
       (when error
         (problem/fail! :start/board-refused
                        (if filed?
-                         (str "#" number
-                              " is filed but could not be put on the board: " (board/board-reason error)
-                              ". Then run kit start again with --issue " number)
-                         (str "#" number " could not be put on the board: " (board/board-reason error)))))
+                         (str "#" number " is filed but could not be put on the board: " (board/board-reason error))
+                         (str "#" number " could not be put on the board: " (board/board-reason error)))
+                       {:fix (if filed?
+                               (str "run kit start again with --issue " number)
+                               "remove the cause above, then run kit start again")}))
       {:item-id id})))
 
 
@@ -503,8 +545,8 @@ Options:
                                          " is filed, but its " field
                                          " on the board is not '" option
                                          "': "
-                                         (board/board-reason e)
-                                         ". Then run kit start again with --issue " number)))))]
+                                         (board/board-reason e))
+                                    {:fix (str "run kit start again with --issue " number)}))))]
     (field! showcase-field showcase)
     (field! priority-field priority)
     (field! size-field size)
@@ -615,14 +657,10 @@ Options:
 
 
 (defn start!
-  "kit start: read the command line, run the recipe on the real GitHub, print what it made — or the refusal (Error: and
-  the reason, exit 1)."
+  "kit start: read the command line, run the recipe on the real GitHub, print what it made — or throw the refusal, which the
+  flow's edge prints."
   [kit args]
   (let [input (read-input args shell/env)]
-    (when (:help input)
+    (if (:help input)
       (println start-usage)
-      (System/exit 0))
-    (let [result (start (assoc input :kit kit))]
-      (when (= :fail (::steps/status result))
-        (shell/exit-with! (steps/refusal result)))
-      (print-result result))))
+      (print-result (steps/complete! (start (assoc input :kit kit)))))))

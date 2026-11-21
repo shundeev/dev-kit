@@ -43,7 +43,7 @@
       "--edn"       (recur more (assoc opts :edn true))
       (problem/fail! :usage/unknown-option
                      (str "unknown option " a)
-                     {:usage true :fix "see the commands and their options: kit"}))))
+                     {:fix "see the commands and their options: kit"}))))
 
 
 (defn usage
@@ -64,11 +64,11 @@
     (when (str/blank? command)
       (problem/fail! :hook/no-command
                      "hook: pass the command as one argument"
-                     {:usage true :fix "kit hook '<command>', e.g. kit hook 'git reset --hard'"}))
+                     {:fix "kit hook '<command>', e.g. kit hook 'git reset --hard'"}))
     (when-not (fs/exists? entry)
       (problem/fail! :hook/no-entry
                      (str "hook: " entry " is missing")
-                     {:usage true :fix (str "run " base/mount "/bin/kit init to write it")}))
+                     {:fix (str "run " base/mount "/bin/kit init to write it")}))
     (let [state (str (fs/create-temp-dir))
           input (json/generate-string {:tool_name  "Bash"
                                        :tool_input {:command command}
@@ -245,11 +245,13 @@
 
 
 (defn flow!
-  "kit start, finish, merge, checks, review and board set: the delivery flow's GitHub steps, in bin/flow.clj (#95)."
+  "kit start, finish, merge, checks, review and board set: the delivery flow's GitHub steps, in bin/flow.clj (#95).
+  The exit code of the command: the base's run of kit merge (newer-merge!), or the flow's own."
   [cmd args]
-  (when-let [exit (and (= "merge" cmd) (newer-merge! args))] (System/exit exit))
-  (load-file (str (fs/path base/kit-dir "bin" "flow.clj")))
-  ((resolve 'flow/main) cmd args (str (fs/path base/kit-dir "bin" "kit"))))
+  (or (when (= "merge" cmd)
+        (newer-merge! args))
+      (do (load-file (str (fs/path base/kit-dir "bin" "flow.clj")))
+          ((resolve 'flow/main) cmd args (str (fs/path base/kit-dir "bin" "kit"))))))
 
 
 (defn retro!
@@ -259,7 +261,7 @@
   (when-not (and n (or (= n "--missing") (re-matches #"\d+" n)))
     (problem/fail! :retro/no-issue
                    "retro: name the issue"
-                   {:usage true :fix "e.g. kit retro 55, or kit retro --missing"}))
+                   {:fix "e.g. kit retro 55, or kit retro --missing"}))
   (load-file (str (fs/path base/kit-dir "bin" "retro.clj")))
   (let [opts (parse-args more)
         opts (assoc opts :repo (gate/gate-repo opts (gate/gate-config)) :gh base/gh!)]
@@ -270,25 +272,11 @@
 
 
 (defn report-problem
-  "Prints a problem as its message and, when it has one, what to do next. A :plain problem is an answer, not an error:
-  stdout, the text as it is, the fix on the next line. A usage error, or any problem marked :stderr, goes to stderr
-  as \"kit: ...\"; every other problem to stdout as \"  FAIL  ...\"."
-  [{:keys [message fix plain stderr] usage-error :usage}]
-  (let [text (cond-> message
-               fix (str "  →  " fix))]
-    (cond
-      plain
-      (println (str message
-                    (when fix
-                      (str "\n" fix))))
-
-      (or usage-error stderr)
-      (binding [*out* *err*]
-        (println (str "kit: " text))
-        (flush))
-
-      :else
-      (println (str "  FAIL  " text)))))
+  "Prints a problem on stderr, the one form of every refusal of kit: <text>. Fix: <fix>."
+  [problem]
+  (binding [*out* *err*]
+    (println (problem/refusal-text problem))
+    (flush)))
 
 
 (defn run
@@ -302,7 +290,7 @@
         (problem/fail!
          :usage/not-mounted
          (str "dev-kit must be mounted at <project>/" base/mount "; " base/root " is not a git repository root")
-         {:usage true :fix (str "run kit from the project's root, where " base/mount " is a submodule")}))
+         {:fix (str "run kit from the project's root, where " base/mount " is a submodule")}))
       (let [result (case cmd
                      "init"      (let [opts (parse-args args)]
                                    (if (:local opts)
@@ -328,7 +316,7 @@
                      (do (usage)
                          (problem/fail! :usage/unknown-command
                                         (str "unknown command " cmd)
-                                        {:usage true :fix "pick one of the commands listed above"})))]
+                                        {:fix "pick one of the commands listed above"})))]
         (if (integer? result) result 0))
       (catch clojure.lang.ExceptionInfo e
         (if-let [data (ex-data e)]

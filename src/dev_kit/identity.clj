@@ -109,7 +109,7 @@
   (let [ex (or (base/sh-in dir "git" "rev-parse" "--path-format=absolute" "--git-path" "info/exclude")
                (problem/fail! :identity/not-a-repository
                               (str dir " is not a git repository")
-                              {:usage true :fix "run it inside a git repository, or name one with --dir"}))
+                              {:fix "run it inside a git repository, or name one with --dir"}))
         s  (base/slurp-if ex)]
     (fs/create-dirs (fs/parent ex))
     (spit ex

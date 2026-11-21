@@ -204,29 +204,26 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
   [{:keys [pr head]} {:keys [checks now]}]
   (let [failed (wait/failed-checks checks)]
     (cond (= "MERGED" (:state now))
-          (problem/fail! :checks/merged
-                         (format "The pull request merged, so there is nothing to wait for: %s" pr)
-                         {:exit 2 :plain true})
+          (problem/fail!
+           :checks/merged
+           (format "The pull request merged, so there is nothing to wait for: %s" pr)
+           {:exit 2 :fix "nothing to do for this pull request; kit merge closes the work out"})
 
           (not= "OPEN" (:state now))
           (problem/fail! :checks/not-open
                          (format "Ended with no result: the pull request is %s, %s." (str/lower-case (:state now)) pr)
-                         {:exit 2 :plain true})
+                         {:exit 2 :fix "name an open pull request: kit checks --pr <number>"})
 
           (not= head (:head now))
           (problem/fail!
            :checks/head-moved
-           (format
-            "Ended with no result: the head moved from %s to %s (a push). Fix: run kit checks again for the new commit."
-            (sha7 head)
-            (sha7 (:head now)))
-           {:exit 2 :plain true})
+           (format "Ended with no result: the head moved from %s to %s (a push)." (sha7 head) (sha7 (:head now)))
+           {:exit 2 :fix "run kit checks again for the new commit."})
 
           (seq failed)
           (problem/fail! :checks/failed
-                         (format
-                          "%s\nFix: open the link, fix the cause, push; then run kit checks again for the new commit."
-                          (wait/failed-text failed (str "on " (sha7 head))))))))
+                         (wait/failed-text failed (str "on " (sha7 head)))
+                         {:fix "open the link, fix the cause, push; then run kit checks again for the new commit."}))))
 
 
 (defn- wait-for-checks
@@ -273,10 +270,6 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 (defn checks!
   [_kit args]
   (let [input (read-input args shell/env)]
-    (when (:help input)
+    (if (:help input)
       (println checks-usage)
-      (System/exit 0))
-    (let [result (checks input)]
-      (when (= :fail (::steps/status result))
-        (shell/exit-with! (steps/refusal result)))
-      (print-result result))))
+      (print-result (steps/complete! (checks input))))))

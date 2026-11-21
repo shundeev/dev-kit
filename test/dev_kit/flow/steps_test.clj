@@ -12,13 +12,22 @@
                    :check (fn [_] (apply problem/fail! fail-args)))))
 
 
-(deftest a-refusal-prints-error-and-exits-1
-  (is (= {:text "Error: no branch" :exit 1} (refused :x/no-branch "no branch"))))
+(deftest a-refusal-says-its-text-and-exits-1
+  (is (= {:text "no branch" :exit 1} (refused :x/no-branch "no branch"))))
 
 
-(deftest a-step-may-name-its-own-exit-code-and-a-plain-text
-  (is (= {:text "no result yet" :exit 2} (refused :checks/no-result "no result yet" {:exit 2 :plain true})))
-  (is (= {:text "Error: gh failed" :exit 4} (refused :x/gh "gh failed" {:exit 4}))))
+(deftest a-step-may-name-its-own-exit-code
+  (is (= {:text "no result yet" :exit 2} (refused :checks/no-result "no result yet" {:exit 2})))
+  (is (= {:text "gh failed" :exit 4} (refused :x/gh "gh failed" {:exit 4}))))
+
+
+(deftest the-fix-follows-the-text-in-the-one-form-of-a-refusal
+  (is (= {:text "no branch. Fix: check one out" :exit 1}
+         (refused :x/no-branch "no branch" {:fix "check one out"})))
+  (is (= "closed. Fix: reopen it" (:text (refused :x/closed "closed." {:fix "reopen it"})))
+      "a text that ends with a full stop takes the fix after it")
+  (is (= "1 failed:\n  lint\nFix: push" (:text (refused :x/failed "1 failed:\n  lint" {:fix "push"})))
+      "a text of several lines takes the fix on its own line"))
 
 
 (deftest the-run-stops-at-the-first-refusal-and-keeps-what-it-gathered

@@ -61,10 +61,15 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
   [{:keys [base]}]
   (let [branch (github/head-branch)]
     (when (#{base "HEAD"} branch)
-      (problem/fail! :merge/not-on-issue-branch (format "Run from the issue branch, not '%s'" branch)))
+      (problem/fail!
+       :merge/not-on-issue-branch
+       (format "Run from the issue branch, not '%s'" branch)
+       {:fix "check out the issue branch (kit start made it, named <number>-<slug>), then run kit merge again"}))
     {:branch branch
      :number (or (shell/issue-branch-number branch)
-                 (problem/fail! :merge/not-an-issue-branch (format "Branch '%s' is not <number>-<slug>" branch)))}))
+                 (problem/fail! :merge/not-an-issue-branch
+                                (format "Branch '%s' is not <number>-<slug>" branch)
+                                {:fix "check out the issue branch (kit start made it), then run kit merge again"}))}))
 
 
 (defn- read-poll
@@ -85,10 +90,8 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
         (github/open-pr-url repo branch "merged")
         (problem/fail!
          :merge/no-pr
-         (format
-          "No open or merged pull request for branch '%s' in %s; if that is the wrong repository, pass --repo owner/name"
-          branch
-          repo)))]
+         (format "No open or merged pull request for branch '%s' in %s" branch repo)
+         {:fix "if that is the wrong repository, pass --repo owner/name; else open the pull request with kit finish"}))]
       (println (format "Already merged by GitHub: %s" merged-url))
       {:pr-url merged-url :already-merged? true})))
 
@@ -98,7 +101,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 
 (defn- read-pr
   [{:keys [repo pr-url]}]
-  (github/read-pr pr-url repo #(problem/fail! :merge/pr-unreadable %)))
+  (github/read-pr pr-url repo #(problem/fail! :merge/pr-unreadable %1 {:fix %2})))
 
 
 (defn- read-settled-pr
@@ -127,44 +130,38 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
       (= "MERGED" (:state pr)) pr
 
       (= "CLOSED" (:state pr))
-      (problem/fail!
-       :merge/closed
-       (format
-        "The pull request was closed without merging: %s. Branch '%s' is kept. Fix: reopen it (gh pr reopen %s) if it was closed by mistake, then run kit merge again."
-        pr-url
-        branch
-        pr-url))
+      (problem/fail! :merge/closed
+                     (format "The pull request was closed without merging: %s. Branch '%s' is kept." pr-url branch)
+                     {:fix (format "reopen it (gh pr reopen %s) if it was closed by mistake, then run kit merge again."
+                                   pr-url)})
 
       (not= "APPROVED" (:decision pr))
       (let [headline (if first? "Waiting for the owner's Approve of the latest commit" "The owner's approval is gone")
             review   (str/lower-case (or (:decision pr) "none"))]
-        (problem/fail!
-         :merge/not-approved
-         (format "%s (review: %s): %s. Fix: ask the owner to approve the latest commit, then run kit merge again."
-                 headline
-                 review
-                 pr-url)))
+        (problem/fail! :merge/not-approved
+                       (format "%s (review: %s): %s" headline review pr-url)
+                       {:fix "ask the owner to approve the latest commit, then run kit merge again."}))
 
       (= "DIRTY" merge-state)
       (problem/fail!
        :merge/conflict
-       (format
-        "The branch conflicts with %s: %s. Fix: merge %s into the branch (git fetch origin && git merge origin/%s) and resolve the conflicts, then push; the push dismisses the owner's Approve, so ask for it again."
-        base
-        pr-url
-        base
-        base))
+       (format "The branch conflicts with %s: %s" base pr-url)
+       {:fix
+        (format
+         "merge %s into the branch (git fetch origin && git merge origin/%s) and resolve the conflicts, then push; the push dismisses the owner's Approve, so ask for it again."
+         base
+         base)})
 
       :else
       (let [failed (when (= "BLOCKED" merge-state)
                      (wait/failed-checks
-                      (github/required-checks pr-url repo #(problem/fail! :merge/checks-unreadable %))))]
+                      (github/required-checks pr-url repo #(problem/fail! :merge/checks-unreadable %1 {:fix %2}))))]
         (when (seq failed)
           (problem/fail!
            :merge/checks-failed
-           (format
-            "%s\nFix: open the link and fix the cause, push, ask the owner to approve the new commit, then run kit merge again."
-            (wait/failed-text failed (str "on " pr-url)))))
+           (wait/failed-text failed (str "on " pr-url))
+           {:fix
+            "open the link and fix the cause, push, ask the owner to approve the new commit, then run kit merge again."}))
         (if (= "BEHIND" merge-state)
           ;; GitHub may have merged it since the last read, and then its branch is gone: look again first (#99).
           ;; A refused update is no end: the next look reads why (a conflict, a merge that went through).
@@ -194,9 +191,9 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
       (when-not (zero? (squash-merge! pr-url))
         (problem/fail!
          :merge/not-merged
-         (format
-          "Could not merge %s: auto-merge is off in this repository, so nothing merges by itself. Fix: if checks are still running, run this again when they pass; otherwise the owner turns on Settings > General > 'Allow auto-merge' (dev-kit#37)."
-          pr-url))))))
+         (format "Could not merge %s: auto-merge is off in this repository, so nothing merges by itself." pr-url)
+         {:fix
+          "if checks are still running, run this again when they pass; otherwise the owner turns on Settings > General > 'Allow auto-merge' (dev-kit#37)."})))))
 
 
 (defn- wait-for-the-merge
@@ -236,24 +233,23 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
         (problem/fail!
          :merge/issue-unreadable
          (if (str/blank? err)
-           (format
-            "Error: gh issue view failed with exit code %s and printed no message. Run the same call by hand to see why."
-            exit)
+           (format "gh issue view failed with exit code %s and printed no message" exit)
            (str/trim err))
-         {:exit exit :plain true}))
+         {:exit exit :fix "run the same call by hand to see why."}))
       (let [url (str/trim out)]
         (if-let [failure (board/board-set-field project-number owner url status-field done-status)]
-          {:board-error (format "The board %s of #%s is not '%s': %s. Set it alone: %s"
+          {:board-error (format "The board %s of #%s is not '%s': %s"
                                 status-field
                                 number
                                 done-status
-                                (board/board-reason failure)
-                                (board/board-set-command kit project-number owner url status-field done-status))}
+                                (board/board-reason failure))
+           :board-fix   (str "set it alone: "
+                             (board/board-set-command kit project-number owner url status-field done-status))}
           {})))))
 
 
 (defn- fetch-base!
-  "git fetch of the base branch; git's own exit code ends the run when it fails."
+  "git fetch of the base branch; git's own exit code stops the step when it fails."
   [base]
   (shell/run-on-terminal! "git" "fetch" "-q" "origin" base))
 
@@ -349,7 +345,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
   "A pull request merged by auto-merge is merged by github-actions, and GitHub then closes none of its linked issues.
   Closes each one the PR names as closing that is still open, as completed, naming the PR; one line per issue."
   [{:keys [pr-url]}]
-  (doseq [{:keys [number url]} (closing-issues pr-url #(problem/fail! :merge/closing-issues-unreadable %))]
+  (doseq [{:keys [number url]} (closing-issues pr-url #(problem/fail! :merge/closing-issues-unreadable %1 {:fix %2}))]
     (if (= "OPEN" (issue-state url))
       (let [closed (close-issue! url (format "Closed by %s, which merged." pr-url))]
         (if (zero? (:exit closed))
@@ -364,9 +360,9 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 
 (defn- report-board-error
   "Raises the board error `mark-done-on-board` kept, now that the closeout is done."
-  [{:keys [board-error]}]
+  [{:keys [board-error board-fix]}]
   (when board-error
-    (problem/fail! :merge/board-refused board-error))
+    (problem/fail! :merge/board-refused board-error {:fix board-fix}))
   {})
 
 
@@ -415,14 +411,10 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 
 
 (defn merge!
-  "kit merge: read the command line, run the recipe on the real GitHub, print what it did, or exit with the refusal
-  (Error: and the reason, exit 1; a board error comes last, after the closeout)."
+  "kit merge: read the command line, run the recipe on the real GitHub, print what it did, or throw the refusal, which the
+  flow's edge prints (a board error comes last, after the closeout)."
   [kit args]
   (let [input (read-input args shell/env)]
-    (when (:help input)
+    (if (:help input)
       (println merge-usage)
-      (System/exit 0))
-    (let [result (merge-pr (assoc input :kit kit))]
-      (when (= :fail (::steps/status result))
-        (shell/exit-with! (steps/refusal result)))
-      (print-result result))))
+      (print-result (steps/complete! (merge-pr (assoc input :kit kit)))))))

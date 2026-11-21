@@ -12,7 +12,10 @@
 (def converted
   "Namespaces where every problem/fail! carries a :fix. A namespace is added here when its stops get their advice."
   '#{dev-kit.config dev-kit.checks dev-kit.init dev-kit.identity dev-kit.commands dev-kit.github dev-kit.main
-     dev-kit.gate dev-kit.retro.log dev-kit.retro.missing dev-kit.retro.report})
+     dev-kit.gate dev-kit.retro.log dev-kit.retro.missing dev-kit.retro.report
+     dev-kit.flow.board dev-kit.flow.checks dev-kit.flow.finish dev-kit.flow.github dev-kit.flow.merge
+     dev-kit.flow.release dev-kit.flow.review dev-kit.flow.shell dev-kit.flow.start dev-kit.flow.steps
+     dev-kit.flow.wait dev-kit.flow.watched-pr})
 
 
 (defn- source-forms
@@ -52,8 +55,8 @@
                  (try (apply problem/fail! args)
                       (catch clojure.lang.ExceptionInfo e (ex-data e))))]
     (testing "the problem, the text and every option come with it"
-      (is (= {:problem :pr/none :message "No PR" :fix "open one" :exit 2 :plain true}
-             (thrown :pr/none "No PR" {:fix "open one" :exit 2 :plain true}))))
+      (is (= {:problem :pr/none :message "No PR" :fix "open one" :exit 2}
+             (thrown :pr/none "No PR" {:fix "open one" :exit 2}))))
     (testing "no options is a plain refusal"
       (is (= {:problem :pr/none :message "No PR"} (thrown :pr/none "No PR"))))
     (testing "the text is the exception's message"
@@ -93,3 +96,13 @@
                       :when (not (contains? (fail-options call) :fix))]
                   [file (second call)])]
     (is (empty? lacking) (str "problem/fail! without :fix: " (pr-str lacking)))))
+
+
+(deftest no-stop-says-how-it-is-printed
+  (let [flagged (for [{:keys [file forms]} (sources)
+                      call  (fail-calls forms)
+                      flag  [:plain :stderr :usage]
+                      :when (contains? (fail-options call) flag)]
+                  [file (second call) flag])]
+    (is (empty? flagged)
+        (str "every refusal prints the same way, so a problem carries no printing flag: " (pr-str flagged)))))

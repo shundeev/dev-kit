@@ -112,7 +112,7 @@
   (let [{:keys [out err code]} (run-missing (fn [& _] (throw (ex-info "no network" {}))))]
     (is (= 2 code))
     (is (= "" out))
-    (is (= (str "kit: retro: GitHub not available: no network  →  "
+    (is (= (str "retro: GitHub not available: no network. Fix: "
                 "check gh auth status and the network, then run kit retro --missing again\n")
            err))))
 
@@ -121,7 +121,7 @@
   (let [{:keys [code err]} (at-the-edge #(missing/run-missing
                                           {:repo "u473t8/fake" :gh (fn [& _] "") :now "yesterday"}))]
     (is (= 1 code))
-    (is (str/starts-with? err "kit: retro: --now yesterday : not a time  →  write it as 2026-11-12T10:00:00Z"))))
+    (is (str/starts-with? err "retro: --now yesterday : not a time. Fix: write it as 2026-11-12T10:00:00Z"))))
 
 
 (defn- rule-block
@@ -172,4 +172,4 @@
   (let [{:keys [code err]} (at-the-edge #(report/run
                                           {:repo "u473t8/fake" :issue 55 :days "many" :now now :gh (fn [& _] "")}))]
     (is (= 1 code))
-    (is (= "kit: retro: --days many : not a number of days  →  write a whole number above 0, e.g. --days 30\n" err))))
+    (is (= "retro: --days many : not a number of days. Fix: write a whole number above 0, e.g. --days 30\n" err))))
