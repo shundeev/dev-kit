@@ -150,7 +150,7 @@
                             (and (= "review" (second kit)) (some #{"--wait"} texts))))))
       (deny
        :foreground-wait
-       "Refused: this command waits. Run it as a background command (run_in_background); you are woken when it exits (#109)."))))
+       "Refused: this command waits. Run it as a background command (run_in_background); you are woken when it exits (#109).\n\nThe allowed ways: run this command in the background, or use `kit checks` or `kit review --wait`, themselves run in the background."))))
 
 
 (defn- zsh-rule
