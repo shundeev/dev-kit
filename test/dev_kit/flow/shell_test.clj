@@ -28,13 +28,13 @@
     (testing "gh said something: it is the text, as it is"
       (with-redefs [p/process (gh-answers {:exit 4 :out "" :err "HTTP 502: Bad Gateway\n"})]
         (let [problem (refusal #(shell/gh! "pr" "list"))]
-          (is (= {:exit 4 :plain true :message "HTTP 502: Bad Gateway"} (select-keys problem [:exit :plain :message])))
+          (is (= {:exit 4 :message "HTTP 502: Bad Gateway"} (select-keys problem [:exit :message])))
           (is (string? (:fix problem))))))
     (testing "gh said nothing: the call and the code are named"
       (with-redefs [p/process (gh-answers {:exit 3 :out "" :err ""})]
         (let [problem (refusal #(shell/gh! "pr" "view" "5"))]
           (is (= 3 (:exit problem)))
-          (is (= "Error: gh pr view failed with exit code 3 and printed no message" (:message problem))))))
+          (is (= "gh pr view failed with exit code 3 and printed no message" (:message problem))))))
     (testing "a call that went through gives gh's trimmed output"
       (with-redefs [p/process (gh-answers {:exit 0 :out "https://x/1\n" :err ""})]
         (is (= "https://x/1" (shell/gh! "pr" "list")))))))

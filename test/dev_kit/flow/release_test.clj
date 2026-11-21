@@ -32,7 +32,7 @@
            :warnings (lines err))))
 
 
-(defn- said [result] (str/replace-first (:text (steps/refusal result)) #"^Error: " ""))
+(defn- said [result] (:text (steps/refusal result)))
 
 
 (defn- the-pr [world] (first (fake/prs world)))

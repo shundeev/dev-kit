@@ -233,9 +233,9 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
         (problem/fail!
          :merge/issue-unreadable
          (if (str/blank? err)
-           (format "Error: gh issue view failed with exit code %s and printed no message" exit)
+           (format "gh issue view failed with exit code %s and printed no message" exit)
            (str/trim err))
-         {:exit exit :plain true :fix "run the same call by hand to see why."}))
+         {:exit exit :fix "run the same call by hand to see why."}))
       (let [url (str/trim out)]
         (if-let [failure (board/board-set-field project-number owner url status-field done-status)]
           {:board-error (format "The board %s of #%s is not '%s': %s"

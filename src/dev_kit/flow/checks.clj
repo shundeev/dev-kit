@@ -207,18 +207,18 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
           (problem/fail!
            :checks/merged
            (format "The pull request merged, so there is nothing to wait for: %s" pr)
-           {:exit 2 :plain true :fix "nothing to do for this pull request; kit merge closes the work out"})
+           {:exit 2 :fix "nothing to do for this pull request; kit merge closes the work out"})
 
           (not= "OPEN" (:state now))
           (problem/fail! :checks/not-open
                          (format "Ended with no result: the pull request is %s, %s." (str/lower-case (:state now)) pr)
-                         {:exit 2 :plain true :fix "name an open pull request: kit checks --pr <number>"})
+                         {:exit 2 :fix "name an open pull request: kit checks --pr <number>"})
 
           (not= head (:head now))
           (problem/fail!
            :checks/head-moved
            (format "Ended with no result: the head moved from %s to %s (a push)." (sha7 head) (sha7 (:head now)))
-           {:exit 2 :plain true :fix "run kit checks again for the new commit."})
+           {:exit 2 :fix "run kit checks again for the new commit."})
 
           (seq failed)
           (problem/fail! :checks/failed

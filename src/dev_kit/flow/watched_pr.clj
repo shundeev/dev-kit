@@ -56,4 +56,4 @@
 (defn no-result
   "The failure of a read of GitHub that gave no answer: gh's message as it is, exit 2."
   [message fix]
-  (problem/fail! :github/no-answer message {:exit 2 :plain true :fix fix}))
+  (problem/fail! :github/no-answer message {:exit 2 :fix fix}))

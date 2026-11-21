@@ -65,9 +65,9 @@
       (problem/fail!
        :gh/failed
        (if (str/blank? err)
-         (str "Error: gh " (str/join " " (take 2 args)) " failed with exit code " exit " and printed no message")
+         (str "gh " (str/join " " (take 2 args)) " failed with exit code " exit " and printed no message")
          (str/replace err #"\n$" ""))
-       {:exit exit :plain true :fix run-by-hand}))
+       {:exit exit :fix run-by-hand}))
     (when-not (str/blank? err)
       (binding [*out* *err*]
         (print err)

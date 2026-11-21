@@ -37,7 +37,7 @@
 
 (defn- said
   [result]
-  (str/replace-first (:text (steps/refusal result)) #"^Error: " ""))
+  (:text (steps/refusal result)))
 
 
 (deftest a-new-task-gets-an-issue-a-card-with-its-fields-and-a-branch-named-after-it

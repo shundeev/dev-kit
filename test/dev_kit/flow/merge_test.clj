@@ -54,7 +54,7 @@
 
 (defn- said
   [result]
-  (str/replace-first (:text (steps/refusal result)) #"^Error: " ""))
+  (:text (steps/refusal result)))
 
 
 (defn- left-alone?
@@ -235,7 +235,7 @@
     (is (= :fail (::steps/status result)))
     (is (= :report-board-error (::steps/stopped-at result)) "it is the last step that fails")
     (is (= 1 (:exit (steps/refusal result))))
-    (is (str/starts-with? (:text (steps/refusal result)) "Error: The board Status of #1 is not 'Done': "))
+    (is (str/starts-with? (:text (steps/refusal result)) "The board Status of #1 is not 'Done': "))
     (is (str/includes? (said result)
                        (format "Fix: set it alone: bb bin/kit board set 3 u473t8 %s Status Done" issue-url)))
     (is (= "main" (fake/checked-out world)) "the clone left the branch")
@@ -288,7 +288,7 @@
     (let [world  (clone [(approved-pr)] :current-branch branch)
           result (kit-merge world {})]
       (is (= :fail (::steps/status result)) branch)
-      (is (str/starts-with? (:text (steps/refusal result)) (format "Error: %s. Fix: check out the issue branch" says))
+      (is (str/starts-with? (:text (steps/refusal result)) (format "%s. Fix: check out the issue branch" says))
           branch)
       (is (not (:auto-merge (first (fake/prs world)))) (format "%s: nothing was asked of the pull request" branch)))))
 
@@ -297,7 +297,7 @@
   (let [world  (clone [(approved-pr)])
         result (kit-merge world {"GHWF_MERGE_POLL" "soon"})]
     (is (= :fail (::steps/status result)))
-    (is (= (str "Error: GHWF_MERGE_POLL is 'soon': give it a whole number of seconds, or unset it for 10. "
+    (is (= (str "GHWF_MERGE_POLL is 'soon': give it a whole number of seconds, or unset it for 10. "
                 "Fix: set GHWF_MERGE_POLL to a whole number of seconds (0 or more), or unset it")
            (:text (steps/refusal result))))
     (is (= :read-poll (::steps/stopped-at result)))

@@ -47,7 +47,7 @@
 
 (defn- said
   [result]
-  (str/replace-first (:text (steps/refusal result)) #"^Error: " ""))
+  (:text (steps/refusal result)))
 
 
 (defn- on-branch-1

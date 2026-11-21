@@ -121,7 +121,7 @@
 (defn- set-field!
   [[_ number owner url field option]]
   (when-let [e (board-set-field number owner url field option)]
-    (problem/fail! :board/refused e {:plain true :fix "read the reason above; kit board set can be run again alone"}))
+    (problem/fail! :board/refused e {:fix "read the reason above; kit board set can be run again alone"}))
   (println (str field ": " option)))
 
 
@@ -135,4 +135,4 @@
     (problem/fail!
      :board/usage
      "Usage: kit board set <project-number> <owner> <issue-url> <field> <option>\n       kit board show   the folder's board as JSON, {\"owner\": ..., \"number\": ...}"
-     {:exit 2 :plain true :fix "give the arguments as shown"})))
+     {:exit 2 :fix "give the arguments as shown"})))
