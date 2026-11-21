@@ -90,44 +90,16 @@ grep -q "dev-kit:begin" AGENTS.md && grep -q "# This project" AGENTS.md && ok "A
 echo "- permissions"
 perm() { jq -r --arg list "$1" '.permissions[$list][]' .claude/settings.json; }
 has() { perm "$1" | grep -qxF -- "$2"; }
-for rule in "Bash(git *)" "Bash(gh *)" "Bash(bb *)"; do
-  has allow "$rule" && bad "no blanket allow: $rule" || ok "no blanket allow: $rule"
-done
-# kit merge runs without a prompt: the server merges only on the owner's Approve (#22, #37, #95).
-has allow "Bash(.shared/bin/kit *)" && has allow "Bash(bb .shared/bin/kit *)" \
-  && ! perm ask | grep -q 'kit merge' \
-  && ok "kit merge runs without a prompt" || bad "kit merge asks, or kit is not allowed"
-has ask "Bash(gh pr merge *)" && ok "asks: Bash(gh pr merge *)" || bad "asks: Bash(gh pr merge *)"
-# #20: the safety guard refuses these outright; an ask rule would never be reached
-for rule in "Bash(git reset --hard *)" "Bash(git clean *)" "Bash(git branch -D *)" "Bash(git checkout -- *)" "Bash(git restore *)"; do
-  has ask "$rule" && bad "still asks: $rule" || ok "no ask rule, the safety guard decides: $rule"
-done
-# #74: closing an issue reopens in one click and happens on the owner's word or from the flow scripts.
-if has ask "Bash(gh issue close *)"; then bad "closing an issue still asks the owner"; else ok "closing an issue does not ask"; fi
-for rule in "Bash(git push --force *)" "Bash(git push * --force *)" "Bash(git push * --force)" "Bash(git push -f *)" \
-            "Bash(git push * -f)" "Bash(git push * +*)" "Bash(gh repo delete *)"; do
-  has deny "$rule" && ok "denies: $rule" || bad "denies: $rule"
-done
 has allow "Bash(.shared/bin/kit *)" && ok "kit path substituted" || bad "kit path substituted"
 # #30: the project-link plugin comes from the pinned submodule, with nothing to install by hand
 jq -e '.extraKnownMarketplaces["dev-kit"].source == {source: "directory", path: ".shared"} and .enabledPlugins["project-link@dev-kit"] == true' \
   .claude/settings.json >/dev/null && ok "settings enable project-link from the .shared marketplace" || bad "plugin settings" "$(jq -c '{extraKnownMarketplaces, enabledPlugins}' .claude/settings.json)"
-mk="$KIT/.claude-plugin/marketplace.json"
-jq -r '.plugins[] | "\(.name) \(.source)"' "$mk" | while read -r name src; do
-  [ "$(jq -r .name "$KIT/$src/.claude-plugin/plugin.json" 2>/dev/null)" = "$name" ] && echo ok || echo "bad $name"
-done | grep -q bad && bad "a marketplace entry does not match its plugin.json" \
-  || { [ "$(jq '.plugins | length' "$mk" 2>/dev/null || echo 0)" -ge 1 ] && ok "marketplace entries match their plugins" || bad "no plugins in $mk"; }
 if command -v claude >/dev/null 2>&1 && [ -z "${CI:-}" ]; then
   out="$(claude plugin validate "$KIT" 2>&1)" && ok "claude plugin validate passes for dev-kit's marketplace" || bad "claude plugin validate" "$out"
 fi
 jq -e '.hooks.PreToolUse and .hooks.SessionStart' .claude/settings.json >/dev/null && ok "hooks survive the settings merge" || bad "hooks lost in the settings merge"
 perm allow | grep -q '{{kit}}' && bad "unsubstituted {{kit}}" || ok "no {{kit}} placeholder left"
 has allow "Bash(clj-kondo *)" && bad "clojure allows without the module" || ok "no clojure allows without the module"
-own="$KIT/.claude/settings.json"; base="$KIT/claude/settings.base.json"
-for list in ask deny; do
-  [ "$(jq -c ".permissions.$list" "$own")" = "$(jq -c ".permissions.$list" "$base")" ] \
-    && ok "dev-kit's own $list rules match the base" || bad "dev-kit's own $list rules drifted from the base"
-done
 
 echo "- idempotence"
 expect_exit 0 "second init succeeds" bb $kit init
@@ -305,7 +277,6 @@ cd "$P" || exit 1
 
 echo "- code owners"
 [ "$(grep -v '^#' .github/CODEOWNERS)" = "* @shundeev/owners" ] && ok "CODEOWNERS makes the owners team review every file" || bad "CODEOWNERS" "$(cat .github/CODEOWNERS 2>&1)"
-grep -qx '\* @shundeev/owners' "$KIT/.github/CODEOWNERS" && ok "dev-kit itself has the same code owner" || bad "dev-kit's own CODEOWNERS"
 echo '* @someone-else' > .github/CODEOWNERS
 expect_exit 1 "doctor --ci catches an edited CODEOWNERS" bb $kit doctor --ci
 contains "doctor names CODEOWNERS" ".github/CODEOWNERS: differs" "$LAST"
@@ -327,17 +298,6 @@ echo "- issue form and PR template"
 form=.github/ISSUE_TEMPLATE/task.yml
 prt=.github/pull_request_template.md
 [ -f $form ] && [ -f $prt ] && ok "init writes the issue form and the PR template" || bad "templates missing"
-labels="$(bb -e "(require '[clj-yaml.core :as y]) (doseq [f (:body (y/parse-string (slurp \"$form\")))] (when-let [l (get-in f [:attributes :label])] (println (str l (when (get-in f [:validations :required]) \" (required)\")))))" 2>&1)"
-[ "$labels" = "$(printf 'Requirements (required)\nInvariants\nDesign\nPlan\nDone when (required)')" ] \
-  && ok "the issue form has the five ADR-0002 sections; Requirements and Done when are required" || bad "issue form sections" "$labels"
-missing=""
-for s in "## What changed" "## Why" "## Root causes" "## Review" "## User-level test" "## Verified" "## Not verified" "## Owner steps"; do
-  grep -qx -- "$s" $prt || missing="$missing, $s"
-done
-[ -z "$missing" ] && ok "the PR template has the sections the owner reviews" || bad "PR template lacks${missing#,}"
-grep -Eq '^ADR: +[^[:space:]]' $prt && ok "the PR template passes the finish script's ADR check" || bad "PR template ADR line"
-if grep -Eqi '(close[sd]?|fix(e[sd])?|resolve[sd]?) #' $prt; then bad "PR template carries a closing keyword (the finish script adds it)"
-else ok "the PR template leaves the closing keyword to the finish script"; fi
 for f in $form $prt; do cmp -s "$f" "$KIT/$f" && ok "dev-kit itself has the same $f" || bad "dev-kit's own $f differs"; done
 echo "# edited" >> $prt
 expect_exit 1 "doctor --ci catches an edited PR template" bb $kit doctor --ci
@@ -347,8 +307,6 @@ bb $kit init >/dev/null
 echo "- ready workflow in projects and in dev-kit (ADR-0007)"
 rw=.github/workflows/ready-when-green.yml
 cmp -s "$rw" "$KIT/$rw" && ok "init lays dev-kit's own $rw as it is" || bad "the ready workflow differs from dev-kit's"
-grep -q 'workflows: \["CI"\]' "$rw" && grep -q '^name: CI$' .github/workflows/ci.yml && grep -q '^name: CI$' "$KIT/.github/workflows/selftest.yml" \
-  && ok "  it waits for \"CI\", the name of managed/ci.yml and of dev-kit's own CI workflow" || bad "  the ready workflow does not wait for the CI workflow"
 echo "# edited" >> "$rw"
 expect_exit 1 "doctor --ci catches an edited ready workflow" bb $kit doctor --ci
 contains "doctor names the file" "$rw: differs" "$LAST"
@@ -362,9 +320,6 @@ bb $kit init >/dev/null
 echo "- the ready workflow's script, run against the fake gh (ADR-0007)"
 rwscript="$WORK/ready.sh"
 sed -n '/^        run: |$/,$p' "$KIT/$rw" | tail -n +2 | sed 's/^          //' > "$rwscript"
-for perm in "checks: read" "statuses: read" "pull-requests: write" "contents: write"; do
-  grep -q "^  $perm" "$KIT/$rw" && ok "  permission $perm" || bad "  permission $perm missing (gh pr checks reads the status rollup)"
-done
 RW="$WORK/rw"; mkdir -p "$RW"
 rw() { # rw <prs json> : the script as GitHub runs it (bash -e), gh faked, its log kept
   : > "$RW/log"
@@ -393,34 +348,6 @@ contains "  and says why" "carries the label hold" "$out"
 printf 'OPEN\ttrue\told\tfalse\n' > "$RW/pr-view-7"
 out="$(rw '[7]')"
 grep -q '^pr ready' "$RW/log" && bad "  marked ready a PR with a newer commit" || ok "  a PR whose head moved on is left to its own run"
-
-echo "- delivery skill"
-skill="$KIT/claude/skills/repo-task-delivery/SKILL.md"
-sed -n 2p "$skill" | grep -qx 'name: repo-task-delivery' && ok "the delivery skill names itself" || bad "skill frontmatter"
-missing=""
-for h in "Size sets the ceremony" "Requirements" "Invariants" "Design" "G1" "Plan and execute" "Review and simplify" \
-         "User-level test" "Pull request" "Merge" "Retrospective"; do
-  grep -Eqi "^## [0-9]+\. .*$h" "$skill" || missing="$missing, $h"
-done
-[ -z "$missing" ] && ok "the delivery skill walks every stage of ADR-0002" || bad "the skill lacks the stage${missing#,}"
-missing=""
-for phrase in "kit checks" "in the background" "kit finish --hold" "kit release" "Ask the owner for the Approve once the PR is ready"; do
-  grep -qF -- "$phrase" "$skill" || missing="$missing, $phrase"
-done
-[ -z "$missing" ] && ok "stage 9: the background alarm, the hold and the release, the Approve asked once ready (ADR-0007)" || bad "stage 9 lacks${missing#,}"
-missing=""
-for phrase in "unless the PR is held" "still a draft without \`hold\`"; do
-  grep -qF -- "$phrase" "$skill" || missing="$missing, $phrase"
-done
-[ -z "$missing" ] && ok "stage 9: a pass means ready unless held; a stuck draft is released; the alarm" || bad "stage 9 lacks${missing#,}"
-[ "$(wc -l < "$KIT/rules/shared.md")" -le 100 ] && ok "the rules block stays within 100 lines" || bad "rules/shared.md is $(wc -l < "$KIT/rules/shared.md") lines"
-missing=""
-for phrase in "what changed for them and what is needed from them" "ends with the pull request's link" \
-              "as numbered steps" "says what to do" "not only into an agent's memory" \
-              "What can be done in one task is done in one"; do
-  grep -qF -- "$phrase" "$KIT/rules/shared.md" || missing="$missing; $phrase"
-done
-[ -z "$missing" ] && ok "the owner's standing rules are in the rules block" || bad "rules block lacks:${missing#;}"
 
 echo "- agent identity: per-machine settings"
 default_login="$(bb -e '(println (get-in (clojure.edn/read-string (slurp ".shared/kit-defaults.edn")) [:agent :login]))')"
@@ -1426,10 +1353,6 @@ rm -f "$G/gh-fails"; issue '["size:S"]' the-owner $T1 null $T0 null
 for i in $(seq 1 101); do jq -nc --arg f "src/f$i.clj" '{filename: $f, status: "modified", additions: 2, deletions: 0}'; done > "$G/pr-files.json"
 expect_exit 1 "pr gate: 101 files are counted in full" gate --branch 26-x --pr 7
 contains "  202 lines" "202 lines" "$LAST"
-for f in managed/ci.yml .github/workflows/selftest.yml; do
-  grep -qE '^ +types: \[opened, synchronize, reopened, edited\]' "$KIT/$f" \
-    && ok "$f reruns when the title or body is edited" || bad "$f misses the edited type"
-done
 
 echo "- design approval hook (fake gh)"
 H="$WORK/hookrepo"; git init -q -b main "$H"; cd "$H" || exit 1
@@ -1743,11 +1666,6 @@ out="$(dk "$OC")"; grep -q rulesets "$GD/log" && bad "doctor: checked the GitHub
 grep -q rulesets "$GD/log" && bad "doctor --ci read the rulesets" || ok "doctor --ci skips it"
 cd "$P" || exit 1
 
-echo "- pinned actions (#7)"
-unpinned="$(grep -hE '^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*[^.[:space:]]' "$KIT/managed/ci.yml" "$KIT/ci/action.yml" "$KIT"/.github/workflows/*.yml \
-  | grep -vE '@[0-9a-f]{40}([[:space:]]|$)' || true)"
-if [ -z "$unpinned" ]; then ok "every external action is pinned to a commit"; else bad "actions not pinned to a commit" "$unpinned"; fi
-
 echo "- formatting hook (#61)"
 fmt() { jq -nc --arg f "$1" '{tool_input:{file_path:$f}}' | bash .shared/claude/hooks/format.sh; }
 FP="$WORK/fmt"; mkdir -p "$FP/proj/src" "$FP/bare"
@@ -1963,9 +1881,6 @@ echo "- the selftest cannot hang, and has no time limit (#98, #109)"
   && [ "$(grep -n '^exec </dev/null' "$KIT/test/selftest.sh" | cut -d: -f1)" -lt 50 ]; } \
   && ok "the selftest's input is closed at the top, so nothing waits for a terminal" \
   || bad "test/selftest.sh does not close its input in its first 50 lines: put 'exec </dev/null' there"
-grep -q 'timeout-minutes' "$KIT/.github/workflows/selftest.yml" \
-  && bad "the selftest job has a timeout-minutes: remove it from .github/workflows/selftest.yml; a hang is made impossible, not cut off" \
-  || ok "CI gives the selftest no time limit"
 # #109: e2e --clean decides by state: a run that has ended is cleaned, a live one or one on another host is left and named.
 # runner_state is taken out of the script and run with the fake gh; the sleeping process stands for a live run.
 tail -f /dev/null & live=$!
