@@ -60,11 +60,17 @@
   (problem/refusal-text verdict))
 
 
+(defn verdict-line
+  "The line a verdict is printed as: `ok` or `FAIL`, then what a person reads."
+  [{:keys [level] :as verdict}]
+  (str (if (= level :ok) "  ok    " "  FAIL  ") (verdict-text verdict)))
+
+
 (defn print-verdicts!
   "Prints the verdicts as `ok`/`FAIL` lines; the exit code of the command: 1 when one failed, else nil."
   [verdicts]
-  (doseq [{:keys [level] :as verdict} verdicts]
-    (println (str (if (= level :ok) "  ok    " "  FAIL  ") (verdict-text verdict))))
+  (doseq [verdict verdicts]
+    (println (verdict-line verdict)))
   (flush)
   (when (some #(not= :ok (:level %)) verdicts)
     1))

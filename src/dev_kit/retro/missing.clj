@@ -36,6 +36,29 @@
       [(get issue "number") (get issue "title")])))
 
 
+(defn merged-without-retrospective
+  "[number title] of the issues merged in the 14 days before `now` that lack a retrospective. When GitHub cannot be
+  asked, a problem (:retro/github-unavailable, exit 2)."
+  [repo ^Instant now]
+  (try (doall (missing repo (.minus now (Duration/ofDays 14))))
+       (catch Exception exception
+         (problem/fail! :retro/github-unavailable
+                        (str "retro: GitHub not available: " (ex-message exception))
+                        {:fix  "check gh auth status and the network, then run kit retro --missing again"
+                         :exit 2}))))
+
+
+(defn found-text
+  "What a person reads about the issues found: the list, then what to do."
+  [found]
+  (str "Merged in the last 14 days without a `## Retrospective` comment: "
+       (str/join ", " (for [[number title] found] (str "#" number " " title)))
+       ".\nPost each one's retrospective before new work (repo-task-delivery, stage 11); its data comes from"
+       " kit retro <n>, e.g. kit retro "
+       (ffirst found)
+       ".\nOnly the owner can waive this: the same start command with --skip-retro asks the owner first."))
+
+
 (defn run-missing
   "The list of merged issues without a retrospective, with what to do, on stdout, and 1: an answer, not a problem.
   Nil and silence when every merged issue has its retrospective. When GitHub cannot be asked, a problem with exit 2."
@@ -43,21 +66,7 @@
   (let [now   (if now
                 (log/parse-time "--now" now)
                 (Instant/now))
-        found (try (doall (missing repo (.minus ^Instant now (Duration/ofDays 14))))
-                   (catch Exception exception
-                     (problem/fail! :retro/github-unavailable
-                                    (str "retro: GitHub not available: " (ex-message exception))
-                                    {:fix  "check gh auth status and the network, then run kit retro --missing again"
-                                     :exit 2})))]
+        found (merged-without-retrospective repo now)]
     (when (seq found)
-      (println
-       (str "Merged in the last 14 days without a `## Retrospective` comment: "
-            (str/join ", " (for [[number title] found] (str "#" number " " title)))
-            "."))
-      (println
-       (str
-        "Post each one's retrospective before new work (repo-task-delivery, stage 11); its data comes from"
-        " kit retro <n>, e.g. kit retro "
-        (ffirst found)
-        ".\nOnly the owner can waive this: the same start command with --skip-retro asks the owner first."))
+      (println (found-text found))
       1)))

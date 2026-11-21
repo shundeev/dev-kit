@@ -282,7 +282,7 @@ Environment: GHWF_HUMAN, the owner's login (kit init or kit identity set it); GH
 
 
 (defn review!
-  [_kit args]
+  [args]
   (let [input (read-input args shell/env)]
     (if (:help input)
       (println review-usage)

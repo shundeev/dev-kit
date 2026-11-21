@@ -280,7 +280,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 
 
 (defn checks!
-  [_kit args]
+  [args]
   (let [input (read-input args shell/env)]
     (if (:help input)
       (println checks-usage)

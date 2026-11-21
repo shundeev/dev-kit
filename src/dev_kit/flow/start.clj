@@ -9,7 +9,10 @@
    [dev-kit.flow.github :as github]
    [dev-kit.flow.shell :as shell]
    [dev-kit.flow.steps :as steps]
-   [dev-kit.problem :as problem]))
+   [dev-kit.problem :as problem]
+   [dev-kit.retro.missing :as retro-missing])
+  (:import
+   (java.time Instant)))
 
 
 (def start-usage
@@ -145,26 +148,23 @@ Options:
   {})
 
 
-(defn- retro-missing
-  "kit retro --missing: {:exit :out :err}; exit 1 names a merged issue without its retrospective."
-  [kit repo]
-  (shell/run "bb" kit "retro" "--missing" "--repo" repo))
-
-
 (defn- check-retro
   "A merged task's retrospective comes before new work (#28, #56). When GitHub cannot be asked, say so and go on:
   the check guards the process, not data."
-  [{:keys [kit repo skip-retro]}]
+  [{:keys [repo skip-retro]}]
   (when-not skip-retro
-    (let [{:keys [exit out err]} (retro-missing kit repo)
-          said (str/trim (str out err))]
-      (case (int exit)
-        0 nil
-        1 (problem/fail! :start/retro-missing
-                         said
-                         {:fix
-                          "post the retrospective of each issue listed (kit retro <number>), or pass --skip-retro"})
-        (shell/warn "Warning: could not check for merged issues without a retrospective:" said))))
+    (let [found (try (retro-missing/merged-without-retrospective repo (Instant/now))
+                     (catch clojure.lang.ExceptionInfo e
+                       (when-not (= :retro/github-unavailable (:problem (ex-data e)))
+                         (throw e))
+                       (shell/warn "Warning: could not check for merged issues without a retrospective:"
+                                   (problem/refusal-text (ex-data e)))
+                       nil))]
+      (when (seq found)
+        (problem/fail! :start/retro-missing
+                       (retro-missing/found-text found)
+                       {:fix
+                        "post the retrospective of each issue listed (kit retro <number>), or pass --skip-retro"}))))
   {})
 
 
@@ -602,7 +602,7 @@ Options:
 
 
 (defn start
-  "kit start as a recipe, from the command line's input (with the path of bin/kit as :kit). Nothing is filed before
+  "kit start as a recipe, from the command line's input. Nothing is filed before
   every check has passed; the result is data that start! prints."
   [input]
   (steps/run input
@@ -659,8 +659,8 @@ Options:
 (defn start!
   "kit start: read the command line, run the recipe on the real GitHub, print what it made — or throw the refusal, which the
   flow's edge prints."
-  [kit args]
+  [args]
   (let [input (read-input args shell/env)]
     (if (:help input)
       (println start-usage)
-      (print-result (steps/complete! (start (assoc input :kit kit)))))))
+      (print-result (steps/complete! (start input))))))

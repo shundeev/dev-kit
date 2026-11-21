@@ -251,7 +251,7 @@
   (or (when (= "merge" cmd)
         (newer-merge! args))
       (do (load-file (str (fs/path base/kit-dir "bin" "flow.clj")))
-          ((resolve 'flow/main) cmd args (str (fs/path base/kit-dir "bin" "kit"))))))
+          ((resolve 'flow/main) cmd args))))
 
 
 (defn retro!

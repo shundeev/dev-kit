@@ -8,6 +8,7 @@
    [dev-kit.flow.github :as github]
    [dev-kit.flow.shell :as shell]
    [dev-kit.flow.steps :as steps]
+   [dev-kit.gate :as gate]
    [dev-kit.problem :as problem]))
 
 
@@ -185,26 +186,15 @@ Options:
                                          (subs title first-letter))))})
 
 
-(defn- run-shape-check
-  "kit gate --shape: {:exit :out :err}, the rules CI checks on the pull request."
-  [kit branch title body-file]
-  (apply shell/run "bb" kit "gate"
-    "--shape"
-    "--branch" branch
-    "--title"  title
-    (when body-file
-      ["--body-file" body-file])))
-
-
 (defn- check-shape
   "The title and the body pass the rules CI checks on the pull request (#21): one implementation, in kit. The body is
   checked only when it becomes a new PR's body; an open PR keeps its own."
-  [{:keys [kit branch subject pr-url body-file]}]
-  (let [shape (run-shape-check kit branch subject (when-not pr-url body-file))]
-    (when-not (zero? (:exit shape))
+  [{:keys [branch subject pr-url body-file]}]
+  (let [verdicts (gate/gate-shape {:branch branch :title subject :body-file (when-not pr-url body-file)})]
+    (when (seq verdicts)
       (problem/fail! :finish/shape
                      (format "The pull request would fail CI's shape check; nothing was committed or pushed:\n%s"
-                             (str/trimr (str (:out shape) (:err shape))))
+                             (str/join "\n" (map gate/verdict-line verdicts)))
                      {:fix "change the title or the body as the lines above say, then run kit finish again"}))
     {}))
 
@@ -410,7 +400,7 @@ Options:
 
 (defn- set-review-status
   "A failed board update ends the run (#41). The PR is open by now, so only the status is left to set."
-  [{:keys [kit repo number owner project-number status-field review-status pr-url]}]
+  [{:keys [repo number owner project-number status-field review-status pr-url]}]
   (when (not-any? str/blank? [owner project-number review-status])
     (let [{:keys [exit out]} (github/issue-url repo number)
           url (when (zero? exit)
@@ -427,12 +417,12 @@ Options:
                    review-status
                    (board/board-reason failure))
            {:fix (str "set it alone: "
-                      (board/board-set-command kit project-number owner url status-field review-status))})))))
+                      (board/board-set-command project-number owner url status-field review-status))})))))
   {})
 
 
 (defn finish
-  "The recipe, from the command line's input (with the path of bin/kit as :kit). Every step before :commit only reads,
+  "The recipe, from the command line's input. Every step before :commit only reads,
   so a refusal there leaves nothing committed, pushed or opened."
   [input]
   (steps/run input
@@ -491,8 +481,8 @@ Options:
 
 (defn finish!
   "kit finish: read the command line, run the recipe on the real GitHub, print what it made — or throw the refusal, which the flow's edge prints."
-  [kit args]
+  [args]
   (let [input (read-input args shell/env)]
     (if (:help input)
       (println finish-usage)
-      (print-result (steps/complete! (finish (assoc input :kit kit)))))))
+      (print-result (steps/complete! (finish input))))))
