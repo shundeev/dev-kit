@@ -1,8 +1,10 @@
 (ns dev-kit.flow.board
   "The project board (#22, #41): fields read and set by name, and kit board set."
   (:require
+   [babashka.fs :as fs]
    [cheshire.core :as json]
    [clojure.string :as str]
+   [dev-kit.base :as base]
    [dev-kit.flow.shell :as shell]
    [dev-kit.problem :as problem]))
 
@@ -100,10 +102,15 @@
     (catch clojure.lang.ExceptionInfo e (ex-message e))))
 
 
+(def kit-script
+  "The path of bin/kit, which a printed command runs."
+  (str (fs/path base/kit-dir "bin" "kit")))
+
+
 (defn board-set-command
   "The command that sets one field alone, as an error prints it."
-  [kit number owner url field option]
-  (str/join " " (map shell/shell-quote ["bb" kit "board" "set" (str number) owner url field option])))
+  [number owner url field option]
+  (str/join " " (map shell/shell-quote ["bb" kit-script "board" "set" (str number) owner url field option])))
 
 
 (defn- show!
@@ -127,7 +134,7 @@
 
 (defn board!
   "kit board show | set: the folder's board as JSON, or one field of one card. A refusal is thrown for the flow's edge."
-  [_kit args]
+  [args]
   (cond
     (= ["show"] args) (show!)
     (and (= "set" (first args)) (= 6 (count args))) (set-field! args)

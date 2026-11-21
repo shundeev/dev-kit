@@ -5,9 +5,19 @@
    [babashka.fs :as fs]
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
+   [dev-kit.flow.board :as board]
    [dev-kit.flow.fake-github :as fake]
    [dev-kit.flow.finish :as finish]
    [dev-kit.flow.steps :as steps]))
+
+
+(defn- shaped
+  "A pull request body that passes CI's shape rules, starting with the text."
+  [text]
+  (str text "\n\n## Review\nChecked.\n\n## User-level test\nRan it.\n\nADR: none"))
+
+
+(def ^:private passing-body (shaped "What changed."))
 
 
 (def ^:private variables
@@ -31,7 +41,7 @@
   result with the warnings under :warnings and what was printed under :printed."
   [world env & args]
   (let [err    (java.io.StringWriter.)
-        input  (assoc (finish/read-input (vec args) (fn [variable default] (get env variable default))) :kit "bin/kit")
+        input  (finish/read-input (vec args) (fn [variable default] (get env variable default)))
         result (binding [*err* err]
                  (fake/with-github world #(finish/finish input)))]
     (assoc result
@@ -68,14 +78,14 @@
 
 
 (deftest a-first-finish-opens-a-ready-pr-asks-the-owners-and-moves-the-card-to-in-review
-  (let [body   (file-with "What changed.\nADR: none")
+  (let [body   (file-with passing-body)
         world  (on-branch-1 {})
         result (kit-finish world variables "--add" "page.html" "--pr-body-file" body)
         pr     (the-pr world)]
     (is (= :ok (::steps/status result)) "the finish succeeds")
     (is (= ["feat(GH-1): add landing page"] (fake/commits world)) "the staged work is committed under the subject")
     (is (= #{"1-add-landing-page"} (fake/remote-branches world)) "and pushed")
-    (is (= "Closes #1\n\nWhat changed.\nADR: none" (:body pr)) "the PR closes the issue")
+    (is (= (str "Closes #1\n\n" passing-body) (:body pr)) "the PR closes the issue")
     (is (false? (:draft pr)) "it opens ready, where main has no ready workflow")
     (is (= ["shundeev/owners"] (:owners pr)) "the owners are asked at once")
     (is (= ["the-human"] (:assignees pr)) "the person behind the agent is the assignee")
@@ -88,7 +98,7 @@
 
 (deftest where-main-holds-the-ready-workflow-the-pr-opens-as-a-draft-and-nobody-is-asked
   (let [world  (on-branch-1 {:ready-workflow true})
-        result (kit-finish world variables "--add" "page.html" "--pr-body-file" (file-with "Body"))
+        result (kit-finish world variables "--add" "page.html" "--pr-body-file" (file-with passing-body))
         pr     (the-pr world)]
     (is (true? (:draft pr)) "the PR is a draft")
     (is (empty? (:owners pr)) "no owner is asked: the workflow asks when the checks pass")
@@ -101,7 +111,7 @@
 
 (deftest hold-opens-the-pr-as-a-draft-with-the-label-made-when-missing
   (let [world  (on-branch-1 {:ready-workflow true})
-        result (kit-finish world variables "--hold" "--add" "page.html" "--pr-body-file" (file-with "Body"))]
+        result (kit-finish world variables "--hold" "--add" "page.html" "--pr-body-file" (file-with passing-body))]
     (is (= :ok (::steps/status result)) "the finish succeeds")
     (is (= ["hold"] (fake/created-labels world)) "the label hold is made")
     (is (= ["hold"] (:labels (the-pr world))) "the PR carries it")
@@ -113,7 +123,7 @@
 (deftest hold-uses-the-label-that-exists-and-stops-when-it-cannot-be-made
   (let [had    (on-branch-1 {:ready-workflow true :labels ["hold"]})
         cannot (on-branch-1 {:ready-workflow true :uncreatable ["hold"]})
-        args   ["--hold" "--add" "page.html" "--pr-body-file" (file-with "Body")]]
+        args   ["--hold" "--add" "page.html" "--pr-body-file" (file-with passing-body)]]
     (is (= :ok (::steps/status (apply kit-finish had variables args))) "an existing label is no obstacle")
     (is (empty? (fake/created-labels had)) "and none is made again")
     (let [result (apply kit-finish cannot variables args)]
@@ -134,7 +144,7 @@
 
 (deftest hold-on-a-base-without-the-ready-workflow-is-refused-and-nothing-is-committed
   (let [world  (on-branch-1 {})
-        result (kit-finish world variables "--hold" "--add" "page.html" "--pr-body-file" (file-with "Body"))]
+        result (kit-finish world variables "--hold" "--add" "page.html" "--pr-body-file" (file-with passing-body))]
     (is (= :finish/hold-without-workflow (problem result)) "the finish stops")
     (is (str/includes? (said result) "Fix: run kit finish without --hold") "and says what to do")
     (is (nothing-committed-or-pushed? world []) "nothing is committed or pushed")
@@ -164,62 +174,69 @@
 
 
 (deftest the-shape-rules-see-the-body-only-when-it-becomes-a-new-prs-body
-  (let [new-pr  (on-branch-1 {})
-        open-pr (on-branch-1 {:prs [{:branch "1-add-landing-page"}]})
-        body    (file-with "Body")]
-    (kit-finish new-pr variables "--add" "page.html" "--pr-body-file" body)
-    (kit-finish open-pr variables "--add" "page.html" "--pr-body-file" body)
-    (is (= [{:branch "1-add-landing-page" :title "feat(GH-1): add landing page" :body-file body}]
-           (fake/shape-checks new-pr))
-        "a PR to open is checked with its body")
-    (is (= [{:branch "1-add-landing-page" :title "feat(GH-1): add landing page" :body-file nil}]
-           (fake/shape-checks open-pr))
-        "an open PR keeps its own body, which is not checked")))
+  (let [new-pr   (on-branch-1 {:staged ["page.html"]})
+        open-pr  (on-branch-1 {:staged ["page.html"] :prs [{:branch "1-add-landing-page"}]})
+        no-rules (file-with "Body")
+        refused  (kit-finish new-pr variables "--pr-body-file" no-rules)
+        went-on  (kit-finish open-pr variables "--pr-body-file" no-rules)]
+    (is (= :finish/shape (problem refused)) "a body that breaks the rules stops a PR to open")
+    (is (empty? (fake/commits new-pr)) "before anything is committed")
+    (is (= :ok (::steps/status went-on)) "an open PR keeps its own body, which is not checked")))
 
 
 (deftest what-is-wrong-with-the-inputs-stops-the-finish-before-anything-is-committed
-  (let [body (file-with "Body")
-        rows [{:story   "a missing PR body file"
-               :world   {}
-               :args    ["--pr-body-file" "/nonexistent/body.md"]
-               :problem :finish/no-body-file
-               :text    "PR body file '/nonexistent/body.md' not found"}
-              {:story   "a missing commit message file"
-               :world   {}
-               :args    ["--pr-body-file" body "--commit-message-file" "/nonexistent/message.txt"]
-               :problem :finish/no-message-file
-               :text    "Commit message file '/nonexistent/message.txt' not found"}
-              {:story   "no body file where the PR has to be opened"
-               :world   {}
-               :args    []
-               :problem :finish/body-file-required
-               :text    "--pr-body-file is required to open the pull request"}
-              {:story   "a title or body CI would refuse"
-               :world   {:shape-refusal "  FAIL: fill in ## Review"}
-               :args    ["--pr-body-file" body]
-               :problem :finish/shape
-               :text    "would fail CI's shape check; nothing was committed or pushed:\n  FAIL: fill in ## Review"}
-              {:story   "a detached head"
-               :world   {:current-branch "HEAD"}
-               :args    ["--pr-body-file" body]
-               :problem :finish/detached-head
-               :text    "Detached HEAD is not supported"}
-              {:story   "the base branch"
-               :world   {:current-branch "main"}
-               :args    ["--pr-body-file" body]
-               :problem :finish/on-base
-               :text    "On the base branch 'main'. Fix: run from the issue branch"}
-              {:story   "a branch with no issue number"
-               :world   {:current-branch "landing-page"}
-               :args    ["--pr-body-file" body]
-               :problem :finish/branch-without-number
-               :text    "The branch 'landing-page' is not <number>-<slug>. Fix: open the issue with kit start"}
-              {:story "a GitHub that cannot say whether main holds the ready workflow"
-               :world {:workflow-unreadable "HTTP 502: Bad Gateway"}
-               :args ["--pr-body-file" body]
-               :problem :finish/workflow-unreadable
-               :text
-               "(HTTP 502: Bad Gateway). Nothing was committed or pushed. Fix: run it again when GitHub answers"}]]
+  (let
+    [body (file-with passing-body)
+     rows
+     [{:story   "a missing PR body file"
+       :world   {}
+       :args    ["--pr-body-file" "/nonexistent/body.md"]
+       :problem :finish/no-body-file
+       :text    "PR body file '/nonexistent/body.md' not found"}
+      {:story   "a missing commit message file"
+       :world   {}
+       :args    ["--pr-body-file" body "--commit-message-file" "/nonexistent/message.txt"]
+       :problem :finish/no-message-file
+       :text    "Commit message file '/nonexistent/message.txt' not found"}
+      {:story   "no body file where the PR has to be opened"
+       :world   {}
+       :args    []
+       :problem :finish/body-file-required
+       :text    "--pr-body-file is required to open the pull request"}
+      {:story "a title or body CI would refuse"
+       :world {}
+       :args ["--pr-body-file" (file-with "What changed.\n\n## User-level test\nRan it.\nADR: none")]
+       :problem :finish/shape
+       :text
+       (str
+        "would fail CI's shape check; nothing was committed or pushed:\n"
+        "  FAIL  the body has no line '## Review' (exactly that heading). Fix: add the section from the PR template")}
+      {:story   "a title that is not type(GH-n): summary"
+       :world   {}
+       :args    ["--pr-body-file" body "--commit-message-file" (file-with "update the page")]
+       :problem :finish/shape
+       :text    "FAIL  the title 'update the page' is not '<type>(GH-1): <summary>' with a type from"}
+      {:story   "a detached head"
+       :world   {:current-branch "HEAD"}
+       :args    ["--pr-body-file" body]
+       :problem :finish/detached-head
+       :text    "Detached HEAD is not supported"}
+      {:story   "the base branch"
+       :world   {:current-branch "main"}
+       :args    ["--pr-body-file" body]
+       :problem :finish/on-base
+       :text    "On the base branch 'main'. Fix: run from the issue branch"}
+      {:story   "a branch with no issue number"
+       :world   {:current-branch "landing-page"}
+       :args    ["--pr-body-file" body]
+       :problem :finish/branch-without-number
+       :text    "The branch 'landing-page' is not <number>-<slug>. Fix: open the issue with kit start"}
+      {:story "a GitHub that cannot say whether main holds the ready workflow"
+       :world {:workflow-unreadable "HTTP 502: Bad Gateway"}
+       :args ["--pr-body-file" body]
+       :problem :finish/workflow-unreadable
+       :text
+       "(HTTP 502: Bad Gateway). Nothing was committed or pushed. Fix: run it again when GitHub answers"}]]
     (doseq [{:keys [story world args text] expected :problem} rows
             :let [story-world (on-branch-1 (merge {:commits ["feat(GH-1): earlier"]} world))
                   result      (apply kit-finish story-world variables "--add" "page.html" args)]]
@@ -232,9 +249,9 @@
 
 (deftest nothing-staged-is-refused-and-no-commit-pushes-the-commits-already-there
   (let [world  (on-branch-1 {})
-        result (kit-finish world variables "--pr-body-file" (file-with "Body"))
+        result (kit-finish world variables "--pr-body-file" (file-with passing-body))
         pushed (on-branch-1 {:commits ["feat(GH-1): add landing page"]})
-        again  (kit-finish pushed variables "--no-commit" "--pr-body-file" (file-with "Body"))]
+        again  (kit-finish pushed variables "--no-commit" "--pr-body-file" (file-with passing-body))]
     (is (= :finish/nothing-staged (problem result)) "with nothing staged the finish stops")
     (is (str/includes? (said result) "Nothing staged to commit. Fix: use --add <path> to stage files, or --no-commit")
         "and says how")
@@ -253,20 +270,20 @@
               ["commits that follow no convention" ["wip" "Merge branch main"] "feat"]]]
     (doseq [[story commits expected] rows
             :let [world  (on-branch-1 {:commits commits :staged ["a"]})
-                  result (kit-finish world variables "--summary" "do it" "--pr-body-file" (file-with "Body"))]]
+                  result (kit-finish world variables "--summary" "do it" "--pr-body-file" (file-with passing-body))]]
       (is (= (format "%s(GH-1): do it" expected) (:subject result)) story))
     (is (= "docs(GH-1): do it"
            (:subject (kit-finish (on-branch-1 {:commits ["fix(GH-1): a"] :staged ["a"]})
                                  variables
                                  "--type"         "docs"
                                  "--summary"      "do it"
-                                 "--pr-body-file" (file-with "Body"))))
+                                 "--pr-body-file" (file-with passing-body))))
         "--type wins over the commits")))
 
 
 (deftest the-subject-is-the-summary-or-the-first-line-of-the-message-or-the-issue-title
   (let [message (file-with "fix(GH-1): from the message\n\nlonger text")
-        body    (file-with "Body")
+        body    (file-with passing-body)
         subject #(:subject (apply kit-finish (on-branch-1 {:staged ["a"]}) variables "--pr-body-file" body %&))]
     (is (= "feat(GH-1): the summary" (subject "--summary" "the summary" "--commit-message-file" message))
         "the summary names the PR")
@@ -277,11 +294,13 @@
 
 (deftest a-board-that-refuses-the-status-leaves-the-pr-open-and-names-the-command-to-set-it-alone
   (let [world  (on-branch-1 {:refuse-field "Status"})
-        result (kit-finish world variables "--add" "page.html" "--pr-body-file" (file-with "Body"))]
+        result (kit-finish world variables "--add" "page.html" "--pr-body-file" (file-with passing-body))]
     (is (= :finish/status-refused (problem result)) "the finish stops")
     (is (str/includes? (said result) "The pull request is open: https://github.com/o/r/pull/2.") "and names the PR")
     (is (str/includes? (said result) "But the board Status of #1 is not 'In review'") "and the status")
-    (is (str/includes? (said result) "Fix: set it alone: bb bin/kit board set 3 u473t8 https://github.com/o/r/issues/1")
+    (is (str/includes?
+         (said result)
+         (str "Fix: set it alone: bb " board/kit-script " board set 3 u473t8 https://github.com/o/r/issues/1"))
         "and how to set it alone")
     (is (some? (the-pr world)) "the PR is open")))
 
@@ -291,7 +310,7 @@
         result (kit-finish world
                            (dissoc variables "GHWF_HUMAN")
                            "--add" "page.html"
-                           "--pr-body-file" (file-with "Body"))]
+                           "--pr-body-file" (file-with passing-body))]
     (is (= :ok (::steps/status result)) "the finish succeeds")
     (is (empty? (:assignees (the-pr world))) "nobody is assigned")
     (is
@@ -303,7 +322,7 @@
 
 (deftest a-repository-without-auto-merge-opens-the-pr-with-a-warning-that-names-the-fix
   (let [world  (on-branch-1 {:no-auto-merge true})
-        result (kit-finish world variables "--add" "page.html" "--pr-body-file" (file-with "Body"))]
+        result (kit-finish world variables "--add" "page.html" "--pr-body-file" (file-with passing-body))]
     (is (= :ok (::steps/status result)) "the finish succeeds")
     (is (some? (the-pr world)) "the PR is open")
     (is (str/starts-with? (first (:warnings result)) "Warning: auto-merge could not be turned on:")
@@ -314,7 +333,7 @@
 
 (deftest a-refused-review-request-is-a-warning-not-a-stop
   (let [world  (on-branch-1 {:refuse-pr-edit "HTTP 422: not a collaborator"})
-        result (kit-finish world variables "--add" "page.html" "--pr-body-file" (file-with "Body"))]
+        result (kit-finish world variables "--add" "page.html" "--pr-body-file" (file-with passing-body))]
     (is (= :ok (::steps/status result)) "the finish goes on")
     (is (= ["Warning: could not request the review or set the assignee: HTTP 422: not a collaborator"]
            (:warnings result))
@@ -338,7 +357,7 @@
                            variables
                            "--summary"      "add landing page"
                            "--add"          "page.html"
-                           "--pr-body-file" (file-with "Body"))]
+                           "--pr-body-file" (file-with passing-body))]
     (is (= :ok (::steps/status result)) "the finish succeeds")
     (is (some #{"Warning: issue #7 not found, Status not set"} (:warnings result)) "the owner is warned")
     (is (empty? (fake/cards world)) "and no card is touched")
@@ -350,7 +369,7 @@
         result (kit-finish world
                            (dissoc variables "GHWF_OWNER")
                            "--add" "page.html"
-                           "--pr-body-file" (file-with "Body"))]
+                           "--pr-body-file" (file-with passing-body))]
     (is (= :ok (::steps/status result)) "the finish succeeds")
     (is (empty? (:fields (first (fake/cards world)))) "the card's Status is left alone")
     (is (empty? (remove #(str/includes? % "GHWF_HUMAN") (:warnings result))) "and no warning is given")))
@@ -365,10 +384,10 @@
               ["no mention" "Body" true "a body without a keyword gets the line"]]]
     (doseq [[story text prefixed? why] rows
             :let [world (fake/new-world {:current-branch "12-landing"})]]
-      (kit-finish world variables "--summary" "landing" "--add" "page.html" "--pr-body-file" (file-with text))
+      (kit-finish world variables "--summary" "landing" "--add" "page.html" "--pr-body-file" (file-with (shaped text)))
       (is (= (if prefixed?
-               (format "Closes #12\n\n%s" text)
-               text)
+               (format "Closes #12\n\n%s" (shaped text))
+               (shaped text))
              (:body (first (fake/prs world))))
           (format "%s: %s" story why)))))
 
@@ -380,26 +399,26 @@
   "The description of the pull request kit finish opens for issue #1, which has these labels, with these flags."
   [labels body-text & flags]
   (let [world (on-branch-1 {:issues [{:title "Add landing page" :on-board true :labels labels}]})]
-    (apply kit-finish world variables "--add" "page.html" "--pr-body-file" (file-with body-text) flags)
+    (apply kit-finish world variables "--add" "page.html" "--pr-body-file" (file-with (shaped body-text)) flags)
     (:body (the-pr world))))
 
 
 (deftest a-pull-request-for-an-l-issue-says-part-of-not-closes
-  (is (= "Part of #1\n\nBody" (body-of-pr-for-issue ["size:L"] "Body"))))
+  (is (= (str "Part of #1\n\n" (shaped "Body")) (body-of-pr-for-issue ["size:L"] "Body"))))
 
 
 (deftest the-last-pull-request-of-an-l-issue-says-closes
-  (is (= "Closes #1\n\nBody" (body-of-pr-for-issue ["size:L"] "Body" "--last"))))
+  (is (= (str "Closes #1\n\n" (shaped "Body")) (body-of-pr-for-issue ["size:L"] "Body" "--last"))))
 
 
 (deftest an-m-issue-pull-request-says-closes-as-before-with-or-without-last
-  (is (= "Closes #1\n\nBody" (body-of-pr-for-issue ["size:M"] "Body")))
-  (is (= "Closes #1\n\nBody" (body-of-pr-for-issue ["size:M"] "Body" "--last")) "--last is harmless")
-  (is (= "Closes #1\n\nBody" (body-of-pr-for-issue [] "Body")) "an issue without a size is not L"))
+  (is (= (str "Closes #1\n\n" (shaped "Body")) (body-of-pr-for-issue ["size:M"] "Body")))
+  (is (= (str "Closes #1\n\n" (shaped "Body")) (body-of-pr-for-issue ["size:M"] "Body" "--last")) "--last is harmless")
+  (is (= (str "Closes #1\n\n" (shaped "Body")) (body-of-pr-for-issue [] "Body")) "an issue without a size is not L"))
 
 
 (deftest a-body-that-says-its-own-closing-keyword-is-left-alone-on-an-l-issue
-  (is (= "Closes #1 and more" (body-of-pr-for-issue ["size:L"] "Closes #1 and more"))))
+  (is (= (shaped "Closes #1 and more") (body-of-pr-for-issue ["size:L"] "Closes #1 and more"))))
 
 
 ;; Stories moved from the selftest's flow sections (#139 step 8).
@@ -410,11 +429,11 @@
         result (kit-finish world
                            variables
                            "--add" "page.html"
-                           "--pr-body-file" (file-with "What changed.\nADR: none\n\n"))
+                           "--pr-body-file" (file-with (str passing-body "\n\n")))
         opened (first (filter #(= "OPEN" (:state %)) (fake/prs world)))]
     (is (= :ok (::steps/status result)) "the finish succeeds")
     (is (= 2 (count (fake/prs world))) "a new PR is opened next to the closed one")
-    (is (= "Closes #1\n\nWhat changed.\nADR: none" (:body opened)) "its body is the file's, with no trailing newline")))
+    (is (= (str "Closes #1\n\n" passing-body) (:body opened)) "its body is the file's, with no trailing newline")))
 
 
 (deftest hold-on-an-open-draft-asks-nobody-turns-on-no-auto-merge-and-says-to-run-kit-release
@@ -428,7 +447,7 @@
 
 (deftest an-empty-owner-leaves-the-board-alone
   (let [world  (on-branch-1 {})
-        result (kit-finish world variables "--add" "page.html" "--owner" "" "--pr-body-file" (file-with "Body"))]
+        result (kit-finish world variables "--add" "page.html" "--owner" "" "--pr-body-file" (file-with passing-body))]
     (is (= :ok (::steps/status result)) "the finish succeeds")
     (is (some? (the-pr world)) "the PR is open")
     (is (empty? (:fields (first (fake/cards world)))) "the card's Status is left alone")))
@@ -436,7 +455,7 @@
 
 (deftest a-draft-opened-without-hold-carries-no-label-and-has-its-assignee
   (let [world (on-branch-1 {:ready-workflow true})]
-    (kit-finish world variables "--add" "page.html" "--pr-body-file" (file-with "Body"))
+    (kit-finish world variables "--add" "page.html" "--pr-body-file" (file-with passing-body))
     (is (true? (:draft (the-pr world))) "the PR is a draft")
     (is (empty? (:labels (the-pr world))) "it is not held unless asked")
     (is (= ["the-human"] (:assignees (the-pr world))) "the person behind the agent is the assignee")))

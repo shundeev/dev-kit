@@ -255,7 +255,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
   "The card's Status to Done, unless its issue stays open (size L, not closed by this pull request). A failed board
   update ends the run with an error (#41), after the closeout: the merge is done, so the error is kept as a fact for
   the last step."
-  [{:keys [kit repo number owner project-number status-field done-status stays-open]}]
+  [{:keys [repo number owner project-number status-field done-status stays-open]}]
   (if (or (some str/blank? [owner project-number]) (contains? stays-open number))
     {}
     (let [{:keys [exit out err]} (github/issue-url repo number)]
@@ -274,7 +274,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
                                 done-status
                                 (board/board-reason failure))
            :board-fix   (str "set it alone: "
-                             (board/board-set-command kit project-number owner url status-field done-status))}
+                             (board/board-set-command project-number owner url status-field done-status))}
           {})))))
 
 
@@ -396,7 +396,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 
 
 (defn merge-pr
-  "kit merge as a recipe, from the command line's input (with the path of bin/kit as :kit). The lines printed while it
+  "kit merge as a recipe, from the command line's input. The lines printed while it
   waits go to stdout, the warnings to stderr. A board error is kept as a fact and raised by the last step, after the
   closeout: the merge is done by then."
   [input]
@@ -444,8 +444,8 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 (defn merge!
   "kit merge: read the command line, run the recipe on the real GitHub, print what it did, or throw the refusal, which the
   flow's edge prints (a board error comes last, after the closeout)."
-  [kit args]
+  [args]
   (let [input (read-input args shell/env)]
     (if (:help input)
       (println merge-usage)
-      (print-result (steps/complete! (merge-pr (assoc input :kit kit)))))))
+      (print-result (steps/complete! (merge-pr input))))))

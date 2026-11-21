@@ -23,9 +23,7 @@
   [world & args]
   (let [out    (java.io.StringWriter.)
         err    (java.io.StringWriter.)
-        input  (assoc (start/read-input (vec args) (fn [variable default] (get variables variable default)))
-                      :kit
-                      "bin/kit")
+        input  (start/read-input (vec args) (fn [variable default] (get variables variable default)))
         result (binding [*out* out
                          *err* err]
                  (fake/with-github world #(start/start input)))]
@@ -209,15 +207,15 @@
 
 
 (deftest a-merged-task-without-its-retrospective-stops-the-start-unless-it-is-skipped
-  (let [missing {:exit 1 :out "#5 is merged and has no retrospective" :err ""}
-        blocked (fake/new-world {:retro-missing missing})
+  (let [missing [[5 "Add the form"]]
+        blocked (fake/new-world {:unretrospected missing})
         refused (kit-start blocked "--title" "Add landing page" "--priority" "High")
-        skipped (fake/new-world {:retro-missing missing})
+        skipped (fake/new-world {:unretrospected missing})
         went-on (kit-start skipped "--title" "Add landing page" "--priority" "High" "--skip-retro")
-        unasked (fake/new-world {:retro-missing {:exit 2 :out "" :err "no network"}})
+        unasked (fake/new-world {:retro-unreadable "no network"})
         warned  (kit-start unasked "--title" "Add landing page" "--priority" "High")]
     (is (= :start/retro-missing (get-in refused [::steps/problem :problem])) "the missing retrospective is the problem")
-    (is (str/includes? (said refused) "#5 is merged and has no retrospective") "the answer names the task")
+    (is (str/includes? (said refused) "#5 Add the form") "the answer names the task")
     (is (nothing-exists? blocked) "no issue, card or branch exists")
     (is (= :ok (::steps/status went-on)) "with --skip-retro the start goes on")
     (is (= 1 (count (fake/issues skipped))) "and files the issue")
@@ -246,7 +244,7 @@
                           (fake/with-github world #(shell/gh! "api" "rate_limit")))
         "a primitive called directly is refused, with its arguments")
     (is (thrown-with-msg? AssertionError
-                          #"the story reached the real world: shell/run bb bin/kit retro --missing --repo o/r"
+                          #"the story reached the real world: base/gh! api graphql"
                           (with-redefs [fake/start-substitutes (fn [_world] {})]
                             (kit-start world "--title" "Add landing page" "--priority" "High")))
         "a command whose own call lacks its substitute stops at that call and does not touch GitHub")))
@@ -288,9 +286,7 @@
   [world change & args]
   (let [out    (java.io.StringWriter.)
         err    (java.io.StringWriter.)
-        input  (assoc (start/read-input (vec args) (fn [variable default] (get variables variable default)))
-                      :kit
-                      "bin/kit")
+        input  (start/read-input (vec args) (fn [variable default] (get variables variable default)))
         result (binding [*out* out
                          *err* err]
                  (fake/with-github world #(change (fn [] (start/start input)))))]

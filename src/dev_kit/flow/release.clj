@@ -168,7 +168,7 @@ Options:
 
 (defn release!
   "kit release: read the command line, run the recipe on the real GitHub, print what it did, or throw the refusal, which the flow's edge prints."
-  [_kit args]
+  [args]
   (let [input (read-input args)]
     (if (:help input)
       (println release-usage)

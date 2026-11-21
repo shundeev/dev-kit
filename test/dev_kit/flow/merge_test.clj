@@ -4,6 +4,7 @@
   (:require
    [clojure.string :as str]
    [clojure.test :refer [deftest is]]
+   [dev-kit.flow.board :as board]
    [dev-kit.flow.fake-github :as fake]
    [dev-kit.flow.github :as github]
    [dev-kit.flow.merge :as merge-cmd]
@@ -40,10 +41,7 @@
   [world env & args]
   (let [out    (java.io.StringWriter.)
         err    (java.io.StringWriter.)
-        input  (assoc (merge-cmd/read-input (vec args)
-                                            (fn [variable default] (get (merge variables env) variable default)))
-                      :kit
-                      "bin/kit")
+        input  (merge-cmd/read-input (vec args) (fn [variable default] (get (merge variables env) variable default)))
         result (binding [*out* out
                          *err* err]
                  (let [result (fake/with-github world #(merge-cmd/merge-pr input))]
@@ -237,8 +235,9 @@
     (is (= :report-board-error (::steps/stopped-at result)) "it is the last step that fails")
     (is (= 1 (:exit (steps/refusal result))))
     (is (str/starts-with? (:text (steps/refusal result)) "The board Status of #1 is not 'Done': "))
-    (is (str/includes? (said result)
-                       (format "Fix: set it alone: bb bin/kit board set 3 u473t8 %s Status Done" issue-url)))
+    (is (str/includes?
+         (said result)
+         (format "Fix: set it alone: bb %s board set 3 u473t8 %s Status Done" board/kit-script issue-url)))
     (is (= "main" (fake/checked-out world)) "the clone left the branch")
     (is (= #{"main"} (fake/local-branches world)) "the branch is gone")
     (is (= ["CLOSED" "CLOSED"] (issue-states world)) "the issues are closed")
@@ -399,9 +398,7 @@
   "kit merge against the world, where GitHub merges the pull request between its first look and its second."
   [world]
   (let [reads (atom 0)
-        input (assoc (merge-cmd/read-input [] (fn [variable default] (get variables variable default)))
-                     :kit
-                     "bin/kit")]
+        input (merge-cmd/read-input [] (fn [variable default] (get variables variable default)))]
     (binding [*out* (java.io.StringWriter.)]
       (fake/with-github world
                         #(let [read-pr github/read-pr]

@@ -4,7 +4,9 @@
   issues, the board's cards with their fields, labels, milestones, linked branches, pull requests with their checks,
   and what happens while a command waits. A story reads the world afterwards instead of listing calls."
   (:require
+   [cheshire.core :as json]
    [clojure.string :as str]
+   [dev-kit.base :as base]
    [dev-kit.flow.board :as board]
    [dev-kit.flow.checks :as checks]
    [dev-kit.flow.finish :as finish]
@@ -18,7 +20,8 @@
 
 
 (def ^:private known-options
-  #{:labels :uncreatable :milestones :issues :drafts :refuse-field :refuse-board :retro-missing :current-branch :graphql
+  #{:labels :uncreatable :milestones :issues :drafts :refuse-field :refuse-board :unretrospected :retro-unreadable
+    :current-branch :graphql
     :refuse-size-label :prs :ready-workflow :script})
 
 
@@ -31,7 +34,8 @@
   :drafts            titles of draft cards on the board
   :refuse-field      a board field (\"Showcase\") that refuses every option
   :refuse-board      true when the board refuses to take any issue
-  :retro-missing     the answer of the retrospective check, {:exit :out :err}
+  :unretrospected    merged issues without their retrospective, as [number title] (default none)
+  :retro-unreadable  gh's message when the retrospective search cannot be read
   :current-branch    the branch checked out now
   :graphql           the GraphQL points left this hour (nil: GitHub does not say)
   :refuse-size-label true when the size:* label cannot be set
@@ -43,30 +47,32 @@
   :script            what happens on GitHub while a command waits: one function of the world per pause, in order;
                      a pause the script does not plan is an error
   Any other option goes into the world as it is: a command's operations name the ones they read."
-  [{:keys [labels uncreatable milestones issues drafts refuse-field refuse-board retro-missing current-branch graphql
+  [{:keys [labels uncreatable milestones issues drafts refuse-field refuse-board unretrospected retro-unreadable
+           current-branch graphql
            refuse-size-label prs ready-workflow script]
     :as   options}]
   (let [world (atom
-               {:issues            {}
-                :cards             []
-                :labels            (set labels)
-                :created-labels    []
-                :uncreatable       (set uncreatable)
-                :milestones        (vec milestones)
-                :linked            {}
-                :current-branch    (or current-branch "main")
-                :next-number       1
-                :next-card         1
-                :refuse-field      refuse-field
-                :refuse-board      refuse-board
-                :retro-missing     (or retro-missing {:exit 0 :out "" :err ""})
-                :graphql           graphql
+               {:issues           {}
+                :cards            []
+                :labels           (set labels)
+                :created-labels   []
+                :uncreatable      (set uncreatable)
+                :milestones       (vec milestones)
+                :linked           {}
+                :current-branch   (or current-branch "main")
+                :next-number      1
+                :next-card        1
+                :refuse-field     refuse-field
+                :refuse-board     refuse-board
+                :unretrospected   (vec unretrospected)
+                :retro-unreadable retro-unreadable
+                :graphql          graphql
                 :refuse-size-label refuse-size-label
-                :label-reads       0
-                :prs               {}
-                :ready-workflow    (boolean ready-workflow)
-                :script            (vec script)
-                :slept             []})]
+                :label-reads      0
+                :prs              {}
+                :ready-workflow   (boolean ready-workflow)
+                :script           (vec script)
+                :slept            []})]
     (swap! world merge (apply dissoc options known-options))
     (doseq [issue issues]
       (swap! world (fn [w]
@@ -398,12 +404,6 @@
   (vec (:staged @world)))
 
 
-(defn shape-checks
-  "What kit finish asked CI's shape rules about, in order: {:branch :title :body-file}."
-  [world]
-  (vec (:shape-checks @world)))
-
-
 (defn- update-pr
   "The pull request a gh argument names, changed by `change`."
   [world pr change]
@@ -432,8 +432,17 @@
    #'start/open-milestones
    (fn [_repo] (:milestones @world))
 
-   #'start/retro-missing
-   (fn [_kit _repo] (:retro-missing @world))
+   #'base/gh!
+   (fn [& args]
+     (when-let [message (:retro-unreadable @world)]
+       (throw (ex-info message {:args args})))
+     (json/generate-string
+      {"data" {"search" {"nodes" (for [[number title] (:unretrospected @world)]
+                                   {"number"   number
+                                    "title"    title
+                                    "comments" {"nodes" []}
+                                    "closedByPullRequestsReferences" {"nodes" [{"mergedAt"
+                                                                                "2026-11-11T10:00:00Z"}]}})}}}))
 
    #'start/graphql-remaining
    (fn [] (:graphql @world))
@@ -626,7 +635,6 @@
   steps. Options of the world they read, besides the ones new-world knows:
   :commits           subjects of the commits on the branch, oldest first (what git log origin/main..HEAD shows)
   :staged            paths staged already
-  :shape-refusal     the text CI's shape rules print when they refuse the title or the body
   :workflow-unreadable  gh's message when GitHub cannot say whether the base holds the ready workflow
   :refuse-pr-edit    gh's message when it refuses to edit a pull request
   :no-auto-merge     true when the repository does not allow auto-merge
@@ -640,13 +648,6 @@
    (fn [_repo number]
      (or (get-in @world [:issues (number-of number) :title])
          (throw (ex-info (format "the fake GitHub has no issue %s: gh would end the run" number) {:number number}))))
-
-   #'finish/run-shape-check
-   (fn [_kit branch title body-file]
-     (swap! world update :shape-checks (fnil conj []) {:branch branch :title title :body-file body-file})
-     (if-let [refusal (:shape-refusal @world)]
-       {:exit 1 :out refusal :err ""}
-       {:exit 0 :out "" :err ""}))
 
    #'finish/pr-draft?
    (fn [pr-url] (boolean (:draft (pr-of @world pr-url))))
@@ -780,7 +781,8 @@
    [#'shell/gh! "shell/gh!"]
    [#'shell/gh-out "shell/gh-out"]
    [#'shell/git-out "shell/git-out"]
-   [#'board/board-gh! "board/board-gh!"]])
+   [#'board/board-gh! "board/board-gh!"]
+   [#'base/gh! "base/gh!"]])
 
 
 (defn- real-world-guards

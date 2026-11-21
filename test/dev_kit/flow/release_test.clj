@@ -141,6 +141,6 @@
 
 (deftest the-help-says-the-release-covers-a-draft-that-was-never-held
   (let [out  (java.io.StringWriter.)
-        exit (binding [*out* out] (flow/main "release" ["--help"] "bin/kit"))]
+        exit (binding [*out* out] (flow/main "release" ["--help"]))]
     (is (= 0 exit))
     (is (str/includes? (str out) "never held"))))

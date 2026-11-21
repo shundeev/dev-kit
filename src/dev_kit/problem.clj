@@ -37,8 +37,8 @@
   "Every exit code kit uses, what it means and who reads it."
   {0 "done, allowed or help; read by CI steps and by Claude Code's hooks"
    1
-   "refused: the text says why and what to do; kit retro --missing and kit gate also use it for 'found something'; read by CI steps, the selftest, session-start.sh (retro --missing) and kit start (retro --missing)"
+   "refused: the text says why and what to do; kit retro --missing and kit gate also use it for 'found something'; read by CI steps, the selftest, session-start.sh (retro --missing)"
    2
-   "no verdict yet (kit checks, kit review, retro --missing: the check could not be made; read by the skills and kit start), or a hook's refusal (ADR-0001; read by Claude Code)"
+   "no verdict yet (kit checks, kit review, retro --missing: the check could not be made; read by the skills), or a hook's refusal (ADR-0001; read by Claude Code)"
    3 "kit hook: the hook asks; read by Claude Code and people running kit hook"
    128 "git's own code for a failed git push, passed through by kit finish and kit merge; read by the selftest"})

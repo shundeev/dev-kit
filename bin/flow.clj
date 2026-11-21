@@ -18,6 +18,6 @@
 
 
 (defn main
-  "kit start | finish | release | merge | checks | review | board, with the path of bin/kit for the commands that call it back."
-  [cmd args kit]
-  (main/main cmd args kit))
+  "kit start | finish | release | merge | checks | review | board."
+  [cmd args]
+  (main/main cmd args))

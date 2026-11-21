@@ -15,20 +15,19 @@
 
 
 (defn- run-command
-  [cmd args kit]
+  [cmd args]
   (case cmd
-    "start"   (start/start! kit args)
-    "finish"  (finish/finish! kit args)
-    "release" (release/release! kit args)
-    "merge"   (merge/merge! kit args)
-    "checks"  (checks/checks! kit args)
-    "review"  (review/review! kit args)
-    "board"   (board/board! kit args)))
+    "start"   (start/start! args)
+    "finish"  (finish/finish! args)
+    "release" (release/release! args)
+    "merge"   (merge/merge! args)
+    "checks"  (checks/checks! args)
+    "review"  (review/review! args)
+    "board"   (board/board! args)))
 
 
 (defn main
-  "kit start | finish | release | merge | checks | review | board, with the path of bin/kit for the commands that call it
-  back. Returns 0 when the command went through; a refusal is thrown as a problem, for kit's one edge to print."
-  [cmd args kit]
-  (run-command cmd args kit)
+  "kit start | finish | release | merge | checks | review | board. Returns 0 when the command went through; a refusal is thrown as a problem, for kit's one edge to print."
+  [cmd args]
+  (run-command cmd args)
   0)
