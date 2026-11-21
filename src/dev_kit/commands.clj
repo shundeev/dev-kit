@@ -14,10 +14,15 @@
 
 (defn print-findings
   "Prints each finding as one line: its level, what is wrong and what to do."
-  [findings quiet]
+  [findings]
   (doseq [{:keys [level message fix]} findings]
-    (println (format "  %-4s  %s  →  %s" (if (= level :fail) "FAIL" "WARN") message fix)))
-  (when (and (empty? findings) (not quiet))
+    (println (format "  %-4s  %s  →  %s" (if (= level :fail) "FAIL" "WARN") message fix))))
+
+
+(defn- print-all-clear
+  "Says so when there is nothing to report."
+  [findings]
+  (when (empty? findings)
     (println "  ok    everything in place")))
 
 
@@ -38,7 +43,9 @@
       (or (seq findings) (not quiet))
       (do (when-not quiet
             (println "dev-kit doctor" (str "(" base/root ")")))
-          (print-findings findings quiet)))
+          (print-findings findings)
+          (when-not quiet
+            (print-all-clear findings))))
     (if (failed? findings) 1 0)))
 
 
@@ -85,14 +92,15 @@
                  (map #(str % " (removed, no longer managed)") stale))]
     (println "dev-kit init" (str "(" base/root ")"))
     (doseq [c changes] (println "  wrote" c))
-    (print-findings (keep :finding results) true)
+    (print-findings (keep :finding results))
     (when (and (empty? changes) (empty? failed))
       (println "  nothing to change"))
     (some-> (:agent cfg) ident/offer-login!)
     ;; doctor's view of what is left, without repeating the items that failed above
     (let [left (remove (fn [{:keys [message]}] (some #(str/starts-with? message (str % ": ")) failed))
                        (checks/problems cfg {}))]
-      (print-findings left false)
+      (print-findings left)
+      (print-all-clear left)
       (if (or (seq failed) (failed? left)) 1 0))))
 
 
