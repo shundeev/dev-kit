@@ -112,9 +112,9 @@
 
 (deftest an-unreadable-kit-edn-names-the-file-and-the-line
   (let [dir (folder "{:repo \"a/b\"\n :x ]\n}\n")
-        why (try (config/read-config-at dir) nil (catch clojure.lang.ExceptionInfo e (ex-message e)))]
-    (is (str/includes? (str why) (str (fs/path (fs/canonicalize dir) "kit.edn") " line 2")))
-    (is (str/includes? (str why) "fix it by hand"))))
+        why (try (config/read-config-at dir) nil (catch clojure.lang.ExceptionInfo e e))]
+    (is (str/includes? (str (ex-message why)) (str (fs/path (fs/canonicalize dir) "kit.edn") " line 2")))
+    (is (= "fix it by hand" (:fix (ex-data why))))))
 
 
 (deftest a-session-in-one-project-working-in-anothers-worktree-takes-the-others-settings

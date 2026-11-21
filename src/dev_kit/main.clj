@@ -4,6 +4,7 @@
    [babashka.fs :as fs]
    [babashka.process :as p]
    [cheshire.core :as json]
+   [clojure.edn :as edn]
    [clojure.string :as str]
    [dev-kit.base :as base]
    [dev-kit.commands :as commands]
@@ -35,10 +36,14 @@
       "--title"     (recur (rest more) (assoc opts :title (first more)))
       "--body-file" (recur (rest more) (assoc opts :body-file (first more)))
       "--now"       (recur (rest more) (assoc opts :now (first more)))
+      "--days"      (recur (rest more) (assoc opts :days (first more)))
       "--messages"  (recur more (assoc opts :messages true))
       "--check"     (recur (rest more) (assoc opts :check (first more)))
       "--yes"       (recur more (assoc opts :yes true))
-      (base/die "unknown option" a))))
+      "--edn"       (recur more (assoc opts :edn true))
+      (problem/fail! :usage/unknown-option
+                     (str "unknown option " a)
+                     {:usage true :fix "see the commands and their options: kit"}))))
 
 
 (defn usage
@@ -52,13 +57,18 @@
 
 (defn hook!
   "kit hook '<command>': the project's entry hook's verdict on one Bash command, fed in Claude Code's input shape,
-  never run. The recorder writes under XDG_STATE_HOME, a throwaway directory here: a hand check is no friction."
+  never run. The recorder writes under XDG_STATE_HOME, a throwaway directory here: a hand check is no friction.
+  Prints the verdict and returns its code: 0 allowed, 2 refused, 3 asks."
   [[command]]
   (let [entry (base/rel ".claude" "hooks" "pretooluse.sh")]
     (when (str/blank? command)
-      (base/die "hook: pass the command as one argument: kit hook '<command>', e.g. kit hook 'git reset --hard'"))
+      (problem/fail! :hook/no-command
+                     "hook: pass the command as one argument"
+                     {:usage true :fix "kit hook '<command>', e.g. kit hook 'git reset --hard'"}))
     (when-not (fs/exists? entry)
-      (base/die "hook:" entry "is missing; run" (str base/mount "/bin/kit init") "to write it"))
+      (problem/fail! :hook/no-entry
+                     (str "hook: " entry " is missing")
+                     {:usage true :fix (str "run " base/mount "/bin/kit init to write it")}))
     (let [state (str (fs/create-temp-dir))
           input (json/generate-string {:tool_name  "Bash"
                                        :tool_input {:command command}
@@ -77,7 +87,7 @@
                                :else [2 (str "refused: " (str/replace (str/trim (str err out)) "\n" " "))])]
       (println verdict)
       (flush)
-      (System/exit code))))
+      code)))
 
 
 (defn git-run
@@ -101,47 +111,51 @@
                      (str "sync: the checkout is on "
                           (if (str/blank? branch) "no branch (detached HEAD)" branch)
                           ", not on "
-                          base-branch
-                          "; switch to "
-                          base-branch
-                          " first (git switch "
-                          base-branch
-                          ").")))
+                          base-branch)
+                     {:fix (str "switch to " base-branch " first (git switch " base-branch ")")}))
     (when (seq dirty)
       (problem/fail! :sync/dirty
                      (str "sync: uncommitted changes to tracked files: "
                           (str/join ", " (take 5 dirty))
-                          (when (> (count dirty) 5) ", ...")
-                          "; commit or stash them first.")))
+                          (when (> (count dirty) 5) ", ..."))
+                     {:fix "commit or stash them first"}))
     (when-not (zero? (git-run "fetch" "origin"))
       (problem/fail! :sync/fetch-failed
-                     "sync: git fetch origin failed; check the network and the remote, then run kit sync again."))
+                     "sync: git fetch origin failed"
+                     {:fix "check the network and the remote, then run kit sync again"}))
     (when-not (zero? (git-run "merge" "--ff-only" (str "origin/" base-branch)))
       (problem/fail! :sync/cannot-fast-forward
                      (str "sync: the local "
                           base-branch
                           " has commits of its own and cannot fast-forward to origin/"
                           base-branch
-                          "; nothing was changed. Look at them with git log origin/"
-                          base-branch
-                          "..HEAD.")))
+                          "; nothing was changed")
+                     {:fix (str "look at them with git log origin/" base-branch "..HEAD")}))
     (when-not (zero? (git-run "-c" "protocol.file.allow=always" "submodule" "update" "--init"))
       (problem/fail! :sync/submodule-failed
-                     "sync: git submodule update --init failed; fix what it printed, then run kit sync again."))
+                     "sync: git submodule update --init failed"
+                     {:fix "fix what it printed, then run kit sync again"}))
     (let [{:keys [exit]} @(p/process ["bb" (str (fs/path base/kit-dir "bin" "kit")) "doctor"]
                                      {:inherit true :dir (str base/root)})]
       (when-not (zero? exit)
         (problem/fail! :sync/doctor-failed
-                       "sync: kit doctor found problems, above; fix them with the commands it names."))
+                       "sync: kit doctor found problems, above"
+                       {:fix "fix them with the commands it names"}))
       (println (str "Up to date: " (base/sh "git" "log" "-1" "--format=%h %s")
                     "; dev-kit "   (base/sh-in base/kit-dir "git" "rev-parse" "--short" "HEAD"))))))
+
+
+(defn doctor-problem-count
+  "How many problems kit doctor --edn found, read from what it printed."
+  [out]
+  (count (edn/read-string out)))
 
 
 (defn after-git!
   "kit sync --after-git: run by the post-merge, post-rewrite and post-checkout hooks. When the commit the project pins
   for .shared differs from the one checked out, sets .shared to the pin, runs doctor in a fresh process (the new kit
   judges) and prints one line. Nothing differs: nothing is printed. A local change in .shared is never overwritten.
-  A hook after the fact cannot undo the git command, so it reports and never fails it (#135)."
+  A hook after the fact cannot undo the git command, so it reports and never fails it (#135): it returns 0."
   []
   (try
     (let [pin (some-> (base/sh "git" "ls-tree" "HEAD" base/mount) (str/split #"\s+") (nth 2 nil))
@@ -185,8 +199,8 @@
             :else
             (let [res (p/sh {:dir (str base/root) :continue true}
                             "bb"     (str (fs/path base/kit-dir "bin" "kit"))
-                            "doctor" "--quiet")
-                  n   (count (re-seq #"(?m)^  (?:FAIL|WARN)" (str (:out res))))]
+                            "doctor" "--edn")
+                  n   (doctor-problem-count (:out res))]
               (println (str "dev-kit " (abbrev cur)
                             " → " (base/sh-in base/kit-dir "git" "rev-parse" "--short" "HEAD")
                             "; doctor: "
@@ -195,7 +209,7 @@
                               (str n " problem" (when (> n 1) "s") ", see kit doctor")))))))))
     (catch Throwable e
       (println (str "dev-kit: could not bring " base/mount " up to date (" (ex-message e) "); run kit sync."))))
-  (System/exit 0))
+  0)
 
 
 (defn newer-merge!
@@ -239,57 +253,92 @@
 
 
 (defn retro!
-  "kit retro N … and kit retro --missing …: the code lives in bin/retro.clj, loaded only for this command."
+  "kit retro N … and kit retro --missing …: the code lives in bin/retro.clj, loaded only for this command. The exit
+  code of the command, nil when all is well."
   [[n & more]]
   (when-not (and n (or (= n "--missing") (re-matches #"\d+" n)))
-    (base/die "retro: name the issue, e.g. kit retro 55, or kit retro --missing"))
+    (problem/fail! :retro/no-issue
+                   "retro: name the issue"
+                   {:usage true :fix "e.g. kit retro 55, or kit retro --missing"}))
   (load-file (str (fs/path base/kit-dir "bin" "retro.clj")))
   (let [opts (parse-args more)
         opts (assoc opts :repo (gate/gate-repo opts (gate/gate-config)) :gh base/gh!)]
-    (try (if (= n "--missing")
-           ((resolve 'retro/run-missing) opts)
-           ((resolve 'retro/run)
-            (assoc opts :issue (parse-long n) :agent (get-in (config/read-defaults) [:agent :login]))))
-         (catch clojure.lang.ExceptionInfo e
-           (if (= :retro/bad-time (:problem (ex-data e)))
-             (do (binding [*out* *err*]
-                   (println (str "kit: retro: " (ex-message e)))
-                   (flush))
-                 (System/exit 1))
-             (throw e))))))
+    (if (= n "--missing")
+      ((resolve 'retro/run-missing) opts)
+      ((resolve 'retro/run)
+       (assoc opts :issue (parse-long n) :agent (get-in (config/read-defaults) [:agent :login]))))))
+
+
+(defn report-problem
+  "Prints a problem as its message and, when it has one, what to do next. A :plain problem is an answer, not an error:
+  stdout, the text as it is, the fix on the next line. A usage error, or any problem marked :stderr, goes to stderr
+  as \"kit: ...\"; every other problem to stdout as \"  FAIL  ...\"."
+  [{:keys [message fix plain stderr] usage-error :usage}]
+  (let [text (cond-> message
+               fix (str "  →  " fix))]
+    (cond
+      plain
+      (println (str message
+                    (when fix
+                      (str "\n" fix))))
+
+      (or usage-error stderr)
+      (binding [*out* *err*]
+        (println (str "kit: " text))
+        (flush))
+
+      :else
+      (println (str "  FAIL  " text)))))
+
+
+(defn run
+  "Runs the command the arguments name and returns the exit code: the code the command returns, 0 when it returns
+  none, and for a problem thrown on the way, its :exit (1 when it names none) after printing it."
+  [argv]
+  (let [[cmd & args] argv]
+    (try
+      (when (and (#{"init" "doctor" "modules" "sync"} cmd)
+                 (not= (str base/root) (base/sh "git" "rev-parse" "--show-toplevel")))
+        (problem/fail!
+         :usage/not-mounted
+         (str "dev-kit must be mounted at <project>/" base/mount "; " base/root " is not a git repository root")
+         {:usage true :fix (str "run kit from the project's root, where " base/mount " is a submodule")}))
+      (let [result (case cmd
+                     "init"      (let [opts (parse-args args)]
+                                   (if (:local opts)
+                                     (commands/init-local)
+                                     (commands/init opts)))
+                     "doctor"    (commands/doctor (parse-args args))
+                     "modules"   (let [cfg (config/read-config)]
+                                   (println (str "clojure=" (boolean (some-> cfg config/clojure?))))
+                                   (println (str "user_test=" (boolean (get-in cfg [:user-test :run]))))
+                                   (println (str "user_test_artifacts="
+                                                 (or (get-in cfg [:user-test :artifacts]) ""))))
+                     "user-test" (config/user-test!)
+                     "identity"  (commands/identity! (parse-args args))
+                     "github"    (github/github! (parse-args args))
+                     "gate"      (gate/gate! (parse-args args))
+                     "retro"     (retro! args)
+                     "sync"      (if (some #{"--after-git"} args)
+                                   (after-git!)
+                                   (sync!))
+                     "hook"      (hook! args)
+                     ("start" "finish" "release" "merge" "checks" "review" "board") (flow! cmd args)
+                     nil         (usage)
+                     (do (usage)
+                         (problem/fail! :usage/unknown-command
+                                        (str "unknown command " cmd)
+                                        {:usage true :fix "pick one of the commands listed above"})))]
+        (if (integer? result) result 0))
+      (catch clojure.lang.ExceptionInfo e
+        (if-let [data (ex-data e)]
+          (if (:problem data)
+            (do (report-problem data) (or (:exit data) 1))
+            (throw e))
+          (throw e))))))
 
 
 (defn -main
-  "Runs the command the arguments name; a problem thrown on the way ends as its message and its exit code (1 when it names none)."
+  "Runs the command the arguments name and ends the process with its exit code: kit's one exit."
   [& argv]
-  (let [[cmd & args] argv]
-    (when (and (#{"init" "doctor" "modules" "sync"} cmd)
-               (not= (str base/root) (base/sh "git" "rev-parse" "--show-toplevel")))
-      (base/die "dev-kit must be mounted at <project>/" base/mount "; " (str base/root) "is not a git repository root"))
-    (try
-      (case cmd
-        "init"      (let [opts (parse-args args)]
-                      (if (:local opts)
-                        (commands/init-local)
-                        (commands/init opts)))
-        "doctor"    (commands/doctor (parse-args args))
-        "modules"   (let [cfg (config/read-config)]
-                      (println (str "clojure=" (boolean (some-> cfg config/clojure?))))
-                      (println (str "user_test=" (boolean (get-in cfg [:user-test :run]))))
-                      (println (str "user_test_artifacts=" (or (get-in cfg [:user-test :artifacts]) ""))))
-        "user-test" (config/user-test!)
-        "identity"  (commands/identity! (parse-args args))
-        "github"    (github/github! (parse-args args))
-        "gate"      (gate/gate! (parse-args args))
-        "retro"     (retro! args)
-        "sync"      (if (some #{"--after-git"} args)
-                      (after-git!)
-                      (sync!))
-        "hook"      (hook! args)
-        ("start" "finish" "release" "merge" "checks" "review" "board") (flow! cmd args)
-        nil         (usage)
-        (do (usage) (base/die "unknown command" cmd)))
-      (catch clojure.lang.ExceptionInfo e
-        (if (:problem (ex-data e))
-          (do (println (str "  FAIL  " (ex-message e))) (System/exit (or (:exit (ex-data e)) 1)))
-          (throw e))))))
+  (System/exit (run argv)))

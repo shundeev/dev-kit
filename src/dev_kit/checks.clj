@@ -146,18 +146,23 @@
         dirty  (base/sh "git" "-C" base/mount "status" "--porcelain")]
     (cond-> []
       (not-any? #(str/ends-with? % (str " " base/mount)) paths)
-      (conj [:fail (str base/mount " is not a submodule of this repository (.gitmodules has no path " base/mount ")")
-             (str "git submodule add https://github.com/shundeev/dev-kit " base/mount)])
+      (conj (base/finding
+             :fail
+             (str base/mount " is not a submodule of this repository (.gitmodules has no path " base/mount ")")
+             (str "git submodule add https://github.com/shundeev/dev-kit " base/mount)))
 
       (some-> status (str/starts-with? "+"))
-      (conj [:warn (str base/mount " is checked out at another commit than the one this repository pins")
-             (str "git submodule update " base/mount ", or commit the bump")])
+      (conj (base/finding :warn
+                          (str base/mount " is checked out at another commit than the one this repository pins")
+                          (str "git submodule update " base/mount ", or commit the bump")))
 
       (some-> status (str/starts-with? "U"))
-      (conj [:fail (str base/mount " has a merge conflict") "resolve it, then git add " base/mount])
+      (conj (base/finding :fail (str base/mount " has a merge conflict") (str "resolve it, then git add " base/mount)))
 
       (seq dirty)
-      (conj [:warn (str base/mount " has local changes") "commit them in dev-kit, or git -C .shared checkout ."]))))
+      (conj (base/finding :warn
+                          (str base/mount " has local changes")
+                          (str "commit them in dev-kit, or git -C " base/mount " checkout ."))))))
 
 
 (def min-claude-version
@@ -170,9 +175,10 @@
   (when-let [out (base/sh "bash" "-c" "command -v claude >/dev/null && claude --version")]
     (let [v (some->> (re-find #"(\d+)\.(\d+)\.(\d+)" out) rest (mapv parse-long))]
       (when (and v (neg? (compare v min-claude-version)))
-        [[:fail
+        [(base/finding
+          :fail
           (str "Claude Code " (str/join "." v) " ignores onFailure, so a failing guard would let commands through")
-          (str "update Claude Code to " (str/join "." min-claude-version) " or later")]]))))
+          (str "update Claude Code to " (str/join "." min-claude-version) " or later"))]))))
 
 
 (defn pinned-bb-version
@@ -192,13 +198,14 @@
   [running pinned]
   (let [parts #(some->> % (re-find #"^(\d+)\.(\d+)\.(\d+)") rest (mapv parse-long))]
     (when (and (parts running) (parts pinned) (neg? (compare (parts running) (parts pinned))))
-      [[:fail
+      [(base/finding
+        :fail
         (str "bb " running " is older than " pinned ", the version dev-kit is tested on (its ci/action.yml)")
         (str "update bb to "
              pinned
              " or later: brew upgrade babashka, or the installer of"
              " https://github.com/babashka/babashka#installation with --version "
-             pinned)]])))
+             pinned))])))
 
 
 (defn node-problems
@@ -207,11 +214,12 @@
   (let [v     (base/sh "node" "--version")
         major (some->> v (re-find #"^v(\d+)\.") second parse-long)]
     (when-not (and major (>= major 22))
-      [[:fail
-        (str "Node 22 or later is needed for the safety guard, which refuses every guarded call without it ("
-             (or v "node not found")
-             ")")
-        "install Node 22 or later (e.g. nvm install 22), then restart the Claude session"]])))
+      [(base/finding :fail
+                     (str
+                      "Node 22 or later is needed for the safety guard, which refuses every guarded call without it ("
+                      (or v "node not found")
+                      ")")
+                     "install Node 22 or later (e.g. nvm install 22), then restart the Claude session")])))
 
 
 (defn tool-problems
@@ -222,14 +230,15 @@
                              ["jq" "the flow scripts and the friction recorder"]]
                       (config/clojure? cfg) (into [["clj-kondo" "lint"] ["zprint" "format check"]]))
          :when      (nil? (base/sh "bash" "-c" (str "command -v " tool)))]
-     [:fail (str tool " is not installed (needed for " why ")") (str "install " tool)])
+     (base/finding :fail (str tool " is not installed (needed for " why ")") (str "install " tool)))
    (node-problems)))
 
 
 (defn ownership-problems
   "Where init would replace what dev-kit did not write (#14): a file that is neither what dev-kit writes nor marked
   as dev-kit's, a real file where a link goes, a hooks path of another tool. JSON carries no marker: a JSON file of
-  dev-kit's counts by its content (#20), and .claude/settings.json found before the first init moves into kit.edn."
+  dev-kit's counts by its content (#20), and .claude/settings.json found before the first init moves into kit.edn.
+  Each is {:message what is there :fix what to do}."
   [items]
   (for [{git-key :key :keys [kind path value content] :as item} items
         :let  [f       (some-> path base/rel)
@@ -240,22 +249,25 @@
                                     (not= content (slurp f))
                                     (not (str/includes? (slurp f) "Managed by dev-kit")))
                            (if (str/starts-with? path ".claude/agents/")
-                             "is an agent of the project's own with dev-kit's name: rename it"
-                             "holds a file dev-kit did not write: move it away, or merge what it needs elsewhere"))
+                             {:message "is an agent of the project's own with dev-kit's name"
+                              :fix     "rename it"}
+                             {:message "holds a file dev-kit did not write"
+                              :fix     "move it away, or merge what it needs elsewhere"}))
                          :symlink (when (and (fs/exists? f) (not (fs/sym-link? f)))
-                                    (str "is a real "
-                                         (if (fs/directory? f) "folder" "file")
-                                         " where dev-kit puts a link to "
-                                         (:target item)
-                                         ": move it away"))
+                                    {:message (str "is a real "
+                                                   (if (fs/directory? f) "folder" "file")
+                                                   " where dev-kit puts a link to "
+                                                   (:target item))
+                                     :fix     "move it away"})
                          :git-config (let [v (base/sh "git" "config" "--local" "--get" git-key)]
                                        (when (and v (not= v value) (= git-key "core.hooksPath"))
-                                         (str "is " v
-                                              ": call those hooks from " value
-                                              " or drop them, then git config --unset " git-key)))
+                                         {:message (str "is " v)
+                                          :fix     (str "call those hooks from " value
+                                                        " or drop them, then git config --unset " git-key)}))
                          nil)]
         :when problem]
-    (str (label item) " " problem "; then run kit init again")))
+    {:message (str (label item) " " (:message problem))
+     :fix     (str (:fix problem) "; then run kit init again")}))
 
 
 (defn user-reads-both?
@@ -286,8 +298,10 @@
                      :when (and (fs/exists? p) (not= (real p) user))]
                  (real p)))]
     (when (and (seq found) (or ci (not (user-reads-both?))))
-      [[:fail (str (str/join ", " found) " hides AGENTS.md: Claude Code then never reads the rules")
-        "move its content into AGENTS.md below the dev-kit block and delete it, or set Project instructions to claude-md-and-agents-md in /config"]])))
+      [(base/finding
+        :fail
+        (str (str/join ", " found) " hides AGENTS.md: Claude Code then never reads the rules")
+        "move its content into AGENTS.md below the dev-kit block and delete it, or set Project instructions to claude-md-and-agents-md in /config")])))
 
 
 (defn github-problems
@@ -311,40 +325,43 @@
                                          "--jq" ".permission"))]
             (cond-> []
               (nil? rs)
-              (conj [:fail
+              (conj (base/finding
+                     :fail
                      (str repo " has no main ruleset, so the agent's pull requests could merge without an Approve")
-                     fix])
+                     fix))
 
               (and rs (not= "active" (:enforcement rs)))
-              (conj [:fail (str repo ": the main ruleset is " (:enforcement rs) ", not active") fix])
+              (conj (base/finding :fail (str repo ": the main ruleset is " (:enforcement rs) ", not active") fix))
 
               (and rs (not (and (int? n) (pos? n))))
-              (conj [:fail (str repo ": the main ruleset requires no approving review") fix])
+              (conj (base/finding :fail (str repo ": the main ruleset requires no approving review") fix))
 
               (and rs (not= "never" (:current_user_can_bypass rs)))
-              (conj [:fail
+              (conj (base/finding
+                     :fail
                      (str repo ": the agent " login " can bypass the main ruleset (" (:current_user_can_bypass rs) ")")
-                     fix])
+                     fix))
 
               (not= "write" perm)
-              (conj [:fail (str repo ": the agent's permission is " perm ", not write") fix])))
+              (conj (base/finding :fail (str repo ": the agent's permission is " perm ", not write") fix))))
           (catch clojure.lang.ExceptionInfo e
-            [[:warn
-              (str repo
-                   ": GitHub could not be read to check the main ruleset ("
-                   (first (str/split-lines (ex-message e)))
-                   ")")
-              "check the connection; the next session start checks it again"]]))))))
+            [(base/finding :warn
+                           (str repo
+                                ": GitHub could not be read to check the main ruleset ("
+                                (first (str/split-lines (ex-message e)))
+                                ")")
+                           "check the connection; the next session start checks it again")]))))))
 
 
 (defn problems
   [cfg {:keys [ci]}]
   (cond
     (nil? cfg)
-    [[:fail "kit.edn is missing" (str base/mount "/bin/kit init --repo <owner/repo> --showcase <name>")]]
+    [(base/finding :fail "kit.edn is missing" (str base/mount "/bin/kit init --repo <owner/repo> --showcase <name>"))]
 
     (seq (config/config-problems cfg))
-    (for [p (config/config-problems cfg)] [:fail (str "kit.edn: " p) "fix kit.edn"])
+    (for [{:keys [message fix]} (config/config-problems cfg)]
+      (base/finding :fail (str "kit.edn: " message) fix))
 
     :else
     (concat
@@ -354,9 +371,9 @@
            :when (not (and ci (:local item)))
            :let  [problem (check item)]
            :when problem]
-       [:fail (str (label item) ": " problem) (str base/mount "/bin/kit init")])
+       (base/finding :fail (str (label item) ": " problem) (str base/mount "/bin/kit init")))
      (for [p (ident/stale-paths (ident/managed-items cfg))]
-       [:fail (str p ": left over from dev-kit, no longer managed") (str base/mount "/bin/kit init")])
+       (base/finding :fail (str p ": left over from dev-kit, no longer managed") (str base/mount "/bin/kit init")))
      (when-not ci
        (concat (tool-problems cfg)
                (claude-version-problems)

@@ -39,10 +39,12 @@
                                          (str " line " line))
                                        " cannot be read ("
                                        (or msg why)
-                                       "): fix it by hand")))))]
+                                       ")")
+                                  {:fix "fix it by hand"}))))]
     (when-not (map? m)
       (problem/fail! :config/not-a-map
-                     (str label " is not a map: make it {:repo \"owner/name\" :showcase \"…\" :modules #{}}")))
+                     (str label " is not a map")
+                     {:fix "make it {:repo \"owner/name\" :showcase \"…\" :modules #{}}"}))
     m))
 
 
@@ -90,7 +92,7 @@
 
 
 (defn config-problems
-  "What is wrong with kit.edn over the defaults, each naming the key and the fix (#14)."
+  "What is wrong with kit.edn over the defaults, each as {:message what :fix what to do} (#14)."
   [{:keys [repo showcase modules base owners board agent user-test]}]
   (let [unknown   (when (coll? modules)
                     (remove known-modules modules))
@@ -100,64 +102,74 @@
                     (:artifacts user-test))]
     (cond-> []
       (not (and (string? repo) (re-matches #"[^/\s]+/[^/\s]+" repo)))
-      (conj (str ":repo is "
-                 (pr-str repo)
-                 ", not \"owner/name\": set it in kit.edn (kit init --repo owner/name in a new project)"))
+      (conj {:message (str ":repo is " (pr-str repo) ", not \"owner/name\"")
+             :fix     "set it in kit.edn (kit init --repo owner/name in a new project)"})
 
       (not (and (string? showcase) (not (str/blank? showcase))))
-      (conj (str ":showcase is missing: set it in kit.edn to the board's Showcase option for this project"
-                 " (kit init --showcase <option> in a new project)"))
+      (conj {:message ":showcase is missing"
+             :fix     (str "set it in kit.edn to the board's Showcase option for this project"
+                           " (kit init --showcase <option> in a new project)")})
 
-      (not (coll? modules)) (conj ":modules must be a set, e.g. #{} or #{:clojure}")
+      (not (coll? modules)) (conj {:message ":modules must be a set" :fix "write it as #{} or #{:clojure}"})
 
       (seq unknown)
-      (conj (str ":modules has " (str/join ", " (map pr-str unknown))
-                 "; known modules: "
-                 (str/join ", " (map name (sort known-modules)))))
+      (conj {:message (str ":modules has " (str/join ", " (map pr-str unknown)))
+             :fix     (str "use only the known modules: " (str/join ", " (map name (sort known-modules))))})
 
-      (not (and (string? base) (not (str/blank? base)))) (conj ":base must name the base branch, e.g. \"main\"")
+      (not (and (string? base) (not (str/blank? base))))
+      (conj {:message ":base must name the base branch" :fix "write it as :base \"main\""})
 
       (not (and (sequential? owners) (seq owners) (every? string? owners)))
-      (conj ":owners must list who reviews every change, e.g. [\"shundeev/owners\"]")
+      (conj {:message ":owners must list who reviews every change"
+             :fix     "write it as :owners [\"shundeev/owners\"]"})
 
-      (not (and (string? (:owner board)) (int? (:number board)))) (conj ":board must be {:owner \"login\" :number N}")
+      (not (and (string? (:owner board)) (int? (:number board))))
+      (conj {:message ":board must be {:owner \"login\" :number N}"
+             :fix     "write the board's owner login and project number"})
 
       (not (or (nil? agent) (and (map? agent) (every? #(string? (get agent %)) [:login :email :gh-config-dir]))))
-      (conj
-       ":agent must be nil, or a map with :login, :email and :gh-config-dir (the agent's account; see kit-defaults.edn)")
+      (conj {:message ":agent must be nil, or a map with :login, :email and :gh-config-dir (the agent's account)"
+             :fix     "see kit-defaults.edn for the shape"})
 
       (not (or (nil? user-test) (and (string? run) (not (str/blank? run)))))
-      (conj (str ":user-test must be nil, or {:run \"<command>\" :artifacts \"<folder>\"} with :run the command of the"
-                 " project's user-level test (#27, docs/user-level-tests.md)"))
+      (conj {:message ":user-test must be nil, or {:run \"<command>\" :artifacts \"<folder>\"}"
+             :fix     "set :run to the command of the project's user-level test (#27, docs/user-level-tests.md)"})
 
       ;; A plain path: upload-artifact reads *, !, ~ and the like as patterns, and "." would be the whole checkout.
       (not (or (nil? artifacts)
                (and (string? artifacts)
                     (re-matches #"[A-Za-z0-9_][A-Za-z0-9._/-]*" artifacts)
                     (not-any? #{".."} (str/split artifacts #"/")))))
-      (conj (str ":user-test :artifacts is " (pr-str artifacts)
-                 ": it must be a folder inside the project, named with"
-                 " letters, digits, . _ - and /, e.g. \"test-results\"")))))
+      (conj {:message (str ":user-test :artifacts is " (pr-str artifacts))
+             :fix     (str "name a folder inside the project, with"
+                           " letters, digits, . _ - and /, e.g. \"test-results\"")}))))
 
 
 (defn clojure? [cfg] (contains? (set (:modules cfg)) :clojure))
 
 
 (defn user-test!
-  "Runs the project's user-level test, :user-test :run in kit.edn, from the project's root, and exits with its code
+  "Runs the project's user-level test, :user-test :run in kit.edn, from the project's root, and returns its exit code
   (#27). CI runs it inside the `checks` job, after the other checks."
   []
-  (let [cfg (or (read-config) (problem/fail! :config/no-kit-edn "no kit.edn: run .shared/bin/kit init first"))
-        _
-        (some->> (seq (config-problems cfg)) (map #(str "kit.edn: " %)) (str/join "; ") (problem/fail! :config/invalid))
-        run (get-in cfg [:user-test :run])]
+  (let [cfg      (or (read-config)
+                     (problem/fail! :config/no-kit-edn
+                                    "no kit.edn"
+                                    {:fix (str base/mount "/bin/kit init --repo <owner/repo> --showcase <name>")}))
+        problems (config-problems cfg)
+        _ (when (seq problems)
+            (problem/fail! :config/invalid
+                           (str/join "; " (map #(str "kit.edn: " (:message %)) problems))
+                           {:fix (str/join "; " (distinct (map :fix problems)))}))
+        run      (get-in cfg [:user-test :run])]
     (when-not run
       (problem/fail! :config/no-user-test
-                     (str "kit.edn has no :user-test: add :user-test {:run \"<the command of the user-level test>\" "
-                          ":artifacts \"<the folder it writes>\"} (docs/user-level-tests.md in dev-kit)")))
+                     "kit.edn has no :user-test"
+                     {:fix (str "add :user-test {:run \"<the command of the user-level test>\" "
+                                ":artifacts \"<the folder it writes>\"} (docs/user-level-tests.md in dev-kit)")}))
     (println (str "user-level test: " run))
     (flush)
-    (System/exit (:exit @(p/process {:dir (str base/root) :inherit true} "bash" "-c" run)))))
+    (:exit @(p/process {:dir (str base/root) :inherit true} "bash" "-c" run))))
 
 
 (def block-begin
