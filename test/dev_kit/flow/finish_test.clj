@@ -371,3 +371,32 @@
                text)
              (:body (first (fake/prs world))))
           (format "%s: %s" story why)))))
+
+
+;; L issues: one issue, several pull requests; the last one closes it (#139, step 8)
+
+
+(defn- body-of-pr-for-issue
+  "The description of the pull request kit finish opens for issue #1, which has these labels, with these flags."
+  [labels body-text & flags]
+  (let [world (on-branch-1 {:issues [{:title "Add landing page" :on-board true :labels labels}]})]
+    (apply kit-finish world variables "--add" "page.html" "--pr-body-file" (file-with body-text) flags)
+    (:body (the-pr world))))
+
+
+(deftest a-pull-request-for-an-l-issue-says-part-of-not-closes
+  (is (= "Part of #1\n\nBody" (body-of-pr-for-issue ["size:L"] "Body"))))
+
+
+(deftest the-last-pull-request-of-an-l-issue-says-closes
+  (is (= "Closes #1\n\nBody" (body-of-pr-for-issue ["size:L"] "Body" "--last"))))
+
+
+(deftest an-m-issue-pull-request-says-closes-as-before-with-or-without-last
+  (is (= "Closes #1\n\nBody" (body-of-pr-for-issue ["size:M"] "Body")))
+  (is (= "Closes #1\n\nBody" (body-of-pr-for-issue ["size:M"] "Body" "--last")) "--last is harmless")
+  (is (= "Closes #1\n\nBody" (body-of-pr-for-issue [] "Body")) "an issue without a size is not L"))
+
+
+(deftest a-body-that-says-its-own-closing-keyword-is-left-alone-on-an-l-issue
+  (is (= "Closes #1 and more" (body-of-pr-for-issue ["size:L"] "Closes #1 and more"))))

@@ -23,7 +23,9 @@ waits until GitHub reports the pull request MERGED, or until merging became impo
 required check failed, DIRTY, the approval gone); it then stops and names the reason.
 When GitHub already merged it, only the closeout runs: board Status \"Done\", the branch deleted
 locally and on GitHub, back to the base branch; each issue the PR closes that is still open is closed as completed
-(auto-merge merges as github-actions, and GitHub then closes none). A pull request that did not merge keeps its branch.
+(auto-merge merges as github-actions, and GitHub then closes none). An issue of size L is closed only when the PR's
+body says \"Closes #<issue>\" (kit finish --last writes it); otherwise it stays open, its card keeps its Status, and
+a line says so. A pull request that did not merge keeps its branch.
 
 Options:
   --repo <owner/repo>           Default: the folder's origin on GitHub, then GHWF_REPO
@@ -222,11 +224,39 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 ;; ------------------------------------------------------------------ the closeout
 
 
+(defn- closing-issues
+  "The issues the pull request closes, {:number :url} each; an unreadable answer goes to `fail`."
+  [pr-url fail]
+  (:closingIssuesReferences (github/gh-json fail "pr" "view" pr-url "--json" "closingIssuesReferences")))
+
+
+(defn- pr-body
+  "The pull request's description."
+  [pr-url fail]
+  (:body (github/gh-json fail "pr" "view" pr-url "--json" "body")))
+
+
+(defn- decide-what-closes
+  "Which issues the merge closes. An issue of size L (the issue of the branch, and each the pull request links) is
+  closed only by a pull request whose body says so: GitHub lists the issue of a branch made by gh issue develop as a
+  closing reference on some pull requests and not on others, so for L the body decides. :closing is what GitHub lists;
+  :stays-open the numbers (as text) of the L issues this pull request does not close."
+  [{:keys [repo number pr-url]}]
+  (let [fail    #(problem/fail! :merge/closing-issues-unreadable %1 {:fix %2})
+        closing (closing-issues pr-url fail)
+        large   (filter #(= "L" (github/issue-size repo %)) (distinct (map str (cons number (map :number closing)))))
+        body    (when (seq large)
+                  (pr-body pr-url fail))]
+    {:closing    closing
+     :stays-open (set (remove #(github/closes-issue? body %) large))}))
+
+
 (defn- mark-done-on-board
-  "The card's Status to Done. A failed board update ends the run with an error (#41), after the closeout: the merge
-  is done, so the error is kept as a fact for the last step."
-  [{:keys [kit repo number owner project-number status-field done-status]}]
-  (if (some str/blank? [owner project-number])
+  "The card's Status to Done, unless its issue stays open (size L, not closed by this pull request). A failed board
+  update ends the run with an error (#41), after the closeout: the merge is done, so the error is kept as a fact for
+  the last step."
+  [{:keys [kit repo number owner project-number status-field done-status stays-open]}]
+  (if (or (some str/blank? [owner project-number]) (contains? stays-open number))
     {}
     (let [{:keys [exit out err]} (github/issue-url repo number)]
       (when-not (zero? exit)
@@ -320,12 +350,6 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
   {})
 
 
-(defn- closing-issues
-  "The issues the pull request closes, {:number :url} each; an unreadable answer goes to `fail`."
-  [pr-url fail]
-  (:closingIssuesReferences (github/gh-json fail "pr" "view" pr-url "--json" "closingIssuesReferences")))
-
-
 (defn- issue-state
   [url]
   (shell/gh! "issue" "view" url
@@ -344,8 +368,13 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 (defn- close-linked-issues
   "A pull request merged by auto-merge is merged by github-actions, and GitHub then closes none of its linked issues.
   Closes each one the PR names as closing that is still open, as completed, naming the PR; one line per issue."
-  [{:keys [pr-url]}]
-  (doseq [{:keys [number url]} (closing-issues pr-url #(problem/fail! :merge/closing-issues-unreadable %1 {:fix %2}))]
+  [{:keys [pr-url closing stays-open]}]
+  (doseq [number (sort stays-open)]
+    (println
+     (format
+      "#%s stays open: it is size L and this pull request says only \"Part of\". The last pull request closes it: kit finish --last."
+      number)))
+  (doseq [{:keys [number url]} (remove #(contains? stays-open (str (:number %))) closing)]
     (if (= "OPEN" (issue-state url))
       (let [closed (close-issue! url (format "Closed by %s, which merged." pr-url))]
         (if (zero? (:exit closed))
@@ -377,6 +406,7 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
     :read-poll           read-poll
     :find-pr             find-pr
     :wait-for-the-merge  wait-for-the-merge
+    :decide-what-closes  decide-what-closes
     :mark-done-on-board  mark-done-on-board
     :leave-branch        leave-branch
     :delete-branches     delete-branches
@@ -405,9 +435,10 @@ Environment: GHWF_MERGE_POLL, seconds between looks (default 10). Nothing else b
 
 (defn print-result
   "What the person reads last, once the run went through."
-  [{:keys [done-status number]}]
-  (println (format "Status: %s" done-status))
-  (println (format "Next: post the retrospective: kit retro %s" number)))
+  [{:keys [done-status number stays-open]}]
+  (when-not (contains? stays-open number)
+    (println (format "Status: %s" done-status))
+    (println (format "Next: post the retrospective: kit retro %s" number))))
 
 
 (defn merge!

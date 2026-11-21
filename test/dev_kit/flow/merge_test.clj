@@ -303,3 +303,58 @@
     (is (= :read-poll (::steps/stopped-at result)))
     (is (not (:auto-merge (first (fake/prs world)))))
     (is (left-alone? world))))
+
+
+;; L issues: one issue, several pull requests; only the one that says "Closes" closes it (#139, step 8)
+
+
+(defn- size-world
+  "A world where issue #1 has the size and the pull request has the body; GitHub lists #1 as closed by it, as it does
+  for a branch made by gh issue develop."
+  [size body]
+  (clone [(approved-pr :body body :closes [1])]
+         :issues [{:title "Add page" :on-board true :labels [(str "size:" size)]}]
+         :script [(fake/pr-becomes 2 {:state "MERGED"})]))
+
+
+(def ^:private stays-open-line
+  "#1 stays open: it is size L and this pull request says only \"Part of\". The last pull request closes it: kit finish --last.")
+
+
+(deftest an-l-issue-stays-open-and-in-progress-when-one-of-its-pull-requests-merges
+  (let [world  (size-world "L" "Part of #1\n\nOne step.")
+        result (kit-merge world {})]
+    (is (= :ok (::steps/status result)) "the merge goes through")
+    (is (= ["OPEN"] (issue-states world)) "the issue is not closed")
+    (is (nil? (status-of-card world)) "its card keeps its Status, not Done")
+    (is (= [stays-open-line] (filter #(str/includes? % "stays open") (:lines result)))
+        "and the line says how to close it")
+    (is (not-any? #(str/starts-with? % "Status:") (:lines result)) "no Done is announced")
+    (is (= #{"main"} (fake/local-branches world)) "the branch is cleaned up all the same")))
+
+
+(deftest the-pull-request-that-says-closes-closes-the-l-issue-and-marks-it-done
+  (let [world  (size-world "L" "Closes #1\n\nThe last step.")
+        result (kit-merge world {})]
+    (is (= :ok (::steps/status result)))
+    (is (= ["CLOSED"] (issue-states world)) "the issue is closed")
+    (is (= "Done" (status-of-card world)) "its card is Done")
+    (is (some #{"Closed #1: https://github.com/o/r/issues/1"} (:lines result)))))
+
+
+(deftest an-l-issue-the-branch-links-only-by-name-still-follows-the-body
+  (let [world  (clone [(approved-pr :body "Part of #1" :closes [])]
+                      :issues [{:title "Add page" :on-board true :labels ["size:L"]}]
+                      :script [(fake/pr-becomes 2 {:state "MERGED"})])
+        result (kit-merge world {})]
+    (is (= ["OPEN"] (issue-states world)) "no closing reference listed, and the body does not close it")
+    (is (nil? (status-of-card world)))
+    (is (some #(str/includes? % "#1 stays open") (:lines result)))))
+
+
+(deftest an-m-issue-is-closed-by-its-pull-request-as-before
+  (let [world  (size-world "M" "Part of #1\n\nNo closing keyword, but GitHub links it.")
+        result (kit-merge world {})]
+    (is (= ["CLOSED"] (issue-states world)) "only L waits for the body")
+    (is (= "Done" (status-of-card world)))
+    (is (= ["Status: Done" "Next: post the retrospective: kit retro 1"] (take-last 2 (:lines result))))))

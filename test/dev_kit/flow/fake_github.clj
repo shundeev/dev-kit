@@ -348,6 +348,10 @@
              {:exit 1 :out "" :err message})
          (do (turn {:auto-merge true}) {:exit 0 :out "" :err ""}))))
 
+   #'github/issue-size
+   (fn [_repo number]
+     (some #(second (re-matches #"size:(.+)" %)) (get-in @world [:issues (number-of number) :labels])))
+
    #'github/issue-url
    (fn [_repo number]
      (if-let [issue (get-in @world [:issues (number-of number)])]
@@ -521,7 +525,7 @@
   :remote-branches   the branches GitHub has
   :other-worktrees   the branches checked out in the clone's other worktrees
   :unclosable        numbers of issues that GitHub refuses to close
-  and these of a pull request: :closes (numbers of the issues it closes), :refuse-update (gh refuses to update the
+  and these of a pull request: :body (its description), :closes (numbers of the issues GitHub lists as closed by it), :refuse-update (gh refuses to update the
   branch), :refuse-auto-merge (the message gh gives), :merges-meanwhile (GitHub merges it while it refuses auto-merge),
   :refuse-squash. It keeps what was done to a pull request: :updates (how often its branch was updated), :squashed."
   [world]
@@ -541,6 +545,9 @@
    (fn [pr-url _fail]
      (vec (for [number (:closes (pr-of @world pr-url))]
             (select-keys (get-in @world [:issues number]) [:number :url]))))
+
+   #'merge-cmd/pr-body
+   (fn [pr-url _fail] (:body (pr-of @world pr-url) ""))
 
    #'merge-cmd/issue-state
    (fn [issue-url] (:state (issue-of-url @world issue-url)))

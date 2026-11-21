@@ -37,7 +37,10 @@ Options:
   --summary <text>              Subject text after \"type(GH-n): \" (default: the issue title)
   --commit-message-file <path>  Full commit message (subject, body, trailers); overrides --summary for the commit
   --pr-body-file <path>         PR description. Required when the PR is opened. Must contain a line
-                                \"ADR: none\" or \"ADR: adr/NNNN-....md\". \"Closes #<issue>\" is added if missing.
+                                \"ADR: none\" or \"ADR: adr/NNNN-....md\". \"Closes #<issue>\" is added if missing,
+                                \"Part of #<issue>\" for an issue of size L (it has several pull requests)
+  --last                        The last pull request of an issue of size L: it says \"Closes #<issue>\", and kit merge
+                                closes the issue. Harmless on any other size, which says \"Closes\" anyway
   --add <path>                  Stage this path before committing (repeatable)
   --hold                        Open the PR with the label hold, for a PR that overlaps one still waiting: the
                                 workflow leaves it a draft until kit release. Needs the ready workflow on main
@@ -52,21 +55,22 @@ Options:
 
 
 (def finish-spec
-  {"--type" [:type :value]
-   "--summary" [:summary :value]
+  {"--type"          [:type :value]
+   "--summary"       [:summary :value]
    "--commit-message-file" [:message-file :value]
-   "--pr-body-file" [:body-file :value]
-   "--add" [:add :many]
-   "--no-commit" [:no-commit :flag]
-   "--hold" [:hold :flag]
-   "--repo" [:repo :value]
-   "--owner" [:owner :value]
+   "--pr-body-file"  [:body-file :value]
+   "--add"           [:add :many]
+   "--no-commit"     [:no-commit :flag]
+   "--hold"          [:hold :flag]
+   "--last"          [:last-pr :flag]
+   "--repo"          [:repo :value]
+   "--owner"         [:owner :value]
    "--project-number" [:project-number :value]
-   "--base" [:base :value]
-   "--status-field" [:status-field :value]
+   "--base"          [:base :value]
+   "--status-field"  [:status-field :value]
    "--review-status" [:review-status :value]
-   "--help" [:help :flag]
-   "-h" [:help :flag]})
+   "--help"          [:help :flag]
+   "-h"              [:help :flag]})
 
 
 (defn- request-auto-merge
@@ -328,15 +332,25 @@ Options:
      (concat flags ["--title" title "--body" body]))))
 
 
+(defn- closing-line
+  "\"Part of #n\" for an issue of size L unless this is its last pull request, else \"Closes #n\". The size is read only
+  when it matters."
+  [repo number last?]
+  (if (and (not last?) (= "L" (github/issue-size repo number)))
+    (format "Part of #%s" number)
+    (format "Closes #%s" number)))
+
+
 (defn- open-pr
-  "The body is the file's, with \"Closes #<issue>\" in front unless it has a closing keyword for that issue."
-  [{:keys [repo base branch number subject body-file pr-url base-draft? hold]}]
+  "The body is the file's, with \"Closes #<issue>\" in front unless it has a closing keyword for that issue; an issue of
+  size L gets \"Part of #<issue>\" instead, unless --last says this pull request is its last."
+  [{:keys [repo base branch number subject body-file pr-url base-draft? hold last-pr]}]
   (if pr-url
     {}
     (let [text  (shell/file-text body-file)
-          body  (if (re-find (re-pattern (format "(?i)(close[sd]?|fix(e[sd])?|resolve[sd]?) #%s\\b" number)) text)
+          body  (if (github/closes-issue? text number)
                   text
-                  (format "Closes #%s\n\n%s" number text))
+                  (format "%s\n\n%s" (closing-line repo number last-pr) text))
           flags (cond-> []
                   base-draft? (conj "--draft")
                   hold        (conj "--label" "hold"))]

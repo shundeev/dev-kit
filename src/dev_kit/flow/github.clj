@@ -19,6 +19,30 @@
     "--jq"   ".url"))
 
 
+(def ^:private size-label-jq
+  "The value of the issue's size:* label, or nothing."
+  "[.labels[].name | select(startswith(\"size:\")) | ltrimstr(\"size:\")] | first // empty")
+
+
+(defn issue-size
+  "The issue's size, \"L\" for the label size:L; nil when it has none or GitHub cannot say (the issue is then treated as
+  not L, which is the way that closes it)."
+  [repo number]
+  (let [{:keys [exit out]}
+        (shell/run "gh" "issue" "view" (str number)
+          "-R"     repo
+          "--json" "labels"
+          "--jq"   size-label-jq)]
+    (when (zero? exit)
+      (not-empty (str/trim out)))))
+
+
+(defn closes-issue?
+  "Whether the text has a closing keyword (close, fix, resolve, in any form and case) for the issue number."
+  [text number]
+  (boolean (re-find (re-pattern (format "(?i)(close[sd]?|fix(e[sd])?|resolve[sd]?) #%s\\b" number)) text)))
+
+
 (def ready-workflow-path ".github/workflows/ready-when-green.yml")
 
 
