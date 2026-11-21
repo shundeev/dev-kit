@@ -20,7 +20,29 @@
   (or (try (Instant/parse s) (catch Exception _ nil))
       (try (.toInstant (OffsetDateTime/parse s)) (catch Exception _ nil))
       (problem/fail! :retro/bad-time
-                     (str opt " " s " : not a time; write it as 2026-11-12T10:00:00Z or 2026-11-12T11:00:00+01:00"))))
+                     (str opt " " s " : not a time")
+                     {:fix "write it as 2026-11-12T10:00:00Z or 2026-11-12T11:00:00+01:00" :join "; "})))
+
+
+(defn print-problem!
+  "The edge of kit retro: a problem ends as its text, then its fix, and the exit code it names (1 when it names
+  none). A :plain problem is an answer, not an error: it prints to stdout as it is; any other prints to stderr as
+  `kit: retro: <text>; <fix>`. A thing that is not a problem is thrown on."
+  [e]
+  (let [{:keys [problem message fix plain join exit]} (ex-data e)]
+    (when-not problem
+      (throw e))
+    (if plain
+      (println (str message
+                    (when fix
+                      (str "\n" fix))))
+      (binding [*out* *err*]
+        (println (str "kit: retro: "
+                      message
+                      (when fix
+                        (str (or join "; ") fix))))))
+    (flush)
+    (or exit 1)))
 
 
 (defn instant

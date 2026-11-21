@@ -239,24 +239,18 @@
 
 
 (defn retro!
-  "kit retro N … and kit retro --missing …: the code lives in bin/retro.clj, loaded only for this command."
+  "kit retro N … and kit retro --missing …: the code lives in bin/retro.clj, loaded only for this command. The exit
+  code of the command, nil when all is well."
   [[n & more]]
   (when-not (and n (or (= n "--missing") (re-matches #"\d+" n)))
-    (base/die "retro: name the issue, e.g. kit retro 55, or kit retro --missing"))
+    (problem/fail! :retro/no-issue "retro: name the issue" {:fix "e.g. kit retro 55, or kit retro --missing"}))
   (load-file (str (fs/path base/kit-dir "bin" "retro.clj")))
   (let [opts (parse-args more)
         opts (assoc opts :repo (gate/gate-repo opts (gate/gate-config)) :gh base/gh!)]
-    (try (if (= n "--missing")
-           ((resolve 'retro/run-missing) opts)
-           ((resolve 'retro/run)
-            (assoc opts :issue (parse-long n) :agent (get-in (config/read-defaults) [:agent :login]))))
-         (catch clojure.lang.ExceptionInfo e
-           (if (= :retro/bad-time (:problem (ex-data e)))
-             (do (binding [*out* *err*]
-                   (println (str "kit: retro: " (ex-message e)))
-                   (flush))
-                 (System/exit 1))
-             (throw e))))))
+    (if (= n "--missing")
+      ((resolve 'retro/run-missing) opts)
+      ((resolve 'retro/run)
+       (assoc opts :issue (parse-long n) :agent (get-in (config/read-defaults) [:agent :login]))))))
 
 
 (defn -main
@@ -280,8 +274,8 @@
         "user-test" (config/user-test!)
         "identity"  (commands/identity! (parse-args args))
         "github"    (github/github! (parse-args args))
-        "gate"      (gate/gate! (parse-args args))
-        "retro"     (retro! args)
+        "gate"      (some-> (gate/gate! (parse-args args)) System/exit)
+        "retro"     (some-> (retro! args) System/exit)
         "sync"      (if (some #{"--after-git"} args)
                       (after-git!)
                       (sync!))

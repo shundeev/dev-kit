@@ -134,15 +134,18 @@
 
 
 (defn run
+  "Prints the friction data of one issue; nil, or the exit code of a problem (a --now that is not a time)."
   [{:keys [issue repo agent gh now] :as opts}]
-  (let [now (if now
-              (log/parse-time "--now" now)
-              (Instant/now))]
-    (println (str "## Friction data: " repo "#" issue))
-    (println)
-    (doseq [l (log-lines (assoc opts :now now))] (println l))
-    (println)
-    (println "### GitHub")
-    (doseq [l (try (github/github-lines gh repo issue agent)
-                   (catch Exception e [(str "GitHub: not available (" (ex-message e) ")")]))]
-      (println l))))
+  (try
+    (let [now (if now
+                (log/parse-time "--now" now)
+                (Instant/now))]
+      (println (str "## Friction data: " repo "#" issue))
+      (println)
+      (doseq [l (log-lines (assoc opts :now now))] (println l))
+      (println)
+      (println "### GitHub")
+      (doseq [l (try (github/github-lines gh repo issue agent)
+                     (catch Exception e [(str "GitHub: not available (" (ex-message e) ")")]))]
+        (println l)))
+    (catch clojure.lang.ExceptionInfo e (log/print-problem! e))))

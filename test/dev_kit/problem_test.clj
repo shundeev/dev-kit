@@ -11,7 +11,7 @@
 
 (def converted
   "Namespaces where every problem/fail! carries a :fix. A namespace is added here when its stops get their advice."
-  #{})
+  #{'dev-kit.gate 'dev-kit.retro.log 'dev-kit.retro.missing 'dev-kit.retro.report})
 
 
 (defn- source-forms

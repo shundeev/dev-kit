@@ -3,6 +3,7 @@
   (:require
    [cheshire.core :as json]
    [clojure.string :as str]
+   [dev-kit.problem :as problem]
    [dev-kit.retro.github :as github]
    [dev-kit.retro.log :as log])
   (:import
@@ -33,26 +34,29 @@
 
 
 (defn run-missing
-  "Exit 0 and silence when every merged issue has its retrospective; exit 1 with the list and the fix; exit 2
-  when GitHub cannot be asked."
+  "Nil and silence when every merged issue has its retrospective; exit code 1 with the list and the fix; 2 when
+  GitHub cannot be asked."
   [{:keys [repo gh now]}]
-  (let [now   (if now
-                (log/parse-time "--now" now)
-                (Instant/now))
-        found (try (doall (missing gh repo (.minus ^Instant now (Duration/ofDays 14))))
-                   (catch Exception e
-                     (binding [*out* *err*]
-                       (println (str "kit: retro: GitHub not available: " (ex-message e)))
-                       (flush))
-                     (System/exit 2)))]
-    (when (seq found)
-      (println (str "Merged in the last 14 days without a `## Retrospective` comment: "
-                    (str/join ", " (for [[n t] found] (str "#" n " " t)))
-                    "."))
-      (println (str "Post each one's retrospective before new work (repo-task-delivery, stage 11); its data comes from"
-                    " kit retro <n>, e.g. kit retro "
-                    (ffirst found)
-                    "."))
-      (println "Only the owner can waive this: the same start command with --skip-retro asks the owner first.")
-      (flush)
-      (System/exit 1))))
+  (try
+    (let [now   (if now
+                  (log/parse-time "--now" now)
+                  (Instant/now))
+          found (try (doall (missing gh repo (.minus ^Instant now (Duration/ofDays 14))))
+                     (catch Exception e
+                       (problem/fail! :retro/github-unavailable
+                                      (str "GitHub not available: " (ex-message e))
+                                      {:fix  "check gh auth status and the network, then run kit retro --missing again"
+                                       :exit 2})))]
+      (when (seq found)
+        (problem/fail!
+         :retro/missing-retrospective
+         (str "Merged in the last 14 days without a `## Retrospective` comment: "
+              (str/join ", " (for [[n t] found] (str "#" n " " t)))
+              ".")
+         {:fix   (str
+                  "Post each one's retrospective before new work (repo-task-delivery, stage 11); its data comes from"
+                  " kit retro <n>, e.g. kit retro "
+                  (ffirst found)
+                  ".\nOnly the owner can waive this: the same start command with --skip-retro asks the owner first.")
+          :plain true})))
+    (catch clojure.lang.ExceptionInfo e (log/print-problem! e))))
