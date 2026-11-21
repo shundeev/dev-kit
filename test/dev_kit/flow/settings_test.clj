@@ -106,7 +106,7 @@
   (let [dir {:folder (folder nil)}
         {:keys [result]} (kit-start (:folder dir) {} "--title" "x" "--priority" "High")]
     (is (= :start/no-owner (get-in result [::steps/problem :problem])))
-    (is (str/includes? (get-in result [::steps/problem :message]) "kit.edn")
+    (is (str/includes? (get-in result [::steps/problem :fix]) "kit.edn")
         "the refusal says what is missing and to add kit.edn (kit init) or pass the flag")))
 
 

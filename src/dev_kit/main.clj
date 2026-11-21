@@ -245,11 +245,13 @@
 
 
 (defn flow!
-  "kit start, finish, merge, checks, review and board set: the delivery flow's GitHub steps, in bin/flow.clj (#95)."
+  "kit start, finish, merge, checks, review and board set: the delivery flow's GitHub steps, in bin/flow.clj (#95).
+  The exit code of the command: the base's run of kit merge (newer-merge!), or the flow's own."
   [cmd args]
-  (when-let [exit (and (= "merge" cmd) (newer-merge! args))] (System/exit exit))
-  (load-file (str (fs/path base/kit-dir "bin" "flow.clj")))
-  ((resolve 'flow/main) cmd args (str (fs/path base/kit-dir "bin" "kit"))))
+  (or (when (= "merge" cmd)
+        (newer-merge! args))
+      (do (load-file (str (fs/path base/kit-dir "bin" "flow.clj")))
+          ((resolve 'flow/main) cmd args (str (fs/path base/kit-dir "bin" "kit"))))))
 
 
 (defn retro!

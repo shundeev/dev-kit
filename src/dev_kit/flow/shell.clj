@@ -1,15 +1,10 @@
 (ns dev-kit.flow.shell
-  "Running git and gh for the flow commands, reading their output, and failing with a message."
+  "Running git and gh for the flow commands, reading their output; a failure is a problem the flow's one edge prints."
   (:require
    [babashka.process :as p]
    [clojure.string :as str]
-   [dev-kit.config :as config]))
-
-
-(defn die
-  [& msg]
-  (binding [*out* *err*] (println (str "Error: " (str/join " " msg))))
-  (System/exit 1))
+   [dev-kit.config :as config]
+   [dev-kit.problem :as problem]))
 
 
 (defn warn
@@ -44,42 +39,39 @@
       (str/trim out))))
 
 
-(defn exit-with!
-  "Ends the run as a stopped recipe says: its text on stderr, its exit code."
-  [{:keys [text exit]}]
-  (binding [*out* *err*] (println text))
-  (System/exit exit))
-
-
-(defn- end-on-failure!
-  "Ends kit with a failed command's own exit code, as the scripts did under `set -e`."
-  [exit]
-  (when-not (zero? exit)
-    (System/exit exit)))
+(def ^:private run-by-hand
+  "What to do when a gh call fails and gh's own message does not say."
+  "run the same call by hand to see why; an unreachable GitHub and an expired token both show there.")
 
 
 (defn run-on-terminal!
-  "run-on-terminal, and a failure ends kit with the command's own exit code: for a call whose failure no step
-  judges, such as git push."
+  "run-on-terminal, and a failure stops the step with the command's own exit code, as the scripts did under `set -e`:
+  for a call whose failure no step judges, such as git push. What it printed is already on the terminal."
   [& args]
-  (end-on-failure! (apply run-on-terminal args)))
+  (let [exit (apply run-on-terminal args)]
+    (when-not (zero? exit)
+      (problem/fail! :command/failed
+                     (format "%s failed with exit code %s" (str/join " " (take 2 args)) exit)
+                     {:exit exit
+                      :fix  "read the message above, remove its cause, then run the same kit command again"}))))
 
 
 (defn gh!
-  "gh's trimmed stdout, as `$(gh …)` read it: its messages go to our stderr, and a failure ends the run with gh's exit
-  code. A failure that says nothing is named here: the command and its exit code."
+  "gh's trimmed stdout, as `$(gh …)` read it: its messages go to our stderr, and a failure stops the step with gh's
+  exit code and gh's own message, as it is. A failure that says nothing is named here: the command and its exit code."
   [& args]
   (let [{:keys [exit out err]} @(apply p/process {:out :string :err :string} "gh" args)]
+    (when-not (zero? exit)
+      (problem/fail!
+       :gh/failed
+       (if (str/blank? err)
+         (str "Error: gh " (str/join " " (take 2 args)) " failed with exit code " exit " and printed no message")
+         (str/replace err #"\n$" ""))
+       {:exit exit :plain true :fix run-by-hand}))
     (when-not (str/blank? err)
       (binding [*out* *err*]
         (print err)
         (flush)))
-    (when (and (not (zero? exit)) (str/blank? err))
-      (warn (str "Error: gh " (str/join " " (take 2 args))
-                 " failed with exit code " exit
-                 " and printed no message. "
-                 "Run the same call by hand to see why.")))
-    (end-on-failure! exit)
     (str/trim out)))
 
 
@@ -115,7 +107,9 @@
           :flag  (if (= k :help)
                    {:help true}
                    (recur more (assoc opts k true)))
-          (die "Unknown argument:" a))))))
+          (problem/fail! :flow/unknown-argument
+                         (str "Unknown argument: " a)
+                         {:fix "run the command with --help to see its options"}))))))
 
 
 (def ^:private folder-config
@@ -156,11 +150,10 @@
                      (str/replace #"\.git$" ""))]
      (second (re-find #"github\.com[:/]([^/]+/[^/]+)$" (or url ""))))
    (env "GHWF_REPO" nil)
-   (do
-     (binding [*out* *err*]
-       (println
-        "Error: no repository: this folder has no GitHub origin, its kit.edn has no :repo and GHWF_REPO is not set; run inside the clone, or pass --repo owner/name"))
-     (System/exit 1))))
+   (problem/fail!
+    :repo/unknown
+    "no repository: this folder has no GitHub origin, its kit.edn has no :repo and GHWF_REPO is not set"
+    {:fix "run inside the clone, or pass --repo owner/name"})))
 
 
 (defn issue-branch-number [branch] (second (re-matches #"(\d+)-.*" branch)))

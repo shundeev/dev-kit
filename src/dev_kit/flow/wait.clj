@@ -2,7 +2,6 @@
   "Waiting on a pull request until what is awaited happens, with no fixed time limit (#109)."
   (:require
    [clojure.string :as str]
-   [dev-kit.flow.shell :as shell]
    [dev-kit.problem :as problem]))
 
 
@@ -14,24 +13,16 @@
 ;; call a process on this machine.
 
 
-(defn- bad-poll [v] (str "GHWF_MERGE_POLL is '" v "': give it a whole number of seconds, or unset it for 10"))
-
-
-(defn pause
-  "The pause between two looks, in seconds: GHWF_MERGE_POLL, for kit merge and kit checks alike. It goes once both
-  are recipes, which take `poll-seconds` in a step."
-  []
-  (let [v (shell/env "GHWF_MERGE_POLL" "10")]
-    (or (parse-long v)
-        (shell/die (bad-poll v)))))
-
-
 (defn poll-seconds
-  "The pause between two looks, in seconds, from GHWF_MERGE_POLL's text (\"10\" when unset); any other text stops
-  the step."
+  "The pause between two looks, in seconds, from GHWF_MERGE_POLL's text (\"10\" when unset); any other text, or a
+  negative number, stops the step."
   [text]
-  (or (parse-long text)
-      (problem/fail! :wait/bad-poll (bad-poll text))))
+  (let [seconds (parse-long text)]
+    (if (and seconds (not (neg? seconds)))
+      seconds
+      (problem/fail! :wait/bad-poll
+                     (str "GHWF_MERGE_POLL is '" text "': give it a whole number of seconds, or unset it for 10")
+                     {:fix "set GHWF_MERGE_POLL to a whole number of seconds (0 or more), or unset it"}))))
 
 
 (defn sleep!
