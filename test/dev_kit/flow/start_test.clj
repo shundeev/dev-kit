@@ -398,3 +398,21 @@
         (is (= ["Old task number 1" "Done" "Issue"]
                ((juxt :title :status #(get-in % [:content :type])) (first items)))
             "with its title, status and kind")))))
+
+
+;; The retrospective gate seen from kit start (the selftest's cases of #56, #139 step 8)
+
+
+(deftest a-start-refused-for-a-missing-retrospective-names-the-task-and-the-owners-waiver
+  (let [world   (fake/new-world {:unretrospected [[32 "Lacks its retro"]]})
+        refused (kit-start world "--title" "Add landing page" "--priority" "High")]
+    (is (str/includes? (said refused) "#32") "names the merged issue")
+    (is (str/includes? (said refused) "--skip-retro") "names the owner's waiver")
+    (is (empty? (fake/issues world)) "no issue is created")))
+
+
+(deftest a-start-that-cannot-check-for-retrospectives-says-so-and-goes-on
+  (let [world  (fake/new-world {:retro-unreadable "no network"})
+        result (kit-start world "--title" "Add landing page" "--priority" "High")]
+    (is (= :ok (::steps/status result)))
+    (is (some #(str/includes? % "could not check for merged issues without a retrospective") (:warnings result)))))

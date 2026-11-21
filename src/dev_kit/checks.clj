@@ -304,12 +304,18 @@
         "move its content into AGENTS.md below the dev-kit block and delete it, or set Project instructions to claude-md-and-agents-md in /config")])))
 
 
+(defn- shell-token
+  "The token the shell holds for gh, if any: with one, gh does not act as the agent."
+  []
+  (some #(not-empty (System/getenv %)) ["GH_TOKEN" "GITHUB_TOKEN"]))
+
+
 (defn github-problems
   "The GitHub side the agent's work relies on (#33), read as the agent, so only when gh acts as the agent: the main
   ruleset requires an approving review, the agent cannot bypass it, and the agent has Write. Offline it warns."
   [{:keys [agent] :as cfg}]
   (let [login (:login agent)
-        token (some #(not-empty (System/getenv %)) ["GH_TOKEN" "GITHUB_TOKEN"])]
+        token (shell-token)]
     (when (and login (not token) (= login (ident/gh-login (ident/gh-config-dir-in-use))))
       (let [repo (or (base/origin-repo (str base/root)) (:repo cfg))
             fix  (str "in your own terminal: " base/mount "/bin/kit github")]

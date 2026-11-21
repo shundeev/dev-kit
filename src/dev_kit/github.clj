@@ -109,12 +109,18 @@
                          false)))))))
 
 
+(defn- agent-session?
+  "True inside a Claude Code session."
+  []
+  (some? (System/getenv "CLAUDECODE")))
+
+
 (defn github!
   "Brings one repository's GitHub side to what the agent's work relies on (#33): the main ruleset from
   managed/github/ruleset.json, Write for the agent and every :owners entry, and the agent's invitation accepted as
   the agent. Run by the owner, in their own terminal: changing a ruleset takes an admin. Safe to run again."
   [{check-name :check :keys [yes] :as opts}]
-  (when (System/getenv "CLAUDECODE")
+  (when (agent-session?)
     (problem/fail! :github/agent-session
                    "kit github changes the repository's settings, which an agent session never does"
                    {:fix "run it in your own terminal, logged in to gh as the owner"}))

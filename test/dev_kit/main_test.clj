@@ -132,3 +132,42 @@
         {:keys [result err]} (fake/with-project sub (fake/captured #(main/run ["doctor"])))]
     (is (= 1 result))
     (is (str/includes? err (str "dev-kit must be mounted at <project>/" base/mount)))))
+
+
+;; The user-level test commands (the selftest's cases of #27, #139 step 8)
+
+
+(defn- project-with
+  "A project that declares `user-test` in its kit.edn."
+  [user-test]
+  (let [dir (fake/new-project)]
+    (spit (str (fs/path dir "kit.edn"))
+          (pr-str (cond-> {:repo "shundeev/site" :showcase "Site" :modules #{}}
+                    user-test (assoc :user-test user-test))))
+    dir))
+
+
+(deftest modules-tells-ci-whether-and-where-the-user-level-test-runs
+  (doseq [[user-test expected] [[nil ["user_test=false" "user_test_artifacts="]]
+                                [{:run "true" :artifacts "out"} ["user_test=true" "user_test_artifacts=out"]]
+                                [{:run "true"} ["user_test=true" "user_test_artifacts="]]]]
+    (let [{:keys [result out]} (fake/with-project (project-with user-test) (fake/captured #(main/run ["modules"])))
+          lines (set (str/split-lines out))]
+      (is (zero? result))
+      (is (every? lines expected) (pr-str user-test)))))
+
+
+(deftest a-project-without-a-user-test-is-told-what-to-add-and-an-invalid-one-is-refused
+  (let [none (fake/with-project (project-with nil) (fake/captured #(main/run ["user-test"])))]
+    (is (= 1 (:result none)))
+    (is (str/includes? (:err none) ":user-test {:run")))
+  (let [bad (fake/with-project (project-with {:artifacts "out"}) (fake/captured #(main/run ["user-test"])))]
+    (is (= 1 (:result bad)))
+    (is (str/includes? (:err bad) ":user-test") "refused with the same reason doctor gives")))
+
+
+(deftest the-user-level-test-runs-from-the-projects-root
+  (let [dir (project-with {:run "mkdir -p out && echo seen > out/shot.txt"})
+        {:keys [result]} (fake/with-project dir (fake/captured #(main/run ["user-test"])))]
+    (is (zero? result))
+    (is (= "seen\n" (slurp (str (fs/path dir "out" "shot.txt")))))))

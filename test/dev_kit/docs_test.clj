@@ -250,3 +250,27 @@
     (doseq [{:keys [source] plugin-name :name} (:plugins marketplace)]
       (is (= plugin-name (:name (json/parse-string (slurp-file (str source "/.claude-plugin/plugin.json")) true)))
           (str "the marketplace entry " plugin-name " does not match its plugin.json")))))
+
+
+;; The CI action's user-level test step (#27)
+
+
+(deftest ci-runs-the-user-level-test-last-when-kit-edn-declares-it-and-keeps-its-artifacts-when-it-fails
+  (let [steps (vec (get-in (yaml/parse-string (slurp-file "ci/action.yml")) [:runs :steps]))
+        i     (first (keep-indexed (fn [i s] (when (= "user-test" (:id s)) i)) steps))
+        run   (get steps i)
+        up    (get steps (inc i))]
+    (is (some? i) "ci/action.yml has the step `user-test`")
+    (testing "the test runs after every other check, only when kit.edn declares it"
+      (is (= i (- (count steps) 2)))
+      (is (= "steps.kit.outputs.user_test == 'true'" (:if run)))
+      (is (str/includes? (str (:run run)) "user-test")))
+    (testing "its artifacts are uploaded even when it fails, from the folder kit.edn names"
+      (is (str/starts-with? (str (:uses up)) "actions/upload-artifact@"))
+      (is (str/includes? (str (:if up)) "!cancelled()"))
+      (is (str/includes? (str (:if up)) "steps.user-test.outcome != 'skipped'"))
+      (is (= "${{ steps.kit.outputs.user_test_artifacts }}" (get-in up [:with :path]))))))
+
+
+(deftest the-base-settings-ask-the-owner-before-a-retrospective-is-skipped
+  (is (some #{"Bash(* --skip-retro*)"} (settings-list base-settings :ask))))

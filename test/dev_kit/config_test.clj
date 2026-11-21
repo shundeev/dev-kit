@@ -51,3 +51,29 @@
   (let [problem (fake/thrown #(config/parse-kit-edn "kit.edn" "[1 2]"))]
     (is (= :config/not-a-map (:problem problem)))
     (is (str/includes? (:fix problem) ":repo \"owner/name\""))))
+
+
+;; The user-level test in CI (the selftest's cases of #27, #139 step 8)
+
+
+(defn- user-test-problems
+  [user-test]
+  (config/config-problems (assoc good :user-test user-test)))
+
+
+(deftest an-artifacts-folder-that-upload-artifact-would-read-as-a-pattern-is-refused
+  (doseq [artifacts ["../elsewhere" "/tmp/out" "." "*" "!x" "a b" "~/x" "./x"]]
+    (let [[problem :as problems] (user-test-problems {:run "true" :artifacts artifacts})]
+      (is (= 1 (count problems)) artifacts)
+      (is (str/includes? (:message problem) ":user-test :artifacts") artifacts)
+      (is (str/includes? (:fix problem) "inside the project") (str artifacts ": says where they belong"))))
+  (is (= [] (user-test-problems {:run "true" :artifacts "out"})) "a plain folder passes"))
+
+
+(deftest a-user-test-that-is-not-a-run-command-is-refused-naming-the-key
+  (doseq [user-test ["npm test" {:run 5} {:run "  "} [1] {:artifacts "out"}]]
+    (let [[problem :as problems] (user-test-problems user-test)]
+      (is (= 1 (count problems)) (pr-str user-test))
+      (is (str/includes? (:message problem) ":user-test must be nil, or {:run") (pr-str user-test))))
+  (is (= [] (user-test-problems nil)) "none is fine")
+  (is (= [] (user-test-problems {:run "mkdir -p out && echo visitor-ok" :artifacts "out"})) "a declared one passes"))

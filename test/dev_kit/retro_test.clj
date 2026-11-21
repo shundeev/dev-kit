@@ -174,3 +174,157 @@
                                           {:repo "u473t8/fake" :issue 55 :days "many" :now now}))]
     (is (= 1 code))
     (is (= "retro: --days many : not a number of days. Fix: write a whole number above 0, e.g. --days 30\n" err))))
+
+
+;; The data of a retrospective, whole (the selftest's cases of #55, #65, #95, #107, #139 step 8)
+
+
+(def ^:private friction-dir "test/fixtures/retro/friction")
+
+
+(defn- issue-55
+  "Issue #55 of u473t8/fake as GitHub answers the retrospective's query: design comment 10:00, approved 10:20, PR #58
+  opened 12:30, approved 13:30, merged 14:00; `agent` wrote the design and one review comment."
+  [agent]
+  {"data"
+   {"repository"
+    {"issue"
+     {"number"        55
+      "createdAt"     "2026-11-12T09:30:00Z"
+      "closedAt"      "2026-11-12T14:00:00Z"
+      "labels"        {"nodes" [{"name" "design-approved"} {"name" "size:M"}]}
+      "timelineItems" {"nodes" [{"label"     {"name" "design-approved"}
+                                 "actor"     {"login" "the-owner"}
+                                 "createdAt" "2026-11-12T10:20:00Z"}]}
+      "comments"      {"nodes" [{"author" {"login" agent} "body" "## Design\n\nx" "createdAt" "2026-11-12T10:00:00Z"}]}
+      "closedByPullRequestsReferences"
+      {"nodes" [{"number"        58
+                 "headRefName"   "55-count-friction"
+                 "createdAt"     "2026-11-12T12:30:00Z"
+                 "mergedAt"      "2026-11-12T14:00:00Z"
+                 "additions"     120
+                 "deletions"     10
+                 "changedFiles"  4
+                 "commits"       {"nodes" [{"commit" {"authoredDate"      "2026-11-12T11:00:00Z"
+                                                      "statusCheckRollup" {"state" "SUCCESS"}}}
+                                           {"commit" {"authoredDate"      "2026-11-12T12:25:00Z"
+                                                      "statusCheckRollup" {"state" "FAILURE"}}}]}
+                 "reviews"       {"nodes" [{"author"      {"login" "the-owner"}
+                                            "state"       "COMMENTED"
+                                            "submittedAt" "2026-11-12T13:00:00Z"}
+                                           {"author"      {"login" agent}
+                                            "state"       "COMMENTED"
+                                            "submittedAt" "2026-11-12T13:10:00Z"}
+                                           {"author"      {"login" "the-owner"}
+                                            "state"       "APPROVED"
+                                            "submittedAt" "2026-11-12T13:30:00Z"}]}
+                 "timelineItems" {"nodes" []}
+                 "comments"      {"nodes"
+                                  [{"author" {"login" agent}
+                                    "createdAt" "2026-11-12T12:40:00Z"
+                                    "body"
+                                    "## Что сделать руками (владелец)\n\n1. Открой\n2. Нажми\n3. Проверь"}]}}]}}}}})
+
+
+(defn- retro-run
+  "kit retro for an issue as the owner reads it: {:out :err :code}; GitHub answers as `github` says (a function of the
+  gh arguments, or nil for unreachable), the friction log is in `log-dir`."
+  [opts & {:keys [github log-dir] :or {log-dir friction-dir}}]
+  (let [gh (or github (fn [& _] (throw (ex-info "no network" {}))))]
+    (with-redefs-fn {#'base/gh!    gh
+                     #'log/log-dir (fn [] log-dir)}
+      #(at-the-edge (fn [] (report/run (merge {:repo "u473t8/fake" :agent "the-agent" :now now} opts)))))))
+
+
+(defn- answering-issue-55
+  []
+  (fn [& _] (json/generate-string (issue-55 "the-agent"))))
+
+
+(deftest the-friction-data-of-a-merged-task-reads-its-log-and-its-github-side
+  (let [{:keys [out code]} (retro-run {:issue 55} :github (answering-issue-55))]
+    (is (nil? code))
+    (doseq [[what phrase]
+            [["the span of the task's events, its later messages included" "2026-11-12 10:00 → 2026-11-12 15:00 UTC"]
+             ["windows by their ask rule: own branch, own turn, own subagent; not another task's"
+              "| Confirmation: yes | ask rule: Bash(gh api *) | 4 | 7 |"]
+             ["a Read rule matches by path, printed without it" "| Confirmation: yes | ask rule: Read(…) | 1 | 1 |"]
+             ["a window no ask rule explains" "| Confirmation: yes | Read (no ask rule matches) | 1 | 1 |"]
+             ["a window and no run: the owner said no" "| Confirmation: no | ask rule: Bash(rm *) | 2 | 2 |"]
+             ["a question" "| Question to the owner | AskUserQuestion | 1 | 1 |"]
+             ["needs input at the end of a turn" "| Question to the owner | needs input in chat | 1 | 1 |"]
+             ["a plan that never ran" "| Plan for approval | declined | 1 | 1 |"]
+             ["a turn without its Stop, followed by another: Esc" "| Owner interrupted (Esc) | — | 1 | 1 |"]
+             ["a hook's refusal" "| Refused by a hook | gh issue create | 1 | 1 |"]
+             ["the classifier's refusal, with its category"
+              "| Refused by the classifier | git push — git_destructive | 1 | 1 |"]
+             ["no run in a turn that ended normally: a deny rule" "| Refused by a rule | echo | 1 | 1 |"]
+             ["each refusal of the task listed for a verdict" "Refusals of the task, each needs a verdict"]
+             ["the classifier's refusal in that list" "Refused by the classifier · git push — git_destructive"]
+             ["a failed command" "| Tool error | bb kit gate | 1 | 1 |"]
+             ["gh's flag values stay out of the shape" "| Tool error | gh pr view | 1 | 1 |"]
+             ["inline code stays out of the shape" "| Tool error | python3 -c | 1 | 1 |"]
+             ["the same command within minutes" "| Same command 3+ times | gh pr view | 3 | 3 |"]
+             ["a stale identical call from an earlier turn keeps no window of a later one"
+              "| Refused by a rule | gh api (REST) | 1 | 1 |"]
+             ["a rule naming a URL prints without it" "| Confirmation: yes | ask rule: Bash(…) | 1 | 1 |"]
+             ["a turn that failed is no Esc" "| Turn failed (API error) | — | 1 | 1 |"]
+             ["the repository's case does not matter" "| Tool error | make | 1 | 1 |"]
+             ["recurring: all tasks and projects of the last 14 days, not October"
+              "Confirmation: yes · ask rule: Bash(gh api *): 7"]
+             ["another project's friction counts in the 14 days" "Tool error · npm: 3"]
+             ["the owner's mark, on one line" "трение: ссылка открылась в двух браузерах"]
+             ["time: the task's turns" "Time of the task: 10 turns, 42m in all"]
+             ["time: waiting on the owner" "waiting on the owner: 7 confirmation windows, 5m; 2 questions, 24m"]
+             ["time: commands, and the longest" "commands: 2m; the longest: bb kit gate 1m, git log 1m"]
+             ["the owner's messages: the mid-turn one, and those of turns naming no task go to the last task"
+              "Owner messages: 10"]
+             ["GitHub: the design approval" "Design approval: 1, 20m after the first `## Design` comment"]
+             ["GitHub: the diff" "PR #58: +120 −10 in 4 files, 2 commits; Size M"]
+             ["GitHub: reviews by the owner" "Review rounds with comments: 1; approvals: 1; dismissed: 0"]
+             ["GitHub: waiting on the owner" "PR opened → Approve 1h 00m; Approve → merged 30m"]
+             ["GitHub: CI" "CI: 1 of 2 commits failed"]
+             ["GitHub: the owner's manual steps" "Owner steps: 1 comment, 3 steps"]]]
+      (is (str/includes? out phrase) what))
+    (is (not (str/includes? out "git status")) "repeats are runs within 10 minutes: a command 30 min apart is none")
+    (is (not (re-find #"почему так|secret|import|/w/|/tmp/|host/tok" out))
+        "no messages, paths, flag values or code are printed")))
+
+
+(deftest a-task-worked-on-only-in-a-turn-that-served-two-tasks-says-its-turn-time-is-not-split
+  (let [{:keys [out]} (retro-run {:issue 62} :github (answering-issue-55))]
+    (is (str/includes? out "its turns also served other tasks"))
+    (is (str/includes? out "commands: 1m; the longest: make 1m") "its commands are still counted")
+    (is (str/includes? out "waiting on the owner: 0 confirmation windows, 0s") "under a minute reads in seconds")))
+
+
+(deftest the-owners-messages-are-listed-only-on-request-and-only-locally
+  (let [{:keys [out]} (retro-run {:issue 55 :messages true} :github (answering-issue-55))]
+    (is (str/includes? out "я про план 55") "the mid-turn one too")
+    (is (str/includes? out "Owner messages (local only, never publish):"))))
+
+
+(deftest a-machine-without-a-log-still-prints-the-github-side
+  (let [{:keys [out code]}
+        (retro-run {:issue 55} :github (answering-issue-55) :log-dir "test/fixtures/retro/no-such-log")]
+    (is (nil? code))
+    (is (str/includes? out "Friction log: not available"))
+    (is (str/includes? out "PR #58") "GitHub's part")))
+
+
+(deftest an-unreachable-github-is-said-and-the-log-still-counts
+  (let [{:keys [out code]} (retro-run {:issue 55})]
+    (is (nil? code))
+    (is (str/includes? out "GitHub: not available"))
+    (is (str/includes? out "| Tool error | bb kit gate | 1 | 1 |"))))
+
+
+(deftest a-now-that-is-not-a-time-names-the-format-in-the-data-too
+  (let [{:keys [code err]} (retro-run {:issue 55 :now "yesterday"})]
+    (is (= 1 code))
+    (is (str/includes? err "2026-11-12T10:00:00Z"))))
+
+
+(deftest a-silent-gh-failure-names-the-call-and-the-exit-code
+  (is (= "gh api graphql failed with exit code 3 and printed no message; run the same call by hand to see why"
+         (ex-message (base/gh-failure ["api" "graphql" "-f" "query=x"] 3 "")))))
